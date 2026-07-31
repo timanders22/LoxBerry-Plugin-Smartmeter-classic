@@ -3,7 +3,8 @@
 # fetch_vzlogger.pl - Part of the LoxBerry Smartmeter Plugin (vzLogger mode)
 #
 # Polls the local vzlogger HTTP API (see "local" section of vzlogger.conf),
-# writes the latest readings to /dev/shm/<plugin>/vzlogger.data and sends
+# writes the latest readings to /dev/shm/<plugin>/<serial>.data in the same
+# scheme as the classic reader (SERIAL:key:value) and sends
 # them via UDP to all configured Miniservers.
 #
 # Runs every minute via cron - exits immediately if vzLogger mode is
@@ -77,42 +78,101 @@ if ( $cfg->{uuids} ) {
 	%obis_by_uuid = reverse %{$cfg->{uuids}};
 }
 
+# Kennung des vzlogger -> Schluesselname des klassischen Lesers.
+# Damit senden beide Betriebsarten dasselbe Schema, und die virtuellen
+# Eingaenge im Miniserver bleiben beim Wechsel unveraendert.
+my %SM_NAME = (
+	"1.8.0"  => "Consumption_Total_OBIS_1.8.0",
+	"1.8.1"  => "Consumption_Tarif1_OBIS_1.8.1",
+	"1.8.2"  => "Consumption_Tarif2_OBIS_1.8.2",
+	"2.8.0"  => "Delivery_Total_OBIS_2.8.0",
+	"2.8.1"  => "Delivery_Tarif1_OBIS_2.8.1",
+	"2.8.2"  => "Delivery_Tarif2_OBIS_2.8.2",
+	"16.7.0" => "Total_Power_OBIS_16.7.0",
+);
+
 # Collect latest value per channel
-my @parts;
+my %werte;
 foreach my $ch ( @{$data->{data}} ) {
 	my $obis = $obis_by_uuid{$ch->{uuid}} // $ch->{uuid};
 	next if !$ch->{tuples} || !@{$ch->{tuples}};
 	# Latest tuple: [ timestamp_ms, value, quality ]
 	my @sorted = sort { $b->[0] <=> $a->[0] } @{$ch->{tuples}};
-	push @parts, "$obis=" . $sorted[0][1];
+	# Medienkennung "1-0:" und Vorschrift "*255" abschneiden
+	my $kurz = $obis;
+	$kurz =~ s/^\d+-\d+://;
+	$kurz =~ s/\*\d+$//;
+	my $name = $SM_NAME{$kurz} // "OBIS_$kurz";
+	$werte{$name} = $sorted[0][1];
 }
-if ( !@parts ) {
+if ( !%werte ) {
 	&LOG("No readings available (yet).", "INFO");
 	exit 0;
 }
 
-# Write data file (same location scheme as legacy mode)
+# Zaehlernummer. Ohne sie waeren die MQTT-Themen und der UDP-Satz nicht
+# vertraeglich mit der klassischen Betriebsart.
+my $serial = $cfg->{serial};
+$serial = "" if !defined $serial;
+$serial =~ s/[^A-Za-z0-9_\-]//g;
+$serial = "vzlogger" if $serial eq "";
+
+# Zeitstempel wie beim klassischen Leser: lesbar und als Loxone-Epoche
+# (Bezugspunkt 01.01.2009 00:00 Ortszeit).
+my @lt = localtime(time());
+my $datereadable = sprintf("%02d.%02d.%04d %02d:%02d:%02d",
+	$lt[3], $lt[4]+1, $lt[5]+1900, $lt[2], $lt[1], $lt[0]);
+use Time::Local;
+my $offset = timegm(localtime(time())) - time();
+my $epoche_lox = time() - 1230768000 + $offset;
+$werte{Last_Update}          = $datereadable;
+$werte{Last_UpdateLoxEpoche} = $epoche_lox;
+
+# Die beiden kalkulierten Leistungen kennt vzlogger nicht. Der klassische
+# Leser rechnet sie aus dem Zaehlerfortschritt; hier werden sie aus der
+# Momentanleistung 16.7.0 abgeleitet - Vorzeichen positiv ist Bezug,
+# negativ ist Einspeisung. Nur damit vorhandene Auswertungen im Miniserver
+# beim Wechsel der Betriebsart nicht ins Leere laufen.
+if ( defined $werte{"Total_Power_OBIS_16.7.0"} ) {
+	my $p = $werte{"Total_Power_OBIS_16.7.0"} + 0;
+	$werte{"Consumption_CalculatedPower_OBIS_1.99.0"} = $p > 0 ? $p  : 0;
+	$werte{"Delivery_CalculatedPower_OBIS_2.99.0"}    = $p < 0 ? -$p : 0;
+}
+
+# Datei im selben Schema wie der klassische Leser: SERIAL:Schluessel:Wert
+my @zeilen = map { "$serial:$_:" . $werte{$_} } sort keys %werte;
 system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
-open(my $fh, ">", "/dev/shm/$psubfolder/vzlogger.data");
-print $fh join("\n", @parts) . "\n";
+open(my $fh, ">", "/dev/shm/$psubfolder/$serial.data");
+print $fh join("\n", @zeilen) . "\n";
 close($fh);
 
-&LOG("Readings: " . join("; ", @parts), "INFO");
+&LOG("Readings: " . join("; ", @zeilen), "INFO");
 
-# Werte per MQTT veroeffentlichen (Hausstandard)
-if ( !defined $cfg->{sendmqtt} || $cfg->{sendmqtt} ) {
-	my $prefix = $cfg->{mqtttopic} || "smartmeter";
-	my @paare;
-	foreach my $teil ( @parts ) {
-		if ( $teil =~ /^([^:]+):(.*)$/ ) { push @paare, [ $1, $2 ]; }
+# Werte per MQTT veroeffentlichen (Hausstandard).
+# Eingestellt wird MQTT an genau einer Stelle - im Reiter MQTT, der in die
+# allgemeine Plugin-Konfiguration schreibt. Hier wird nur gelesen.
+my ($sendmqtt, $mqtttopic) = (1, "smartmeter");
+if ( -e "$lbpconfigdir/smartmeter.cfg" ) {
+	if ( open(my $c, "<", "$lbpconfigdir/smartmeter.cfg") ) {
+		while ( my $z = <$c> ) {
+			$sendmqtt  = ($1 ? 1 : 0) if $z =~ /^\s*SENDMQTT\s*=\s*(\S+)/;
+			$mqtttopic = $1           if $z =~ /^\s*MQTTTOPIC\s*=\s*(\S+)/;
+		}
+		close($c);
 	}
-	&SEND_MQTT("$prefix/vzlogger", \@paare);
+}
+$mqtttopic =~ s/^["']|["']$//g;
+$mqtttopic = "smartmeter" if $mqtttopic eq "";
+if ( $sendmqtt ) {
+	my $prefix = $mqtttopic;
+	my @paare = map { [ $_, $werte{$_} ] } sort keys %werte;
+	&SEND_MQTT("$prefix/$serial", \@paare);
 }
 
 # Send via UDP to all Miniservers
 exit 0 if !$cfg->{sendudp};
 my $udpport = $cfg->{udpport} || 7000;
-my $udpstring = "vzlogger: " . join("; ", @parts) . ";";
+my $udpstring = join("; ", @zeilen) . "; ";
 
 my %ms = LoxBerry::System::get_miniservers();
 foreach my $msno ( sort keys %ms ) {
