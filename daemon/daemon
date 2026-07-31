@@ -1,0 +1,35 @@
+#!/bin/bash
+
+logfile=REPLACEBYBASEFOLDER/log/plugins/REPLACEBYSUBFOLDER/smartmeter.log
+
+echo "`date` - Start Init " >>$logfile
+echo "`date` - Creating new UDEV Rules for I/R heads: /etc/udev/rules.d/99-smartmeter.rules " >>$logfile
+echo "# LoxBerry SML-eMon Plugin device rule file - DO NOT EDIT BY HAND!" >/etc/udev/rules.d/99-smartmeter.rules
+echo "KERNEL==\"ttyUSB[0-9]*\",GROUP=\"loxberry\",MODE=\"0666\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\"" >>/etc/udev/rules.d/99-smartmeter.rules
+echo "`date` - New UDEV-Rule for I/R heads created. " >>$logfile
+echo "`date` - Reload rules... " >>$logfile
+udevadm control --reload-rules >>$logfile && udevadm trigger >>$logfile
+
+# Start vzlogger at boot if the vzLogger mode is enabled
+VZJSON=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.json
+VZCONF=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.conf
+if [ -f "$VZJSON" ] && [ -f "$VZCONF" ] && grep -Eq '"enabled"[[:space:]]*:[[:space:]]*(1|true)' "$VZJSON"; then
+	VZBIN="$(command -v vzlogger)"
+	if [ -z "$VZBIN" ] && [ -x REPLACEBYBASEFOLDER/bin/plugins/REPLACEBYSUBFOLDER/vzlogger/vzlogger ]; then
+		# Bundled binary (armhf) - test if runnable on this architecture
+		if REPLACEBYBASEFOLDER/bin/plugins/REPLACEBYSUBFOLDER/vzlogger/vzlogger --help >/dev/null 2>&1; then
+			VZBIN=REPLACEBYBASEFOLDER/bin/plugins/REPLACEBYSUBFOLDER/vzlogger/vzlogger
+		fi
+	fi
+	if [ -n "$VZBIN" ]; then
+		mkdir -p /dev/shm/REPLACEBYSUBFOLDER
+		chown loxberry:loxberry /dev/shm/REPLACEBYSUBFOLDER
+		su loxberry -s /bin/bash -c "nohup $VZBIN -c $VZCONF >/dev/null 2>&1 &"
+		echo "`date` - vzlogger started: $VZBIN " >>$logfile
+	else
+		echo "`date` - vzlogger enabled but no runnable binary found for this architecture " >>$logfile
+	fi
+fi
+
+echo "`date` - End Init " >>$logfile
+exit 0
