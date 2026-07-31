@@ -135,6 +135,7 @@ sub form_vzlogger
 	$sm_template->param("VZ_SENDUDP",  defined $sm_cfg->{sendudp} ? ($sm_cfg->{sendudp} ? 1 : 0) : 1);
 	$sm_template->param("VZ_UDPPORT",  $sm_cfg->{udpport}  // 7000);
 	$sm_template->param("VZ_HTTPPORT", $sm_cfg->{httpport} // 8083);
+	$sm_template->param("VZ_SERIAL",   $sm_cfg->{serial}   // "vzlogger");
 	$sm_template->param("VZ_CHANNELS", $sm_channels);
 
 	# Connected IR heads
@@ -184,6 +185,11 @@ sub save_vzlogger
 	$sm_cfg->{sendudp}  = $sm_q->{vz_sendudp} ? 1 : 0;
 	$sm_cfg->{udpport}  = ($sm_q->{vz_udpport} && $sm_q->{vz_udpport} =~ /^\d+$/) ? $sm_q->{vz_udpport} + 0 : 7000;
 	$sm_cfg->{httpport} = ($sm_q->{vz_httpport} && $sm_q->{vz_httpport} =~ /^\d+$/) ? $sm_q->{vz_httpport} + 0 : 8083;
+	# Zaehlernummer: erscheint im MQTT-Thema und im UDP-Satz. Nach der
+	# Hausregel nicht hart filtern, nur Unbrauchbares entfernen.
+	my $sm_ser = $sm_q->{vz_serial} // "";
+	$sm_ser =~ s/[^A-Za-z0-9_\-]//g;
+	$sm_cfg->{serial} = $sm_ser ne "" ? $sm_ser : "vzlogger";
 
 	# OBIS channels: one per line (or comma separated)
 	my @sm_channels;
@@ -495,7 +501,7 @@ sub vz_device_busy
 	my $sm_real = -l $sm_dev ? readlink($sm_dev) : $sm_dev;
 	$sm_real = "/dev/" . $sm_real if $sm_real !~ m{^/};
 	# fuser ohne -v: PIDs auf der Standardausgabe, Namen auf stderr.
-	# Mit -v landete der Geraetename (0047) in der PID-Liste.
+	# Mit -v landete der Geraetename in der PID-Liste.
 	my $sm_ziele = ($sm_real && $sm_real ne $sm_dev) ? "$sm_dev $sm_real" : $sm_dev;
 	my $sm_out = `fuser $sm_ziele 2>/dev/null`;
 	$sm_out = "" if !defined $sm_out;
