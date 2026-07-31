@@ -67,6 +67,16 @@
 .sm-feld .ui-input-text, .sm-feld .ui-select, .sm-feld .ui-textinput { max-width: 520px; }
 .sm-feld .ui-input-text input, .sm-feld .ui-input-text textarea { font-size: 0.95em; }
 .sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; max-width: 640px; }
+/* Anleitung im Reiter "Einbindung in Loxone" - Hausstil wie in den uebrigen Plugins */
+.sm-step { border: 1px solid #ddd; border-left: 4px solid #6dac20; background: #fafafa;
+    border-radius: 6px; padding: 12px 14px; margin: 12px 0; font-size: 0.92em; line-height: 1.5; }
+.sm-tbl { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.9em; }
+.sm-tbl th, .sm-tbl td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; vertical-align: top; }
+.sm-tbl th { background: #eef3e6; font-weight: 600; }
+.sm-mono { font-family: Consolas, "Courier New", monospace; background: #f0f0f0;
+    padding: 1px 4px; border-radius: 3px; font-size: 0.94em; word-break: break-all; }
+.sm-pre { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; font-size: 0.85em;
+    overflow: auto; margin: 8px 0; }
 .sm-diag td { padding: 6px 4px; vertical-align: top; }
 .sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
 .sm-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
@@ -318,36 +328,108 @@
 <TMPL_IF FORM_LOXONE>
 <div class="sm-wrap">
 
-	<h2>Einbindung in Loxone</h2>
-	<p class="sm-hilfe">Diese Adressen und Namen brauchst du in der Loxone Config. Sie richten sich
-	nach den Einstellungen, die hier im Plugin gespeichert sind.</p>
+	<h2>Einbindung in Loxone &mdash; Schritt f&uuml;r Schritt</h2>
+	<p class="sm-hilfe">Das Plugin liest den Z&auml;hler und ver&ouml;ffentlicht jeden Wert unter einem
+	eigenen MQTT-Thema. Das Gateway des LoxBerry reicht ihn an den Miniserver weiter, wo er als
+	<b>virtueller Eingang</b> ankommt (Schritt&nbsp;1 und&nbsp;2). Alles Weitere &mdash; Anzeige,
+	&Uuml;berwachung, Statistik &mdash; baut darauf auf.</p>
 
-	<h3>MQTT</h3>
-	<p class="sm-hilfe">Die Werte gehen &uuml;ber das MQTT-Gateway des LoxBerry an den Miniserver.
-	<b>Im Gateway muss das Abo <code><TMPL_VAR LX_TOPIC>/#</code> eingetragen sein</b>, sonst kommt nichts an.</p>
+	<div class="sm-step"><b>Schritt 1: Abo im MQTT-Gateway eintragen</b><br><br>
+	<b>Ohne diesen Eintrag kommt am Miniserver nichts an</b> &mdash; der h&auml;ufigste Grund f&uuml;r
+	fehlende Werte, obwohl das Plugin sauber sendet. Einzutragen unter
+	<i>System-Einstellungen &rarr; MQTT Gateway &rarr; Abonnements</i>:
+	<pre class="sm-pre"><TMPL_VAR LX_TOPIC>/#</pre>
+	Danach zeigt das Gateway unter <i>Eingehende Daten</i>, welche Namen es erzeugt. <b>Dort steht die
+	Wahrheit</b> &mdash; weicht ein Name von der Tabelle unten ab, gilt der aus dem Gateway.
+	</div>
+
+	<div class="sm-step"><b>Schritt 2: Virtuelle Eing&auml;nge anlegen</b><br><br>
+	In <b>Loxone Config</b>: Miniserver anklicken &rarr; <i>Virtuelle Eing&auml;nge</i> &rarr;
+	<i>Virtuellen Eingang</i> anlegen, einen je Wert. <b>Der Titel muss exakt stimmen</b> &mdash; das
+	Gateway ordnet ausschlie&szlig;lich &uuml;ber den Namen zu, nicht &uuml;ber eine Adresse.
 	<TMPL_LOOP LX_SERIALS>
-	<p class="sm-hilfe">Themen des Lesekopfs <b><TMPL_VAR SER></b>:</p>
-	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;"><TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Consumption_Total_OBIS_1.8.0
-<TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Delivery_Total_OBIS_2.8.0
-<TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Total_Power_OBIS_16.7.0
-<TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Last_UpdateLoxEpoche</pre>
+	<p class="sm-hilfe">Lesekopf <b><TMPL_VAR SER></b>:</p>
+	<table class="sm-tbl">
+	<tr><th>Titel des virtuellen Eingangs</th><th>Einheit</th><th>Bedeutung</th></tr>
+	<tr><td><span class="sm-mono"><TMPL_VAR LX_TOPIC>_<TMPL_VAR SER>_Consumption_Total_OBIS_1.8.0</span></td><td>kWh</td><td>Z&auml;hlerstand Bezug</td></tr>
+	<tr><td><span class="sm-mono"><TMPL_VAR LX_TOPIC>_<TMPL_VAR SER>_Delivery_Total_OBIS_2.8.0</span></td><td>kWh</td><td>Z&auml;hlerstand Einspeisung</td></tr>
+	<tr><td><span class="sm-mono"><TMPL_VAR LX_TOPIC>_<TMPL_VAR SER>_Total_Power_OBIS_16.7.0</span></td><td>W</td><td>Momentanleistung, <b>positiv = Bezug, negativ = Einspeisung</b></td></tr>
+	<tr><td><span class="sm-mono"><TMPL_VAR LX_TOPIC>_<TMPL_VAR SER>_Consumption_CalculatedPower_OBIS_1.99.0</span></td><td>W</td><td>Bezugsleistung, nie negativ</td></tr>
+	<tr><td><span class="sm-mono"><TMPL_VAR LX_TOPIC>_<TMPL_VAR SER>_Delivery_CalculatedPower_OBIS_2.99.0</span></td><td>W</td><td>Einspeiseleistung, nie negativ</td></tr>
+	<tr><td><span class="sm-mono"><TMPL_VAR LX_TOPIC>_<TMPL_VAR SER>_Last_UpdateLoxEpoche</span></td><td>s</td><td>Zeitpunkt der letzten Messung, Loxone-Zeitrechnung</td></tr>
+	</table>
 	</TMPL_LOOP>
-	<p class="sm-hilfe">Das Gateway ersetzt jeden Schr&auml;gstrich durch einen Unterstrich. Ein virtueller
-	Eingang in Loxone hei&szlig;t deshalb zum Beispiel
-	<code><TMPL_VAR LX_TOPIC>_&lt;Seriennummer&gt;_Consumption_Total_OBIS_1.8.0</code>.
-	<b>Der Titel muss genau so lauten</b> &mdash; das Gateway ordnet &uuml;ber den Namen zu.</p>
+	<p class="sm-hilfe">Die zugeh&ouml;rigen Themen lauten <span class="sm-mono"><TMPL_VAR LX_TOPIC>/&lt;Z&auml;hlernummer&gt;/&lt;Kennzahl&gt;</span>.
+	Das Gateway ersetzt jeden Schr&auml;gstrich durch einen Unterstrich &mdash; <b>Punkte bleiben stehen</b>.</p>
+	<p class="sm-hilfe"><b>Beide Betriebsarten senden dasselbe.</b> Ein Wechsel zwischen dem klassischen
+	Leser und vzLogger &auml;ndert an diesen Eing&auml;ngen nichts, solange im Reiter <i>vzLogger</i>
+	dieselbe Z&auml;hlernummer eingetragen ist.</p>
+	</div>
 
-	<h3>UDP &mdash; nur wo n&ouml;tig</h3>
-	<p class="sm-hilfe">Virtueller UDP-Eingang auf Port <b><TMPL_VAR LX_UDPPORT></b>. Die Befehlserkennung
-	eines Werts sieht so aus:</p>
-	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;">\i&lt;Seriennummer&gt;:Consumption_Total_OBIS_1.8.0:\i\v</pre>
-	<TMPL_UNLESS LX_LEGACY><p class="sm-hilfe"><b>Hinweis:</b> die Legacy-Abfrage ist ausgeschaltet.
-	Dann sendet nur die vzLogger-Betriebsart, falls dort UDP aktiviert ist.</p></TMPL_UNLESS>
+	<div class="sm-step"><b>Schritt 3: UDP &mdash; nur wo n&ouml;tig</b><br><br>
+	Wer keinen MQTT-Weg hat, legt stattdessen einen <i>virtuellen UDP-Eingang</i> auf Port
+	<b><TMPL_VAR LX_UDPPORT></b> an. Die Befehlserkennung je Wert:
+	<pre class="sm-pre">\i&lt;Z&auml;hlernummer&gt;:Consumption_Total_OBIS_1.8.0:\i\v</pre>
+	Das Muster hei&szlig;t: &bdquo;Suche den Text zwischen den beiden <span class="sm-mono">\i</span> und
+	nimm die Zahl, die direkt dahinter steht (<span class="sm-mono">\v</span>).&ldquo;
+	<TMPL_UNLESS LX_LEGACY><br><br><b>Hinweis:</b> die Legacy-Abfrage ist ausgeschaltet. Dann sendet nur
+	die vzLogger-Betriebsart, falls dort UDP eingeschaltet ist.</TMPL_UNLESS>
+	<br><br>Zum blo&szlig;en Nachsehen liefert
+	<span class="sm-mono">http://<TMPL_VAR LX_HOST>/plugins/<TMPL_VAR LX_PLUGINDIR>/index.php</span>
+	alle Werte als Klartext.
+	</div>
 
-	<h3>HTTP &mdash; zum Nachsehen</h3>
-	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;">http://<TMPL_VAR LX_HOST>/plugins/<TMPL_VAR LX_PLUGINDIR>/index.php</pre>
-	<p class="sm-hilfe">Liefert alle Werte als Klartext. Als virtueller HTTP-Eingang mit Abfragezyklus
-	60 Sekunden verwendbar. MQTT ist der empfohlene Weg.</p>
+	<div class="sm-step"><b>Schritt 4: Kachel in der App</b><br><br>
+	Einen <i>Status</i>-Baustein anlegen und verbinden: <span class="sm-mono">v1</span> mit der
+	Momentanleistung, <span class="sm-mono">v2</span> mit dem Bezugsz&auml;hler,
+	<span class="sm-mono">v3</span> mit dem Einspeisez&auml;hler. Statustext zum Beispiel:
+	<pre class="sm-pre">Aktuell &lt;v1.0&gt; W &middot; Bezug &lt;v2.1&gt; kWh &middot; Einspeisung &lt;v3.1&gt; kWh</pre>
+	H&auml;kchen <i>Visualisierung</i> setzen &mdash; fertig ist die Kachel.
+	</div>
+
+	<div class="sm-step"><b>Schritt 5: Merken, wenn der Z&auml;hler schweigt</b><br><br>
+	Bleibt der Lesekopf stehen, behalten die virtuellen Eing&auml;nge ihren <b>letzten Wert</b>. In der
+	App sieht dann alles normal aus, obwohl seit Stunden nichts mehr ankommt. Daf&uuml;r gibt es
+	<span class="sm-mono">Last_UpdateLoxEpoche</span>: Zeitpunkt der letzten Messung, gez&auml;hlt in
+	Sekunden ab dem 01.01.2009 &mdash; derselben Zeitrechnung, die auch Loxone benutzt.<br><br>
+	Aktuelle Zeit aus dem Baustein <i>Datum &amp; Uhrzeit</i> minus diesem Wert ergibt das Alter der
+	Messwerte. &Uuml;ber einem Schwellwert l&ouml;st eine Benachrichtigung aus. Aufbau in Schritt&nbsp;6,
+	Zeilen 7 bis 10.<br><br>
+	<b>Ein Fallstrick:</b> je nach Einstellung liefert der Zeit-Baustein die Unix-Zeit statt der
+	Loxone-Zeit. Zeigt das Alter einen Wert um 1,23&nbsp;Milliarden, ist das der Fall &mdash; dann in der
+	Formel <span class="sm-mono">1230768000</span> abziehen und den Zeitzonenversatz addieren.
+	</div>
+
+	<div class="sm-step"><b>Schritt 6: Komplette Baustein-Liste zum 1:1-Nachbauen</b><br><br>
+	So sieht die vollst&auml;ndige Logik auf der Programmierseite aus (jede Zeile = ein Baustein).
+	Alle Bausteine findet man in Loxone Config &uuml;ber die Baustein-Suche (F5):
+	<table class="sm-tbl">
+	<tr><th>#</th><th>Baustein (Typ)</th><th>Name (Vorschlag)</th><th>Parameter</th><th>Eing&auml;nge verbinden mit</th></tr>
+	<tr><td>1</td><td>Virtueller Eingang</td><td><span class="sm-mono">&hellip;_Consumption_Total_OBIS_1.8.0</span></td><td>Einheit kWh, Anzeige 1 Nachkommastelle</td><td>&mdash; (kommt &uuml;ber das Gateway)</td></tr>
+	<tr><td>2</td><td>Virtueller Eingang</td><td><span class="sm-mono">&hellip;_Delivery_Total_OBIS_2.8.0</span></td><td>Einheit kWh</td><td>&mdash;</td></tr>
+	<tr><td>3</td><td>Virtueller Eingang</td><td><span class="sm-mono">&hellip;_Total_Power_OBIS_16.7.0</span></td><td>Einheit W</td><td>&mdash;</td></tr>
+	<tr><td>4</td><td>Virtueller Eingang</td><td><span class="sm-mono">&hellip;_Consumption_CalculatedPower_OBIS_1.99.0</span></td><td>Einheit W</td><td>&mdash;</td></tr>
+	<tr><td>5</td><td>Virtueller Eingang</td><td><span class="sm-mono">&hellip;_Delivery_CalculatedPower_OBIS_2.99.0</span></td><td>Einheit W</td><td>&mdash;</td></tr>
+	<tr><td>6</td><td>Virtueller Eingang</td><td><span class="sm-mono">&hellip;_Last_UpdateLoxEpoche</span></td><td>Einheit s</td><td>&mdash;</td></tr>
+	<tr><td>7</td><td>Datum &amp; Uhrzeit</td><td>Aktuelle Zeit</td><td>&mdash;</td><td>&mdash; (liefert die Zeit selbst)</td></tr>
+	<tr><td>8</td><td>Formel</td><td>Alter der Messwerte (s)</td><td>Formel: <span class="sm-mono">I1-I2</span></td><td>I1 = #7, I2 = #6</td></tr>
+	<tr><td>9</td><td>Schwellwertschalter</td><td>Stromz&auml;hler meldet sich nicht</td><td>Ein <b>600</b> / Aus <b>300</b> (Ein &gt; Aus = schaltet beim &Uuml;berschreiten ein)</td><td>Eingang = #8</td></tr>
+	<tr><td>10</td><td>Benachrichtigung</td><td>Stromz&auml;hler pr&uuml;fen</td><td>Text z.&nbsp;B. &bdquo;Vom Stromz&auml;hler kommen seit 10 Minuten keine Werte mehr.&ldquo;</td><td>&larr; #9</td></tr>
+	<tr><td>11</td><td>Status</td><td>Stromz&auml;hler</td><td>Statustext siehe Schritt&nbsp;4, Visualisierung EIN</td><td>v1 = #3, v2 = #1, v3 = #2</td></tr>
+	<tr><td>12</td><td>Formel (optional)</td><td>Hausverbrauch (W)</td><td>Formel: <span class="sm-mono">I1+I2-I3</span></td><td>I1 = PV-Erzeugung, I2 = #4, I3 = #5</td></tr>
+	<tr><td>13</td><td>Merker (optional)</td><td>Bezug bei Tagesbeginn (kWh)</td><td>Speichern durch einen Impuls um 0:00&nbsp;Uhr</td><td>&larr; #1</td></tr>
+	<tr><td>14</td><td>Formel (optional)</td><td>Bezug heute (kWh)</td><td>Formel: <span class="sm-mono">I1-I2</span></td><td>I1 = #1, I2 = #13</td></tr>
+	</table>
+	<br>
+	<b>Zu #12:</b> nur sinnvoll, wenn eine PV-Anlage ihre Erzeugung in den Miniserver meldet. Ohne PV
+	ist der Hausverbrauch schlicht der Bezug (#4).<br>
+	<b>Zu #9:</b> die Ein-Schwelle muss deutlich &uuml;ber dem Abholtakt liegen. Bei einem Abruf je
+	Minute sind 600&nbsp;Sekunden ein ruhiger Wert &mdash; ein einzelner ausgefallener Durchlauf
+	l&ouml;st damit noch keine Meldung aus.<br>
+	<b>Zu #10:</b> der Benachrichtigungs-Baustein sendet nur bei einem Wechsel von Aus auf Ein. Niemals
+	mehrere Quellen direkt an seinen Eingang legen &mdash; erst &uuml;ber einen ODER-Baustein
+	zusammenf&uuml;hren, sonst verschluckt eine dauerhaft aktive Quelle alle &uuml;brigen.
+	</div>
 
 </div>
 </TMPL_IF>
