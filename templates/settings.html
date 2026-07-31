@@ -58,9 +58,14 @@
 .sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
 .sm-feld { margin: 14px 0; }
 .sm-feld > label { display: block; font-weight: 600; font-size: 0.9em; color: #555; margin: 0 0 4px; }
-.sm-feld select, .sm-feld input[type=text], .sm-feld input[type=number], .sm-feld textarea {
-    width: 100%; max-width: 520px; box-sizing: border-box; padding: 8px; font-size: 0.95em;
-    border: 1px solid #bbb; border-radius: 6px; background: #fff; }
+/* Bedienelemente werden von jQuery Mobile umgebaut und bekommen einen eigenen
+   Behaelter. Begrenzt man das Feld selbst, bleibt der Behaelter breit - man
+   sieht ein schmales Feld in einem breiten weissen Kasten. Und beim
+   Auswahlfeld liegt das unsichtbare <select> ueber dem Knopf und faengt die
+   Klicks ab; wer es gestaltet, schiebt es weg. Deshalb wird ausschliesslich
+   der Behaelter begrenzt. */
+.sm-feld .ui-input-text, .sm-feld .ui-select, .sm-feld .ui-textinput { max-width: 520px; }
+.sm-feld .ui-input-text input, .sm-feld .ui-input-text textarea { font-size: 0.95em; }
 .sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; max-width: 640px; }
 .sm-diag td { padding: 6px 4px; vertical-align: top; }
 .sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
@@ -170,8 +175,8 @@
 		<td width="40%"><label for="vz_enabled"><TMPL_VAR VZ.LABEL_ENABLED></label></td>
 		<td width="60%">
 		<select id="vz_enabled" name="vz_enabled" data-role="flipswitch" data-mini="true">
-		<option value="0">Off</option>
-		<option value="1">On</option>
+		<option value="0">Aus</option>
+		<option value="1">Ein</option>
 		</select>
 		</td>
 	</tr>
@@ -227,14 +232,22 @@
 		<td><label for="vz_sendudp"><TMPL_VAR VZ.LABEL_SENDUDP></label></td>
 		<td>
 		<select id="vz_sendudp" name="vz_sendudp" data-role="flipswitch" data-mini="true">
-		<option value="0">Off</option>
-		<option value="1">On</option>
+		<option value="0">Aus</option>
+		<option value="1">Ein</option>
 		</select>
 		</td>
 	</tr>
 	<tr>
 		<td><label for="vz_udpport"><TMPL_VAR VZ.LABEL_UDPPORT></label></td>
 		<td><input type="number" id="vz_udpport" name="vz_udpport" value="<TMPL_VAR VZ_UDPPORT>" min="1" max="65535" data-mini="true"></td>
+	</tr>
+	<tr>
+		<td>Z&auml;hlernummer</td>
+		<td><input type="text" id="vz_serial" name="vz_serial" value="<TMPL_VAR VZ_SERIAL>" data-mini="true">
+		<div class="sm-hilfe">Steht im MQTT-Thema und im UDP-Satz:
+		<code>&lt;Thema&gt;/&lt;Z&auml;hlernummer&gt;/&lt;Kennzahl&gt;</code>.
+		Wer von der klassischen Betriebsart kommt, tr&auml;gt hier <b>dieselbe Nummer</b> ein &ndash; dann
+		bleiben die virtuellen Eing&auml;nge im Miniserver unver&auml;ndert.</div></td>
 	</tr>
 	<tr>
 		<td>MQTT</td>
@@ -309,7 +322,7 @@
 	<p class="sm-hilfe">Diese Adressen und Namen brauchst du in der Loxone Config. Sie richten sich
 	nach den Einstellungen, die hier im Plugin gespeichert sind.</p>
 
-	<h3>MQTT &mdash; der Hausstandard</h3>
+	<h3>MQTT</h3>
 	<p class="sm-hilfe">Die Werte gehen &uuml;ber das MQTT-Gateway des LoxBerry an den Miniserver.
 	<b>Im Gateway muss das Abo <code><TMPL_VAR LX_TOPIC>/#</code> eingetragen sein</b>, sonst kommt nichts an.</p>
 	<TMPL_LOOP LX_SERIALS>
@@ -334,7 +347,7 @@
 	<h3>HTTP &mdash; zum Nachsehen</h3>
 	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;">http://<TMPL_VAR LX_HOST>/plugins/<TMPL_VAR LX_PLUGINDIR>/index.php</pre>
 	<p class="sm-hilfe">Liefert alle Werte als Klartext. Als virtueller HTTP-Eingang mit Abfragezyklus
-	60 Sekunden verwendbar &mdash; MQTT ist aber der Hausstandard.</p>
+	60 Sekunden verwendbar. MQTT ist der empfohlene Weg.</p>
 
 </div>
 </TMPL_IF>
@@ -385,7 +398,7 @@
 	fr&uuml;her gingen sie nach <code>/dev/null</code>.</p>
 	<pre style="background:#f4f4f4; border:1px solid #ccc; padding:10px; overflow:auto; max-height:420px; font-size:0.85em;"><TMPL_VAR VZ_LOG ESCAPE=HTML></pre>
 	<p class="sm-hilfe">Die Protokolle der Legacy-Betriebsart stehen im Reiter
-	<i>Smartmeter (Legacy)</i> unter &bdquo;Logfiles zeigen&ldquo;.</p>
+	<i>Smartmeter (Legacy)</i> unter &bdquo;Protokolldateien ansehen&ldquo;.</p>
 
 </div>
 </TMPL_IF>
@@ -412,7 +425,7 @@
 	<div class="sm-feld">
 		<label for="mq_an">Daten per MQTT senden</label>
 		<select id="mq_an" name="mq_an" data-mini="true" data-native-menu="true">
-			<option value="1">Ja &mdash; Hausstandard</option>
+			<option value="1">Ja</option>
 			<option value="0">Nein</option>
 		</select>
 	</div>
@@ -421,7 +434,7 @@
 		<label for="mq_topic">MQTT-Thema (Pr&auml;fix)</label>
 		<input type="text" id="mq_topic" name="mq_topic" value="<TMPL_VAR MQ_TOPIC ESCAPE=HTML>" data-mini="true">
 		<div class="sm-hilfe">Darunter ver&ouml;ffentlicht das Plugin je Lesekopf und Kennzahl, zum Beispiel
-		<code><TMPL_VAR MQ_TOPIC>/0047/Consumption_Total_OBIS_1.8.0</code>.</div>
+		<code><TMPL_VAR MQ_TOPIC>/1234/Consumption_Total_OBIS_1.8.0</code>.</div>
 	</div>
 
 	<div style="margin:18px 0;">
