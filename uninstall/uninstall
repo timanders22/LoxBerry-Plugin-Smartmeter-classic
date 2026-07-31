@@ -1,0 +1,40 @@
+#!/bin/sh
+
+# Laeuft als root beim Deinstallieren des Plugins.
+#
+# vzlogger und die Paketquelle werden NUR entfernt, wenn dieses Plugin sie
+# selbst installiert hat. Den Merker schreibt bin/vzlogger_pkg.sh.
+# Herkunft des Verfahrens: Smartmeter-NG.
+
+ARGV3=$3
+ARGV5=$5
+
+MARKER="$ARGV5/config/plugins/$ARGV3/vzlogger.installed-by-plugin"
+SOURCE_LIST="/etc/apt/sources.list.d/volkszaehler-volkszaehler-org-project.list"
+KEYRING="/usr/share/keyrings/volkszaehler-volkszaehler-org-project-archive-keyring.gpg"
+VZCONF="$ARGV5/config/plugins/$ARGV3/vzlogger.conf"
+
+# Erst das eigene vzlogger beenden, solange die Konfiguration noch da ist.
+pkill -f -- "-c $VZCONF" >/dev/null 2>&1
+sleep 1
+
+if command -v systemctl >/dev/null 2>&1; then
+	systemctl unmask vzlogger.service >/dev/null 2>&1
+	systemctl stop vzlogger.service >/dev/null 2>&1
+	systemctl disable vzlogger.service >/dev/null 2>&1
+fi
+
+if [ -e "$MARKER" ]; then
+	echo "<INFO> vzlogger wurde von diesem Plugin installiert - es wird entfernt."
+	DEBIAN_FRONTEND=noninteractive apt-get purge -y vzlogger >/dev/null 2>&1
+	rm -f "$SOURCE_LIST" "$KEYRING"
+	apt-get update >/dev/null 2>&1
+	echo "<INFO> vzlogger und die Paketquelle von volkszaehler.org sind entfernt."
+else
+	echo "<INFO> vzlogger war vor diesem Plugin vorhanden - es bleibt unangetastet."
+fi
+
+rm -f /etc/udev/rules.d/99-smartmeter.rules
+command -v udevadm >/dev/null 2>&1 && udevadm control --reload-rules >/dev/null 2>&1
+
+exit 0
