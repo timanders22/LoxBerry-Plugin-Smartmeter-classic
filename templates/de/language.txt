@@ -1,12 +1,12 @@
 [MENU]
-VZLOGGER="Smartmeter Konfiguration (vzLogger)"
-LEGACY="Smartmeter Konfiguration (Legacy)"
-LEGACY_HINT="Dieses ist die Legacy Implementierung, um Deine Smartmeter anzubinden. Diese Implementierung basiert auf sehr alten Skripten, die leider sehr unflexibel sind und nur begrenzte Möglichkeiten bieten. Wenn möglich benutze bitte die Standardimplementierung mit vzLogger. Diese Implementierung wird nicht mehr gewartet und wird in einem der zukünftigen Versionen entfernt werden."
+VZLOGGER="Smartmeter einrichten (vzLogger)"
+LEGACY="Smartmeter einrichten (klassisch)"
+LEGACY_HINT="Dies ist der klassische Leser, um Deine Smartmeter anzubinden. Diese Implementierung basiert auf sehr alten Skripten, die leider sehr unflexibel sind und nur begrenzte Möglichkeiten bieten. Wenn möglich benutze bitte die Standardimplementierung mit vzLogger."
 
 [BUTTON]
 RESCAN="Nach I/R Leseköpfen suchen"
-SHOWLOGFILE="Logfiles zeigen"
-CLEARCACHE="Cache löschen"
+SHOWLOGFILE="Protokolldateien ansehen"
+CLEARCACHE="Zwischenspeicher leeren"
 SAVE="Speichern"
 CANCEL="Abbrechen"
 FETCH="Zähler manuell abfragen"
@@ -52,15 +52,25 @@ MANUALSETTINGS_HELP="Konfiguriere die Einstellungen des seriellen Ports und des 
 PROTOCOL="Protokoll:"
 BAUDRATE="Max. Baudrate:"
 STARTBAUDRATE="Initiale Baudrate:"
-PARITY="Parity:"
-HANDSHAKE="Handshake:"
-DATABITS="Databits:"
-STOPBITS="Stopbits:"
-TIMEOUT="Timeout:"
+PARITY="Parität:"
+HANDSHAKE="Datenflusssteuerung:"
+DATABITS="Datenbits:"
+STOPBITS="Stoppbits:"
+TIMEOUT="Zeitüberschreitung:"
 DELAY="Verzögerung:"
 CRC="CRC:"
 
 [LOGFILETABLEROWS]
 ROWTITLE="I/R Lesekopf - Seriennummer:"
-LABEL="Logfile:"
-TITLE="Logfiles"
+LABEL="Protokolldatei:"
+TITLE="Protokolldateien"
+
+[LEGENDE]
+LESEN="Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts"
+TECHNIK="Technische Auskunft &mdash; f&uuml;r die Fehlersuche"
+AKTION="L&ouml;st etwas aus &mdash; sendet oder ver&auml;ndert etwas"
+
+[GRUPPE]
+LESEN="Ansehen"
+TECHNIK="Technische Auskunft"
+AKTION="L&ouml;st etwas aus"
