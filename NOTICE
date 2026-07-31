@@ -1,0 +1,39 @@
+Smartmeter Classic
+==================
+
+Diese Software ist eine Abspaltung (Fork) des LoxBerry-Plugins "Smartmeter"
+von Michael Schlenstedt.
+
+  Original:  https://github.com/mschlenstedt/LoxBerry-Plugin-Smartmeter
+  Lizenz:    Apache License, Version 2.0
+  Copyright: 2016-2026 Michael Schlenstedt, michael@loxberry.de
+
+Der ursprüngliche Autor hat diese Linie mit Fassung 1.2.1 eingestellt und ist
+auf Smartmeter-NG gewechselt:
+
+  https://github.com/mschlenstedt/LoxBerry-Plugin-Smartmeter-NG
+
+Smartmeter-NG setzt ausschließlich auf vzlogger und enthält den ursprünglichen
+Perl-Leser ("Legacy") nicht mehr. Diese Abspaltung führt die eingestellte Linie
+weiter, weil der Legacy-Leser Zähler bedient, die vzlogger auf manchen
+Installationen nicht erreicht.
+
+Gemäß Apache License 2.0, Abschnitt 4(b): Die Dateien dieser Abspaltung wurden
+gegenüber dem Original verändert. Die Änderungen sind in den Dateien
+AENDERUNGEN_*.md dieses Repositories im Einzelnen beschrieben. Wesentlich sind:
+
+  - vzLogger-Betriebsart mit eigener Konfigurationserzeugung, Diagnose und
+    Protokoll
+  - Installation von vzlogger aus der signierten Cloudsmith-Paketquelle von
+    volkszaehler.org (Verfahren aus Smartmeter-NG übernommen und angepasst)
+  - Wächter, der vzlogger nach Update, Neustart und Absturz selbst startet
+  - use_local_time für Zähler ohne gestellte Uhr
+  - MQTT als eigener Reiter und Hausstandard-Ausgabeweg
+  - Oberfläche auf sechs Reiter umgebaut
+
+Von Smartmeter-NG (ebenfalls Michael Schlenstedt, Apache License 2.0) wurde das
+Verfahren zur Installation von vzlogger übernommen; die Herkunft ist in
+bin/vzlogger_pkg.sh, postroot.sh und uninstall/uninstall vermerkt.
+
+Copyright der Änderungen:
+  2026 The LoxBerry Smartmeter Classic Plugin Authors
