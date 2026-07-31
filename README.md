@@ -68,7 +68,32 @@ installiert hat.
 
 **MQTT ist der Standardweg.** Themen:
 
-    <Praefix>/<Seriennummer>/<Kennzahl>
+    <Praefix>/<Zaehlernummer>/<Kennzahl>
+
+**Beide Betriebsarten senden dasselbe Schema** — dieselben Schlüssel, dasselbe
+Thema, denselben UDP-Satz. Ein Wechsel zwischen klassischem Leser und vzlogger
+ändert im Miniserver nichts, solange im Reiter *vzLogger* dieselbe
+**Zählernummer** eingetragen ist.
+
+Das MQTT-Gateway ersetzt in den Themen nur `/` und `%` durch `_`; Punkte bleiben
+stehen. Der virtuelle Eingang heißt also
+`smartmeter_1234_Consumption_Total_OBIS_1.8.0`.
+
+### In der vzLogger-Betriebsart abgeleitete Werte
+
+vzlogger liefert weder Zeitstempel noch die kalkulierten Leistungen. Das Plugin
+ergänzt sie, damit vorhandene Auswertungen weiterlaufen:
+
+| Schlüssel | Herkunft |
+|---|---|
+| `Last_Update`, `Last_UpdateLoxEpoche` | Rechner-Uhrzeit zum Abholzeitpunkt |
+| `Consumption_CalculatedPower_OBIS_1.99.0` | aus `16.7.0`, positiver Anteil |
+| `Delivery_CalculatedPower_OBIS_2.99.0` | aus `16.7.0`, negativer Anteil |
+
+**Der klassische Leser rechnet die beiden letzten anders** — aus dem
+Zählerfortschritt. Für Zähler mit `16.7.0` ist die Ableitung genauer, aber es
+ist nicht dieselbe Größe. Wer beide Betriebsarten vergleicht, wird kleine
+Unterschiede sehen.
 
 Im MQTT-Gateway des LoxBerry muss das Abo `<Praefix>/#` eingetragen sein —
 sonst kommt am Miniserver nichts an. Der Reiter *MQTT* zeigt das benötigte Abo,
