@@ -1,0 +1,444 @@
+<style>
+	.listtable td
+	{
+		vertical-align	:middle;
+		text-align	:center;
+	}
+	.listtable td img
+	{
+		padding		:5px;
+	}
+	.lb_flex-item 
+	{	
+		min-width	:450px;
+		width		:450px;
+		max-width	:450px;
+		flex-wrap	:nowrap;
+		margin-top: -10px;  
+	}
+	.lb_flex-item-help 
+	{
+		min-width	:100px;
+		width		:100%;
+		position	:relative;
+		margin-left	:10px;
+	}
+	.mqtttable {
+		vertical-align: middle;
+		text-align: left;
+		/* font-size: 90%; */
+		border-collapse: collapse;
+		border: 1px solid grey;
+		padding: 10px;
+		width: 100%;
+		
+	}
+	.mqtttable_vicol, .mqtttable_desccol {
+		border: 1px solid grey;
+		padding: 10px;
+	}
+	.mqtttable_headrow {
+	
+	}
+
+</style>
+
+
+<!-- ****************************************************************************************** -->
+
+<style>
+/* Hausstandard: eigener Behaelter, kein Schattenwurf, Reiter im Fluss */
+.sm-wrap { max-width: 980px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
+.sm-wrap, .sm-wrap *, .sm-tabs, .sm-tabs * { text-shadow: none !important; }
+.sm-wrap h2 { color: #6dac20; margin: 24px 0 10px; font-size: 1.15em; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
+.sm-wrap h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
+.sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
+.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0;
+          padding: 9px 18px; font-size: 0.95em; color: #444 !important; text-decoration: none; display: inline-block; }
+.sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
+.sm-feld { margin: 14px 0; }
+.sm-feld > label { display: block; font-weight: 600; font-size: 0.9em; color: #555; margin: 0 0 4px; }
+.sm-feld select, .sm-feld input[type=text], .sm-feld input[type=number], .sm-feld textarea {
+    width: 100%; max-width: 520px; box-sizing: border-box; padding: 8px; font-size: 0.95em;
+    border: 1px solid #bbb; border-radius: 6px; background: #fff; }
+.sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; max-width: 640px; }
+.sm-diag td { padding: 6px 4px; vertical-align: top; }
+.sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
+.sm-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
+.sm-knopfreihe .sm-btn { flex: 0 0 auto; min-width: 250px; text-align: center; display: inline-flex;
+    align-items: center; justify-content: center; line-height: 1.25; padding: 10px 14px;
+    border-radius: 6px; color: #fff !important; text-decoration: none; font-size: 0.92em; }
+.sm-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
+.sm-legende span { display: inline-flex; align-items: center; gap: 6px; }
+.sm-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+.sm-btn.sm-b-lesen   { background: #6dac20; }
+.sm-btn.sm-b-technik { background: #546e7a; }
+.sm-btn.sm-b-aktion  { background: #e0620d; }
+.sm-punkt.sm-b-lesen   { background: #6dac20; }
+.sm-punkt.sm-b-technik { background: #546e7a; }
+.sm-punkt.sm-b-aktion  { background: #e0620d; }
+</style>
+
+<div class="sm-tabs">
+	<a class="sm-tab<TMPL_IF TAB_VZLOGGER> sm-active</TMPL_IF>" href="index.cgi?form=vzlogger">Smartmeter (vzLogger)</a>
+	<a class="sm-tab" href="index_legacy.cgi">Smartmeter (Legacy)</a>
+	<a class="sm-tab<TMPL_IF TAB_MQTT> sm-active</TMPL_IF>" href="index.cgi?form=mqtt">MQTT</a>
+	<a class="sm-tab<TMPL_IF TAB_LOXONE> sm-active</TMPL_IF>" href="index.cgi?form=loxone">Einbindung in Loxone</a>
+	<a class="sm-tab<TMPL_IF TAB_TEST> sm-active</TMPL_IF>" href="index.cgi?form=test">Test</a>
+	<a class="sm-tab<TMPL_IF TAB_LOG> sm-active</TMPL_IF>" href="index.cgi?form=log">Logdateien</a>
+</div>
+
+<TMPL_IF FORM_VZLOGGER>
+
+<div class="sm-wrap">
+
+
+	<TMPL_IF VZ_SAVED>
+	<center>
+	<div style="background-color: rgba(200, 255, 200, 0.5); border-radius: 11px; border: 1px solid green; padding:10px; display:table; margin:0 auto 15px auto;">
+		<b><TMPL_VAR VZ.HINT_SAVED></b>
+	</div>
+	</center>
+	</TMPL_IF>
+
+	<TMPL_UNLESS VZ_BINOK>
+	<center>
+	<div style="background-color: rgba(255, 210, 200, 0.5); border-radius: 11px; border: 1px solid red; padding:10px; display:table; margin:0 auto 15px auto;">
+		<b><TMPL_VAR VZ.HINT_NOBINARY></b><br><span style="font-size:0.9em;"><TMPL_VAR VZ_BINWHY></span>
+	</div>
+	</center>
+	</TMPL_UNLESS>
+
+	<TMPL_IF VZ_NODEVICE>
+	<center>
+	<div style="background-color: rgba(255, 255, 200, 0.4); border-radius: 11px; border: 1px solid black; padding:10px; display:table; margin:0 auto 15px auto;">
+		<i><TMPL_VAR VZ.HINT_NODEVICE></i>
+	</div>
+	</center>
+	</TMPL_IF>
+
+
+	<TMPL_IF VZ_INSTALLOUT>
+	<div style="max-width:900px; margin:0 auto 20px auto;">
+	<h3 style="margin-bottom:6px;">Ergebnis der Installation</h3>
+	<pre style="background:#f4f4f4; border:1px solid #ccc; padding:10px; overflow:auto; max-height:320px; font-size:0.85em;"><TMPL_VAR VZ_INSTALLOUT ESCAPE=HTML></pre>
+	</div>
+	</TMPL_IF>
+
+	<TMPL_UNLESS VZ_BINOK>
+	<div style="max-width:900px; margin:0 auto 20px auto; text-align:center;">
+	<form method="post" action="index.cgi">
+		<input type="hidden" name="form" value="vzlogger">
+		<input type="hidden" name="vzinstall" value="1">
+		<input type="submit" value="vzlogger installieren" data-mini="true" data-inline="true">
+	</form>
+	<p style="font-size:0.9em; color:#555; margin-top:4px;">
+		Richtet die signierte Paketquelle von volkszaehler.org ein und installiert das
+		zu dieser Architektur passende vzlogger. Der mitgelieferte Dienst des Pakets
+		wird dabei abgeschaltet - vzlogger wird von diesem Plugin gestartet.
+	</p>
+	</div>
+	</TMPL_UNLESS>
+
+	<!-- Diagnose ------------------------------------------------------------ -->
+	<div style="max-width:900px; margin:0 auto 20px auto;">
+	<h3 style="margin-bottom:6px;">Diagnose</h3>
+	<p style="margin-top:0; font-size:0.9em; color:#555;">
+		Jede Zeile ist eine einzelne Pruefung. Die erste rote Zeile von oben ist die Ursache -
+		alles darunter ist meist nur die Folge.
+	</p>
+	<table style="width:100%; border-collapse:collapse;">
+	<TMPL_LOOP VZ_DIAG>
+		<tr style="border-bottom:1px solid #ddd;">
+			<td style="width:26px; padding:6px 4px; vertical-align:top; font-weight:bold;
+				<TMPL_VAR STATE_COLOR>">
+				<TMPL_IF STATE_OK>&#10003;</TMPL_IF><TMPL_IF STATE_WARN>!</TMPL_IF><TMPL_IF STATE_FAIL>&#10007;</TMPL_IF>
+			</td>
+			<td style="width:190px; padding:6px 4px; vertical-align:top;"><b><TMPL_VAR LABEL></b></td>
+			<td style="padding:6px 4px; vertical-align:top;"><TMPL_VAR TEXT></td>
+		</tr>
+	</TMPL_LOOP>
+	</table>
+	</div>
+
+	<form method="post" action="index.cgi">
+	<input type="hidden" name="form" value="vzlogger">
+	<input type="hidden" name="saveformdata" value="1">
+
+	<table border=0 width="100%" style="max-width:750px; margin:0 auto;">
+	<tr>
+		<td width="40%"><label for="vz_enabled"><TMPL_VAR VZ.LABEL_ENABLED></label></td>
+		<td width="60%">
+		<select id="vz_enabled" name="vz_enabled" data-role="flipswitch" data-mini="true">
+		<option value="0">Off</option>
+		<option value="1">On</option>
+		</select>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_device"><TMPL_VAR VZ.LABEL_DEVICE></label></td>
+		<td>
+		<select id="vz_device" name="vz_device" data-mini="true" data-native-menu="true">
+		<TMPL_LOOP VZ_DEVICES>
+		<option value="<TMPL_VAR DEV>"><TMPL_VAR DEV></option>
+		</TMPL_LOOP>
+		</select>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_protocol"><TMPL_VAR VZ.LABEL_PROTOCOL></label></td>
+		<td>
+		<select id="vz_protocol" name="vz_protocol" data-mini="true" data-native-menu="true">
+		<option value="sml">SML</option>
+		<option value="d0">D0 (IEC 62056-21)</option>
+		</select>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_baudrate"><TMPL_VAR VZ.LABEL_BAUDRATE></label></td>
+		<td>
+		<select id="vz_baudrate" name="vz_baudrate" data-mini="true" data-native-menu="true">
+		<option value="300">300</option>
+		<option value="1200">1200</option>
+		<option value="2400">2400</option>
+		<option value="4800">4800</option>
+		<option value="9600">9600</option>
+		<option value="19200">19200</option>
+		<option value="115200">115200</option>
+		</select>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_parity"><TMPL_VAR VZ.LABEL_PARITY></label></td>
+		<td>
+		<select id="vz_parity" name="vz_parity" data-mini="true" data-native-menu="true">
+		<option value="8n1">8-N-1</option>
+		<option value="7n1">7-N-1</option>
+		<option value="7e1">7-E-1</option>
+		<option value="8e1">8-E-1</option>
+		</select>
+		</td>
+	</tr>
+	<tr>
+		<td valign="top"><label for="vz_channels"><TMPL_VAR VZ.LABEL_CHANNELS></label></td>
+		<td><textarea id="vz_channels" name="vz_channels" rows="5" data-mini="true"><TMPL_VAR VZ_CHANNELS></textarea></td>
+	</tr>
+	<tr>
+		<td><label for="vz_sendudp"><TMPL_VAR VZ.LABEL_SENDUDP></label></td>
+		<td>
+		<select id="vz_sendudp" name="vz_sendudp" data-role="flipswitch" data-mini="true">
+		<option value="0">Off</option>
+		<option value="1">On</option>
+		</select>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_udpport"><TMPL_VAR VZ.LABEL_UDPPORT></label></td>
+		<td><input type="number" id="vz_udpport" name="vz_udpport" value="<TMPL_VAR VZ_UDPPORT>" min="1" max="65535" data-mini="true"></td>
+	</tr>
+	<tr>
+		<td>MQTT</td>
+		<td>
+		<TMPL_IF VZ_MQTT_AN><b style="color:#1a7f1a;">eingeschaltet</b>, Thema <code><TMPL_VAR VZ_MQTT_TOPIC></code>
+		<TMPL_ELSE><b style="color:#b00000;">ausgeschaltet</b></TMPL_IF>
+		<div class="sm-hilfe">Gilt f&uuml;r beide Betriebsarten. Eingestellt wird es im Reiter
+		<a href="index.cgi?form=mqtt"><b>MQTT</b></a>. Im Gateway muss das Abo
+		<code><TMPL_VAR VZ_MQTT_TOPIC>/#</code> eingetragen sein.</div>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_localtime">Zeitstempel</label></td>
+		<td>
+		<div class="sm-feld">
+		<select name="vz_localtime" id="vz_localtime" data-mini="true" data-native-menu="true">
+			<option value="1">Rechner-Uhrzeit des LoxBerry verwenden (empfohlen)</option>
+			<option value="0">Uhr des Z&auml;hlers verwenden</option>
+		</select>
+		</div>
+		<div class="sm-hilfe">
+			Viele Haushaltsz&auml;hler haben keine gestellte Uhr. vzlogger verwirft solche
+			Telegramme dann mit &bdquo;timestamp before 1990, IGNORING&ldquo; &mdash; der Z&auml;hler
+			wird gelesen, aber kein Wert kommt an. Im Zweifel: Rechner-Uhrzeit.
+		</div>
+		</td>
+	</tr>
+	<tr>
+		<td><label for="vz_httpport"><TMPL_VAR VZ.LABEL_HTTPPORT></label></td>
+		<td><input type="number" id="vz_httpport" name="vz_httpport" value="<TMPL_VAR VZ_HTTPPORT>" min="1" max="65535" data-mini="true"></td>
+	</tr>
+	<tr>
+		<td><TMPL_VAR VZ.LABEL_STATUS></td>
+		<td>
+		<TMPL_IF VZ_RUNNING><span style="color:green;"><b><TMPL_VAR VZ.STATUS_RUNNING></b></span>
+		<TMPL_ELSE><span style="color:#a00;"><b><TMPL_VAR VZ.STATUS_STOPPED></b></span></TMPL_IF>
+		</td>
+	</tr>
+	<tr>
+		<td colspan="2" align="center" style="padding-top:15px;">
+		<input type="submit" value="<TMPL_VAR VZ.LABEL_SAVE>" data-mini="true" data-inline="true">
+		</td>
+	</tr>
+	</table>
+	</form>
+
+
+
+
+	<script>
+	// Select saved values
+	$("#vz_enabled").val("<TMPL_VAR VZ_ENABLED>");
+	$("#vz_device").val("<TMPL_VAR VZ_DEVICE>");
+	$("#vz_protocol").val("<TMPL_VAR VZ_PROTOCOL>");
+	$("#vz_baudrate").val("<TMPL_VAR VZ_BAUDRATE>");
+	$("#vz_parity").val("<TMPL_VAR VZ_PARITY>");
+	$("#vz_sendudp").val("<TMPL_VAR VZ_SENDUDP>");
+	$("#vz_localtime").val("<TMPL_VAR VZ_LOCALTIME>");
+	</script>
+</div>
+
+</TMPL_IF>
+
+<!-- ****************************************************************************************** -->
+
+<!-- ****************************************************************************************** -->
+
+<TMPL_IF FORM_LOXONE>
+<div class="sm-wrap">
+
+	<h2>Einbindung in Loxone</h2>
+	<p class="sm-hilfe">Diese Adressen und Namen brauchst du in der Loxone Config. Sie richten sich
+	nach den Einstellungen, die hier im Plugin gespeichert sind.</p>
+
+	<h3>MQTT &mdash; der Hausstandard</h3>
+	<p class="sm-hilfe">Die Werte gehen &uuml;ber das MQTT-Gateway des LoxBerry an den Miniserver.
+	<b>Im Gateway muss das Abo <code><TMPL_VAR LX_TOPIC>/#</code> eingetragen sein</b>, sonst kommt nichts an.</p>
+	<TMPL_LOOP LX_SERIALS>
+	<p class="sm-hilfe">Themen des Lesekopfs <b><TMPL_VAR SER></b>:</p>
+	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;"><TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Consumption_Total_OBIS_1.8.0
+<TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Delivery_Total_OBIS_2.8.0
+<TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Total_Power_OBIS_16.7.0
+<TMPL_VAR LX_TOPIC>/<TMPL_VAR SER>/Last_UpdateLoxEpoche</pre>
+	</TMPL_LOOP>
+	<p class="sm-hilfe">Das Gateway ersetzt jeden Schr&auml;gstrich durch einen Unterstrich. Ein virtueller
+	Eingang in Loxone hei&szlig;t deshalb zum Beispiel
+	<code><TMPL_VAR LX_TOPIC>_&lt;Seriennummer&gt;_Consumption_Total_OBIS_1.8.0</code>.
+	<b>Der Titel muss genau so lauten</b> &mdash; das Gateway ordnet &uuml;ber den Namen zu.</p>
+
+	<h3>UDP &mdash; nur wo n&ouml;tig</h3>
+	<p class="sm-hilfe">Virtueller UDP-Eingang auf Port <b><TMPL_VAR LX_UDPPORT></b>. Die Befehlserkennung
+	eines Werts sieht so aus:</p>
+	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;">\i&lt;Seriennummer&gt;:Consumption_Total_OBIS_1.8.0:\i\v</pre>
+	<TMPL_UNLESS LX_LEGACY><p class="sm-hilfe"><b>Hinweis:</b> die Legacy-Abfrage ist ausgeschaltet.
+	Dann sendet nur die vzLogger-Betriebsart, falls dort UDP aktiviert ist.</p></TMPL_UNLESS>
+
+	<h3>HTTP &mdash; zum Nachsehen</h3>
+	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;overflow:auto;">http://<TMPL_VAR LX_HOST>/plugins/<TMPL_VAR LX_PLUGINDIR>/index.php</pre>
+	<p class="sm-hilfe">Liefert alle Werte als Klartext. Als virtueller HTTP-Eingang mit Abfragezyklus
+	60 Sekunden verwendbar &mdash; MQTT ist aber der Hausstandard.</p>
+
+</div>
+</TMPL_IF>
+
+<!-- ****************************************************************************************** -->
+
+<TMPL_IF FORM_TEST>
+<div class="sm-wrap">
+
+	<h2>Test</h2>
+
+	<div class="sm-legende">
+	<span><i class="sm-punkt sm-b-lesen"></i> Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts</span>
+	<span><i class="sm-punkt sm-b-technik"></i> Technische Auskunft &mdash; f&uuml;r die Fehlersuche</span>
+	<span><i class="sm-punkt sm-b-aktion"></i> L&ouml;st etwas aus &mdash; sendet oder ver&auml;ndert</span>
+	</div>
+
+	<h3 class="sm-h3">Ansehen</h3>
+	<div class="sm-knopfreihe">
+		<a class="sm-btn sm-b-lesen" target="_blank" href="/plugins/<TMPL_VAR LX_PLUGINDIR>/index.php">Z&auml;hlerwerte abrufen</a>
+		<a class="sm-btn sm-b-lesen" href="index.cgi?form=vzlogger">Diagnose ansehen</a>
+	</div>
+
+	<h3 class="sm-h3">Technische Auskunft</h3>
+	<div class="sm-knopfreihe">
+		<a class="sm-btn sm-b-technik" target="_blank" href="http://<TMPL_VAR LX_HOST>:<TMPL_VAR T_HTTPPORT>/">vzlogger-Status (JSON)</a>
+		<a class="sm-btn sm-b-technik" href="index.cgi?form=log">Protokolle ansehen</a>
+	</div>
+
+	<h3 class="sm-h3">L&ouml;st etwas aus</h3>
+	<div class="sm-knopfreihe">
+		<a class="sm-btn sm-b-aktion" href="index_legacy.cgi?manualpoll=1">Z&auml;hler jetzt abfragen (Legacy)</a>
+	</div>
+	<p class="sm-hilfe">vzlogger l&auml;uft dauerhaft und wird von der Minuten-Cron &uuml;berwacht;
+	ein eigener Neustart-Knopf ist daf&uuml;r nicht n&ouml;tig. Zum erzwungenen Neustart gen&uuml;gt
+	Speichern im Reiter <i>Smartmeter (vzLogger)</i>.</p>
+
+</div>
+</TMPL_IF>
+
+<!-- ****************************************************************************************** -->
+
+<TMPL_IF FORM_LOG>
+<div class="sm-wrap">
+
+	<h2>Logdateien</h2>
+	<p class="sm-hilfe">Die letzten Zeilen von vzlogger und vom Abholskript. Startfehler stehen hier &mdash;
+	fr&uuml;her gingen sie nach <code>/dev/null</code>.</p>
+	<pre style="background:#f4f4f4; border:1px solid #ccc; padding:10px; overflow:auto; max-height:420px; font-size:0.85em;"><TMPL_VAR VZ_LOG ESCAPE=HTML></pre>
+	<p class="sm-hilfe">Die Protokolle der Legacy-Betriebsart stehen im Reiter
+	<i>Smartmeter (Legacy)</i> unter &bdquo;Logfiles zeigen&ldquo;.</p>
+
+</div>
+</TMPL_IF>
+
+<!-- ****************************************************************************************** -->
+
+<TMPL_IF FORM_MQTT>
+<div class="sm-wrap">
+
+	<TMPL_IF MQ_SAVED>
+	<div style="background-color: rgba(200,255,200,0.5); border:1px solid green; border-radius:11px; padding:10px; margin:0 0 15px;">
+		<b>Gespeichert.</b>
+	</div>
+	</TMPL_IF>
+
+	<h2>MQTT</h2>
+	<p class="sm-hilfe">Hier wird MQTT eingestellt &mdash; <b>an einer einzigen Stelle</b>. Die Einstellung
+	gilt f&uuml;r <i>beide</i> Betriebsarten, vzLogger wie Legacy; in deren Reitern wird sie nur angezeigt.</p>
+
+	<form method="post" action="index.cgi">
+	<input type="hidden" name="form" value="mqtt">
+	<input type="hidden" name="saveformdata" value="1">
+
+	<div class="sm-feld">
+		<label for="mq_an">Daten per MQTT senden</label>
+		<select id="mq_an" name="mq_an" data-mini="true" data-native-menu="true">
+			<option value="1">Ja &mdash; Hausstandard</option>
+			<option value="0">Nein</option>
+		</select>
+	</div>
+
+	<div class="sm-feld">
+		<label for="mq_topic">MQTT-Thema (Pr&auml;fix)</label>
+		<input type="text" id="mq_topic" name="mq_topic" value="<TMPL_VAR MQ_TOPIC ESCAPE=HTML>" data-mini="true">
+		<div class="sm-hilfe">Darunter ver&ouml;ffentlicht das Plugin je Lesekopf und Kennzahl, zum Beispiel
+		<code><TMPL_VAR MQ_TOPIC>/0047/Consumption_Total_OBIS_1.8.0</code>.</div>
+	</div>
+
+	<div style="margin:18px 0;">
+		<input type="submit" value="Speichern" data-mini="true" data-inline="true">
+	</div>
+	</form>
+
+	<h3>Was im MQTT-Gateway eingetragen sein muss</h3>
+	<p class="sm-hilfe">Ohne dieses Abo kommt am Miniserver nichts an &mdash; der h&auml;ufigste Grund,
+	warum Werte fehlen, obwohl das Plugin sauber sendet:</p>
+	<pre style="background:#f4f4f4;border:1px solid #ccc;padding:10px;font-size:0.85em;"><TMPL_VAR MQ_TOPIC>/#</pre>
+	<p class="sm-hilfe">Einzutragen unter <i>System-Einstellungen &rarr; MQTT Gateway &rarr; Abonnements</i>.
+	Die Namen der virtuellen Eing&auml;nge in Loxone stehen im Reiter <i>Einbindung in Loxone</i>.</p>
+
+	<script>
+	$("#mq_an").val("<TMPL_VAR MQ_AN>");
+	</script>
+
+</div>
+</TMPL_IF>
