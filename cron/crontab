@@ -1,0 +1,8 @@
+SHELL=/bin/sh 
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin 
+MAILTO=""
+#
+# m h dom mon dow user command1
+# vzLogger mode: poll local vzlogger API and forward readings to the Miniserver.
+# fetch_vzlogger.pl exits immediately if the vzLogger mode is disabled.
+* * * * * loxberry REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/fetch_vzlogger.pl >/dev/null 2>&1
