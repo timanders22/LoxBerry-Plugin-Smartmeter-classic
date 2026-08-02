@@ -1,3 +1,3 @@
 #!/bin/bash
 sleep 15
-perl REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/fetch.pl > /dev/null 2>&1 &
+php REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/fetch.php > /dev/null 2>&1 &

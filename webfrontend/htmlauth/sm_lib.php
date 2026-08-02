@@ -1,0 +1,423 @@
+<?php
+/**
+ * Smartmeter classic - gemeinsame Funktionen der Oberflaeche
+ *
+ * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
+ *
+ * Das Plugin kennt zwei Lesewege, die sich dieselbe serielle Schnittstelle
+ * teilen: vzLogger (modern) und den Legacy-Leser mit Zaehlerprofilen. Beide
+ * senden ueber dieselben MQTT- und UDP-Einstellungen.
+ */
+
+function sm_paths()
+{
+    static $p = null;
+    if ($p !== null) {
+        return $p;
+    }
+    $home = getenv('LBHOMEDIR');
+    if (!$home || !is_dir($home)) {
+        foreach (array('/opt/loxberry', '/home/loxberry/loxberry') as $k) {
+            if (is_dir($k)) { $home = $k; break; }
+        }
+    }
+    $home = $home ? $home : '/opt/loxberry';
+    // Den Pluginordner aus dem eigenen Ablageort ableiten statt ihn fest
+    // einzutragen.
+    $ordner = basename(dirname(__FILE__));
+    if ($ordner === '' || $ordner === 'htmlauth') {
+        $ordner = 'smartmeter';
+    }
+    $p = array(
+        'home'    => $home,
+        'plugin'  => $ordner,
+        'config'  => $home . '/config/plugins/' . $ordner,
+        'vzjson'  => $home . '/config/plugins/' . $ordner . '/vzlogger.json',
+        'vzconf'  => $home . '/config/plugins/' . $ordner . '/vzlogger.conf',
+        'legacy'  => $home . '/config/plugins/' . $ordner . '/smartmeter.cfg',
+        'bin'     => $home . '/bin/plugins/' . $ordner,
+        'log'     => $home . '/log/plugins/' . $ordner,
+        'shm'     => '/dev/shm/' . $ordner,
+        'vzlog'   => '/dev/shm/' . $ordner . '/vzlogger.log',
+        'fetchlog' => '/dev/shm/' . $ordner . '/vzlogger_fetch.log',
+        'general' => $home . '/config/system/general.json',
+    );
+    return $p;
+}
+
+function sm_e($s)
+{
+    return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+}
+
+/** Einen Befehl ausfuehren und die Ausgabe zurueckgeben. */
+function sm_sh($befehl)
+{
+    $aus = array(); $code = 0;
+    @exec($befehl . ' 2>&1', $aus, $code);
+    return array($code, implode("\n", $aus));
+}
+
+/* ==================================================================
+ * vzLogger-Konfiguration (JSON)
+ * ================================================================== */
+
+function sm_vz_vorgaben()
+{
+    return array(
+        'enabled'   => 0,
+        'device'    => '',
+        'protocol'  => 'sml',
+        'baudrate'  => 9600,
+        'parity'    => '8n1',
+        // Viele Haushaltszaehler (z. B. Landis+Gyr E220) senden keine
+        // gestellte Uhr. vzlogger verwirft solche Telegramme dann mit
+        // "timestamp before 1990, IGNORING" - der Zaehler wird gelesen,
+        // aber kein einziger Wert kommt an. Deshalb ist die Rechner-Uhrzeit
+        // die Vorgabe.
+        'localtime' => 1,
+        'sendudp'   => 1,
+        'udpport'   => 7000,
+        'httpport'  => 8083,
+        'serial'    => 'vzlogger',
+        'channels'  => array('1-0:1.8.0', '1-0:2.8.0', '1-0:16.7.0'),
+        'uuids'     => array(),
+    );
+}
+
+function sm_vz_read()
+{
+    $cfg = sm_vz_vorgaben();
+    $datei = sm_paths()['vzjson'];
+    if (is_readable($datei)) {
+        $roh = json_decode((string) @file_get_contents($datei), true);
+        if (is_array($roh)) {
+            foreach ($cfg as $k => $v) {
+                if (array_key_exists($k, $roh)) {
+                    $cfg[$k] = $roh[$k];
+                }
+            }
+        }
+    }
+    if (!is_array($cfg['channels']) || !$cfg['channels']) {
+        $cfg['channels'] = sm_vz_vorgaben()['channels'];
+    }
+    return $cfg;
+}
+
+function sm_vz_write($cfg)
+{
+    $datei = sm_paths()['vzjson'];
+    @mkdir(dirname($datei), 0775, true);
+    $tmp = $datei . '.tmp';
+    $z = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($z === false || @file_put_contents($tmp, $z) === false) {
+        return false;
+    }
+    if (!@rename($tmp, $datei)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+/** Feste UUIDs je Kanal - vzlogger verlangt sie. */
+function sm_vz_uuids($kanaele)
+{
+    $u = array();
+    foreach ($kanaele as $c) {
+        $h = md5('loxberry-smartmeter-vzlogger-' . $c);
+        $u[$c] = substr($h, 0, 8) . '-' . substr($h, 8, 4) . '-' . substr($h, 12, 4)
+               . '-' . substr($h, 16, 4) . '-' . substr($h, 20, 12);
+    }
+    return $u;
+}
+
+/** vzlogger.conf aus den gespeicherten Einstellungen erzeugen. */
+function sm_vz_conf_schreiben($cfg)
+{
+    $p = sm_paths();
+    $chans = array();
+    foreach ($cfg['channels'] as $c) {
+        $chans[] = array(
+            'api'        => 'null',
+            'uuid'       => isset($cfg['uuids'][$c]) ? $cfg['uuids'][$c] : '',
+            'identifier' => $c,
+        );
+    }
+    $meter = array(
+        'enabled'  => (bool) $cfg['enabled'],
+        'protocol' => $cfg['protocol'],
+        'device'   => $cfg['device'],
+        'baudrate' => (int) $cfg['baudrate'],
+        'parity'   => $cfg['parity'],
+        'channels' => $chans,
+    );
+    // Ohne diesen Schluessel nimmt vzlogger den Zeitstempel des Zaehlers.
+    $meter['use_local_time'] = $cfg['localtime'] ? true : false;
+    // D0 braucht eine Aufforderung ("/?!<CR><LF>").
+    if ($cfg['protocol'] === 'd0') {
+        $meter['pullseq'] = '2F3F210D0A';
+    }
+    $conf = array(
+        'verbosity' => 5,
+        'log'       => $p['vzlog'],
+        'retry'     => 30,
+        'local'     => array(
+            'enabled' => true,
+            'port'    => (int) $cfg['httpport'],
+            'index'   => true,
+            'timeout' => 0,
+            'buffer'  => -1,
+        ),
+        'meters'    => array($meter),
+    );
+    return @file_put_contents($p['vzconf'],
+        json_encode($conf, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) !== false;
+}
+
+/* ==================================================================
+ * Legacy-Konfiguration (smartmeter.cfg) - hier steht auch MQTT
+ * ================================================================== */
+
+/**
+ * MQTT steht in der Legacy-Konfigurationsdatei, weil beide Betriebsarten
+ * denselben Weg benutzen. Gelesen wird an mehreren Stellen, geschrieben
+ * nur im Reiter MQTT.
+ */
+function sm_legacy_read()
+{
+    $cfg = array('SENDMQTT' => '0', 'MQTTTOPIC' => 'smartmeter',
+                 'SENDUDP' => '0', 'UDPPORT' => '7000',
+                 'CRON' => '5', 'READ' => '0');
+    $datei = sm_paths()['legacy'];
+    if (!is_readable($datei)) {
+        return $cfg;
+    }
+    foreach ((array) @file($datei, FILE_IGNORE_NEW_LINES) as $z) {
+        if (preg_match('/^\s*([A-Z]+)\s*=\s*(\S*)\s*$/', $z, $m)
+            && array_key_exists($m[1], $cfg)) {
+            $cfg[$m[1]] = $m[2];
+        }
+    }
+    return $cfg;
+}
+
+
+/** Liest der Legacy-Weg gerade? Er belegt dieselbe Schnittstelle. */
+function sm_legacy_aktiv()
+{
+    $c = sm_legacy_read();
+    return $c['READ'] === '1';
+}
+
+/* ==================================================================
+ * vzlogger: Programm, Prozess, Schnittstelle
+ * ================================================================== */
+
+/**
+ * Ein lauffaehiges vzlogger-Programm suchen.
+ * Liefert (Pfad, Grund). Pfad ist '' wenn nichts laeuft; der Grund wird
+ * dem Benutzer woertlich angezeigt.
+ */
+function sm_vz_binary()
+{
+    $p = sm_paths();
+    list(, $arch) = sm_sh('uname -m');
+    $arch = trim($arch);
+    list(, $sys) = sm_sh('command -v vzlogger');
+    $sys = trim($sys);
+
+    if ($sys === '') {
+        return array('', 'Es ist kein vzlogger installiert. Der Knopf "vzlogger installieren" '
+                       . 'richtet die Paketquelle von volkszaehler.org ein und installiert das '
+                       . 'zu dieser Architektur (' . $arch . ') passende Paket. Bis dahin liefert '
+                       . 'die Legacy-Betriebsart Werte - die braucht kein vzlogger.');
+    }
+    if (!is_executable($sys)) {
+        return array('', $sys . ' ist nicht ausfuehrbar (Dateirechte).');
+    }
+    if (sm_vz_binary_laeuft($sys)) {
+        return array($sys, '');
+    }
+
+    // Vorhanden, aber nicht startbar - der ausfuehrliche Bericht.
+    $check = $p['bin'] . '/vz_check.sh';
+    $bericht = '';
+    if (is_executable($check)) {
+        list(, $bericht) = sm_sh(escapeshellarg($check) . ' ' . escapeshellarg($sys));
+        $bericht = trim(preg_replace('/\s+/', ' ', str_replace("\n", ' | ', $bericht)));
+    }
+    if ($bericht === '') {
+        list($rc, $out) = sm_vz_binary_probe($sys);
+        $bericht = 'startet nicht (rc=' . $rc . '): '
+                 . substr(preg_replace('/\s+/', ' ', $out), 0, 160);
+    }
+    return array('', $sys . ' ist vorhanden, startet aber nicht. ' . $bericht);
+}
+
+function sm_vz_binary_probe($bin)
+{
+    return sm_sh(escapeshellarg($bin) . ' --version');
+}
+
+/**
+ * Laeuft das Programm wirklich? Die Fehlermeldung der Shell enthaelt den
+ * Pfad und damit das Wort "vzlogger" - danach darf also nicht gesucht
+ * werden.
+ */
+function sm_vz_binary_laeuft($bin)
+{
+    list($rc, $out) = sm_vz_binary_probe($bin);
+    if (preg_match('/not found|No such file|cannot execute|Exec format error|Permission denied|Syntax error/i', $out)) {
+        return false;
+    }
+    if ($rc === 0) {
+        return true;
+    }
+    return (bool) preg_match('/^\s*vzlogger\s+[\d.]/i', $out);
+}
+
+/** Fassung laut Paketverwaltung. */
+function sm_vz_paket($was)
+{
+    $h = sm_paths()['bin'] . '/vzlogger_pkg.sh';
+    if (!is_executable($h)) {
+        return '';
+    }
+    list(, $v) = sm_sh(escapeshellarg($h) . ' ' . escapeshellarg($was));
+    return trim($v);
+}
+
+/** Installation anstossen (ueber sudoers freigegeben). */
+function sm_vz_install()
+{
+    $h = sm_paths()['bin'] . '/vzlogger_pkg.sh';
+    if (!is_executable($h)) {
+        return 'Paket-Helfer fehlt: ' . $h;
+    }
+    list(, $out) = sm_sh('sudo -n ' . escapeshellarg($h) . ' install');
+    return trim($out) !== '' ? $out : 'Keine Ausgabe.';
+}
+
+/**
+ * PIDs unseres vzlogger - erkannt an unserer eigenen Konfigurationsdatei,
+ * damit ein vzlogger eines anderen Plugins nie mitgezaehlt wird.
+ */
+function sm_vz_running()
+{
+    // pgrep -f findet auch die Shell, die pgrep aufruft - ihre Befehlszeile
+    // enthaelt das Suchmuster. Deshalb jede Fundstelle gegen den echten
+    // Programmnamen pruefen.
+    list(, $roh) = sm_sh('pgrep -f -- ' . escapeshellarg('-c ' . sm_paths()['vzconf']));
+    $ok = array();
+    foreach (preg_split('/\s+/', trim($roh)) as $pid) {
+        if ($pid === '' || !ctype_digit($pid)) {
+            continue;
+        }
+        list(, $comm) = sm_sh('ps -p ' . (int) $pid . ' -o comm=');
+        if (preg_match('/vzlogger/i', $comm)) {
+            $ok[] = $pid;
+        }
+    }
+    return implode(' ', $ok);
+}
+
+/** Haelt sonst jemand die serielle Schnittstelle? Liefert Text oder ''. */
+function sm_vz_device_busy($dev)
+{
+    if ($dev === '') {
+        return '';
+    }
+    $real = is_link($dev) ? readlink($dev) : $dev;
+    if ($real !== '' && $real[0] !== '/') {
+        $real = '/dev/' . $real;
+    }
+    // fuser ohne -v: PIDs auf der Standardausgabe, Namen auf stderr.
+    // Mit -v landete der Geraetename in der PID-Liste.
+    $ziele = ($real !== '' && $real !== $dev)
+        ? escapeshellarg($dev) . ' ' . escapeshellarg($real)
+        : escapeshellarg($dev);
+    list(, $out) = sm_sh('fuser ' . $ziele);
+    $meine = array_flip(preg_split('/\s+/', trim(sm_vz_running())));
+    $andere = array();
+    if (preg_match_all('/\b(\d+)\b/', $out, $m)) {
+        foreach (array_unique($m[1]) as $pid) {
+            if (isset($meine[$pid]) || !is_dir('/proc/' . $pid)) {
+                continue;
+            }
+            list(, $comm) = sm_sh('ps -p ' . (int) $pid . ' -o comm=');
+            $comm = trim($comm);
+            $andere[] = $comm !== '' ? $comm . ' (' . $pid . ')' : $pid;
+        }
+    }
+    return implode(', ', $andere);
+}
+
+function sm_vz_note($text)
+{
+    $p = sm_paths();
+    @mkdir($p['shm'], 0775, true);
+    @file_put_contents($p['vzlog'],
+        date('Y-m-d H:i:s') . ' [Plugin] ' . $text . "\n", FILE_APPEND);
+}
+
+function sm_vz_restart($cfg)
+{
+    $p = sm_paths();
+    @mkdir($p['shm'], 0775, true);
+    sm_sh('pkill -f -- ' . escapeshellarg('-c ' . $p['vzconf']));
+    sleep(1);
+    if (!$cfg['enabled']) {
+        return '';
+    }
+    list($bin, $warum) = sm_vz_binary();
+    if ($bin === '') {
+        sm_vz_note('START ABGEBROCHEN: ' . $warum);
+        return $warum;
+    }
+    // Startfehler landen im Protokoll statt in /dev/null.
+    sm_sh('nohup ' . escapeshellarg($bin) . ' -c ' . escapeshellarg($p['vzconf'])
+        . ' >> ' . escapeshellarg($p['vzlog']) . ' 2>&1 &');
+    sleep(2);
+    $pid = sm_vz_running();
+    if ($pid === '') {
+        sm_vz_note('START FEHLGESCHLAGEN: ' . $bin . ' -c ' . $p['vzconf']
+                 . ' lief nach 2 Sekunden nicht mehr. Ursache siehe Zeilen darueber.');
+        return 'vzlogger wurde gestartet, lief aber nach zwei Sekunden nicht mehr. '
+             . 'Einzelheiten stehen im Protokoll unten.';
+    }
+    sm_vz_note('gestartet: ' . $bin . ' (PID ' . $pid . ')');
+    return '';
+}
+
+/** Die erkannten Lesekoepfe. */
+function sm_lesekoepfe()
+{
+    $d = glob('/dev/serial/smartmeter/*');
+    return is_array($d) ? $d : array();
+}
+
+/** Letzte Zeilen der beiden Protokolle. */
+function sm_logtail()
+{
+    $p = sm_paths();
+    $aus = array();
+    foreach (array($p['vzlog'], $p['fetchlog']) as $f) {
+        if (!is_readable($f)) {
+            continue;
+        }
+        list(, $t) = sm_sh('tail -n 25 ' . escapeshellarg($f));
+        if (trim($t) === '') {
+            continue;
+        }
+        $aus[] = '--- ' . $f . " ---\n" . $t;
+    }
+    return $aus ? implode("\n", $aus) : 'Noch keine Protokolleintraege vorhanden.';
+}
+
+function sm_hostname()
+{
+    $h = gethostname();
+    return $h ? $h : 'loxberry';
+}

@@ -1,0 +1,78 @@
+<h2>Smartmeter Classic</h2>
+
+<p>LoxBerry-Plugin zum Auslesen von Stromzählern über optische IR-Leseköpfe — mit <b>beiden</b> Lesewegen: dem klassischen Perl-Leser und vzlogger.</p>
+
+<p>&gt; <b>Abspaltung.</b> Dieses Plugin führt das eingestellte &gt; <a href="https://github.com/mschlenstedt/LoxBerry-Plugin-Smartmeter" target="_blank">Smartmeter-Plugin</a> &gt; von Michael Schlenstedt weiter. Dessen Nachfolger &gt; <a href="https://github.com/mschlenstedt/LoxBerry-Plugin-Smartmeter-NG" target="_blank">Smartmeter-NG</a> &gt; setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt. &gt; Einzelheiten und Lizenzangaben in <a href="NOTICE" target="_blank"><code>NOTICE</code></a>.</p>
+
+<h3>Warum zwei Lesewege</h3>
+
+<p>vzlogger ist der modernere Weg und für die meisten Zähler die bessere Wahl. Er ist aber nicht überall verfügbar oder erfolgreich:</p>
+
+<ul><li>Auf manchen Installationen lässt sich kein passendes vzlogger-Paket installieren.</li><li>Manche Zähler liefern Telegramme, die vzlogger verwirft, bevor man den Grund kennt.</li></ul>
+
+<p>Der klassische Perl-Leser braucht kein zusätzliches Programm und liest solche Zähler weiterhin. <b>Beide Wege stehen in diesem Plugin nebeneinander</b> — man wählt, was funktioniert.</p>
+
+<p>&gt; Nur <b>einer</b> von beiden darf gleichzeitig aktiv sein: eine serielle &gt; Schnittstelle kann immer nur ein Prozess öffnen. Die Diagnose warnt, wenn &gt; beide auf dasselbe Gerät zugreifen.</p>
+
+<h3>Oberfläche</h3>
+
+<table class="sm-tbl">
+<tr><th>Reiter</th><th>Inhalt</th></tr>
+<tr><td><b>Smartmeter (vzLogger)</b></td><td>Einstellungen und eine achtstufige Diagnose</td></tr>
+<tr><td><b>Smartmeter (Legacy)</b></td><td>der klassische Leser mit Zählerprofilen</td></tr>
+<tr><td><b>MQTT</b></td><td>die einzige Stelle, an der MQTT eingestellt wird</td></tr>
+<tr><td><b>Einbindung in Loxone</b></td><td>MQTT-Themen, UDP-Port, HTTP-Adresse — mit den gespeicherten Werten</td></tr>
+<tr><td><b>Test</b></td><td>Knopfreihen nach Farbregel</td></tr>
+<tr><td><b>Logdateien</b></td><td>vzlogger- und Abholprotokoll</td></tr>
+</table>
+
+<h4>Die Diagnose</h4>
+
+<p>Der Reiter <i>vzLogger</i> prüft acht Dinge einzeln und zeigt Haken, Ausrufezeichen oder Kreuz: Betriebsart, Programm, Prozess, Konfiguration, Lesekopf, Belegung der Schnittstelle, HTTP-Schnittstelle, Messwerte. <b>Die erste rote Zeile von oben ist die Ursache</b>, alles darunter meist die Folge.</p>
+
+<p>Darunter stehen die letzten Zeilen des vzlogger-Protokolls. Genau daran hing die Fehlersuche, aus der dieses Plugin entstanden ist: vzlogger las den Zähler einwandfrei und verwarf jedes Telegramm, weil der Zähler keine gestellte Uhr sendet. Ohne Protokoll ist das nicht zu finden.</p>
+
+<h3>vzlogger</h3>
+
+<p>Das Plugin liefert <b>kein</b> vzlogger mit. Es installiert es bei Bedarf aus der signierten Paketquelle von volkszaehler.org — der Paketmanager löst die Abhängigkeiten passend zur eigenen Debian-Fassung und Architektur auf.</p>
+
+<p>Der vom Paket mitgebrachte systemd-Dienst wird dabei abgeschaltet und maskiert; vzlogger wird vom Plugin gestartet und von einem Wächter überwacht, der es nach Update, Neustart und Absturz binnen einer Minute zurückholt.</p>
+
+<p>Beim Deinstallieren wird vzlogger nur entfernt, wenn dieses Plugin es installiert hat.</p>
+
+<h3>Werte an den Miniserver</h3>
+
+<p><b>MQTT ist der Standardweg.</b> Themen:</p>
+
+<p>&lt;Praefix&gt;/&lt;Zaehlernummer&gt;/&lt;Kennzahl&gt;</p>
+
+<p><b>Beide Betriebsarten senden dasselbe Schema</b> — dieselben Schlüssel, dasselbe Thema, denselben UDP-Satz. Ein Wechsel zwischen klassischem Leser und vzlogger ändert im Miniserver nichts, solange im Reiter <i>vzLogger</i> dieselbe <b>Zählernummer</b> eingetragen ist.</p>
+
+<p>Das MQTT-Gateway ersetzt in den Themen nur <code>/</code> und <code>%</code> durch <code>_</code>; Punkte bleiben stehen. Der virtuelle Eingang heißt also <code>smartmeter_1234_Consumption_Total_OBIS_1.8.0</code>.</p>
+
+<h4>In der vzLogger-Betriebsart abgeleitete Werte</h4>
+
+<p>vzlogger liefert weder Zeitstempel noch die kalkulierten Leistungen. Das Plugin ergänzt sie, damit vorhandene Auswertungen weiterlaufen:</p>
+
+<table class="sm-tbl">
+<tr><th>Schlüssel</th><th>Herkunft</th></tr>
+<tr><td><code>Last_Update</code>, <code>Last_UpdateLoxEpoche</code></td><td>Rechner-Uhrzeit zum Abholzeitpunkt</td></tr>
+<tr><td><code>Consumption_CalculatedPower_OBIS_1.99.0</code></td><td>aus <code>16.7.0</code>, positiver Anteil</td></tr>
+<tr><td><code>Delivery_CalculatedPower_OBIS_2.99.0</code></td><td>aus <code>16.7.0</code>, negativer Anteil</td></tr>
+</table>
+
+<p><b>Der klassische Leser rechnet die beiden letzten anders</b> — aus dem Zählerfortschritt. Für Zähler mit <code>16.7.0</code> ist die Ableitung genauer, aber es ist nicht dieselbe Größe. Wer beide Betriebsarten vergleicht, wird kleine Unterschiede sehen.</p>
+
+<p>Im MQTT-Gateway des LoxBerry muss das Abo <code>&lt;Praefix&gt;/#</code> eingetragen sein — sonst kommt am Miniserver nichts an. Der Reiter <i>MQTT</i> zeigt das benötigte Abo, der Reiter <i>Einbindung in Loxone</i> die vollständigen Themen und die Namen der virtuellen Eingänge.</p>
+
+<p>UDP steht weiterhin zur Verfügung, wo es gebraucht wird.</p>
+
+<h3>Zähler ohne gestellte Uhr</h3>
+
+<p>Viele Haushaltszähler senden keinen gültigen Zeitstempel. vzlogger verwirft solche Telegramme mit <code>timestamp before 1990, IGNORING</code> — der Zähler wird gelesen, aber kein Wert kommt an.</p>
+
+<p>Die Einstellung <b>Zeitstempel</b> steht deshalb standardmäßig auf <i>Rechner-Uhrzeit</i>. Der Zeitstempel des Zählers wird nur gebraucht, wenn eine Middleware eine Zeitreihe erwartet; bei der Weitergabe an den Miniserver stempelt dieser selbst.</p>
+
+<h3>Voraussetzungen</h3>
+
+<ul><li>LoxBerry ab 1.4.3</li><li>optischer IR-Lesekopf am USB — die udev-Regel legt das Plugin an</li><li>für die vzLogger-Betriebsart ein installierbares vzlogger-Paket</li></ul>

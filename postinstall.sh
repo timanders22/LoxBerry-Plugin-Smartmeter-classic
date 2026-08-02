@@ -21,6 +21,11 @@ ARGV5=$5 # Fifth argument is Base folder of LoxBerry
 /bin/sed -i "s#REPLACEBYBASEFOLDER#$ARGV5#" $ARGV5/system/daemons/plugins/$ARGV2
 
 echo "<INFO> Make scripts executable"
+# Die Cron-Verknuepfungen zeigen auf diese beiden Dateien - ohne
+# Ausfuehrungsrecht laeuft der Legacy-Leser nicht an.
+chmod +x $ARGV5/bin/plugins/$ARGV3/fetch.php 2>/dev/null
+chmod +x $ARGV5/bin/plugins/$ARGV3/reboot_cron_runner.sh 2>/dev/null
+chmod +x $ARGV5/bin/plugins/$ARGV3/sm_logger.pl 2>/dev/null
 chmod +x $ARGV5/bin/plugins/$ARGV3/fetch_vzlogger.pl 2>/dev/null
 chmod +x $ARGV5/bin/plugins/$ARGV3/vz_check.sh 2>/dev/null
 chmod +x $ARGV5/bin/plugins/$ARGV3/vzlogger_pkg.sh 2>/dev/null
