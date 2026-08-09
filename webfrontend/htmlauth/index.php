@@ -17,12 +17,23 @@ $sm_meldung = '';
 $sm_fehler  = array();
 $sm_hinweis = '';
 
+/* EINE Quelle fuer Reihenfolge, Positivliste und Beschriftung.
+ *
+ * Bis 2.3.2 standen die Reiternamen an zwei Stellen: in diesem Muster und
+ * weiter unten im Feld $sm_reiter. Die Flaechen-ids kamen als dritte dazu.
+ * Wer einen Reiter ergaenzt und eine davon vergisst, bekommt keinen Fehler,
+ * sondern eine Seite, die nach jedem Absenden auf den ersten Reiter
+ * zurueckspringt - und sucht den Grund an der falschen Stelle. Die
+ * Beschriftungen brauchen sm_t() und kommen deshalb weiter unten dazu,
+ * wenn die Sprachdatei geladen ist. */
+$sm_reiter_ids = array('vzlogger', 'legacy', 'mqtt', 'loxone', 'test', 'log');
+
 // Der Reiter kommt entweder aus einem abgesendeten Formular (activetab) oder
 // als Adresse - die Legacy-Seite verlinkt so hierher.
 $sm_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
     : (isset($_GET['tab']) ? 'tab-' . (string) $_GET['tab'] : '');
-$sm_tab = preg_match('/^tab-(vzlogger|legacy|mqtt|loxone|test|log)$/', $sm_wunsch)
-    ? $sm_wunsch : 'tab-vzlogger';
+$sm_tab = preg_match('/^tab-(' . implode('|', $sm_reiter_ids) . ')$/', $sm_wunsch)
+    ? $sm_wunsch : 'tab-' . $sm_reiter_ids[0];
 
 $sm_cfg    = sm_vz_read();
 $sm_legacy = sm_legacy_read();
@@ -44,14 +55,14 @@ if (isset($_POST['vz_speichern'])) {
 
     $baud = isset($_POST['vz_baudrate']) ? trim((string) $_POST['vz_baudrate']) : '';
     if (!ctype_digit($baud) || (int) $baud < 300 || (int) $baud > 921600) {
-        $sm_fehler[] = 'Die Baudrate ist eine Zahl zwischen 300 und 921600.';
+        $sm_fehler[] = sm_t('FEHLER.BAUDRATE');
     } else {
         $neu['baudrate'] = (int) $baud;
     }
 
     $par = isset($_POST['vz_parity']) ? (string) $_POST['vz_parity'] : '';
     if (!in_array($par, array('8n1', '7n1', '7e1', '8e1'), true)) {
-        $sm_fehler[] = 'Die Zeichenrahmung muss 8n1, 7n1, 7e1 oder 8e1 sein.';
+        $sm_fehler[] = sm_t('FEHLER.RAHMUNG');
     } else {
         $neu['parity'] = $par;
     }
@@ -62,8 +73,8 @@ if (isset($_POST['vz_speichern'])) {
     foreach (array('udpport' => 'vz_udpport', 'httpport' => 'vz_httpport') as $k => $feld) {
         $w = isset($_POST[$feld]) ? trim((string) $_POST[$feld]) : '';
         if (!ctype_digit($w) || (int) $w < 1 || (int) $w > 65535) {
-            $sm_fehler[] = 'Der ' . ($k === 'udpport' ? 'UDP-Port' : 'HTTP-Port')
-                         . ' ist eine Zahl zwischen 1 und 65535.';
+            $sm_fehler[] = sprintf(sm_t('FEHLER.PORT'),
+                                   $k === 'udpport' ? 'UDP' : 'HTTP');
         } else {
             $neu[$k] = (int) $w;
         }
@@ -81,8 +92,8 @@ if (isset($_POST['vz_speichern'])) {
         $c = trim($c);
         if ($c === '') { continue; }
         if (!preg_match('/^[\d\.:\-\*]+$/', $c)) {
-            $sm_fehler[] = 'Der Kanal <span class="sm-mono">' . sm_e($c)
-                         . '</span> sieht nicht wie eine OBIS-Kennzahl aus.';
+            $sm_fehler[] = sprintf(sm_t('FEHLER.OBIS'),
+                                   '<span class="sm-mono">' . sm_e($c) . '</span>');
             continue;
         }
         $kanaele[] = $c;
@@ -98,11 +109,12 @@ if (isset($_POST['vz_speichern'])) {
             $sm_cfg = sm_vz_read();
             sm_vz_conf_schreiben($sm_cfg);
             $sm_hinweis = sm_vz_restart($sm_cfg);
-            $sm_meldung = 'Gespeichert. Die Konfiguration wurde neu erzeugt'
-                        . ($sm_hinweis === '' ? ' und vzlogger neu gestartet.' : '.');
+            $sm_meldung = ($sm_hinweis === '')
+                        ? sm_t('MELD.VZ_GESPEICHERT_NEUSTART')
+                        : sm_t('MELD.VZ_GESPEICHERT');
         } else {
-            $sm_fehler[] = 'Die Datei <span class="sm-mono">vzlogger.json</span> liess sich '
-                         . 'nicht schreiben. Rechte im Konfigurationsordner pr&uuml;fen.';
+            $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_RECHTE'),
+                                   '<span class="sm-mono">vzlogger.json</span>');
         }
     }
     $sm_tab = 'tab-vzlogger';
@@ -115,7 +127,7 @@ if (isset($_POST['vz_install'])) {
 
 if (isset($_POST['vz_neustart'])) {
     $sm_hinweis = sm_vz_restart($sm_cfg);
-    $sm_meldung = ($sm_hinweis === '') ? 'vzlogger wurde neu gestartet.' : '';
+    $sm_meldung = ($sm_hinweis === '') ? sm_t('MELD.VZ_NEUSTART') : '';
     $sm_tab = 'tab-vzlogger';
 }
 
@@ -132,10 +144,10 @@ if (isset($_POST['mq_speichern'])) {
     if (sm_cfg_set('MAIN', array('SENDMQTT' => isset($_POST['mq_an']) ? '1' : '0',
                                  'MQTTTOPIC' => $t))) {
         $sm_legacy = sm_legacy_read();
-        $sm_meldung = 'Die MQTT-Einstellungen wurden gespeichert.';
+        $sm_meldung = sm_t('MELD.MQTT_GESPEICHERT');
     } else {
-        $sm_fehler[] = 'Die Datei <span class="sm-mono">smartmeter.cfg</span> liess sich '
-                     . 'nicht schreiben.';
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'),
+                               '<span class="sm-mono">smartmeter.cfg</span>');
     }
     $sm_tab = 'tab-mqtt';
 }
@@ -154,16 +166,15 @@ if (isset($_POST['lg_speichern'])) {
     $lesen = isset($_POST['lg_read']);
     $takt  = isset($_POST['lg_cron']) ? (string) $_POST['lg_cron'] : '5';
     if (!array_key_exists($takt, sm_takte())) {
-        $sm_fehler[] = 'Der Abfragetakt muss aus der Liste gew&auml;hlt werden.';
+        $sm_fehler[] = sm_t('FEHLER.TAKT');
     }
     $port = isset($_POST['lg_udpport']) ? trim((string) $_POST['lg_udpport']) : '';
     if (!ctype_digit($port) || (int) $port < 1 || (int) $port > 65535) {
-        $sm_fehler[] = 'Der UDP-Port des Legacy-Lesers ist eine Zahl zwischen 1 und 65535.';
+        $sm_fehler[] = sm_t('FEHLER.LG_UDPPORT');
     }
     // Zwei Leser koennen sich eine serielle Schnittstelle nicht teilen.
     if ($lesen && $sm_cfg['enabled']) {
-        $sm_fehler[] = 'vzLogger ist eingeschaltet. Bitte dort zuerst abschalten &ndash; '
-                     . 'beide Leser greifen auf dieselbe serielle Schnittstelle zu.';
+        $sm_fehler[] = sm_t('FEHLER.BEIDE_LESER');
     }
 
     if (!$sm_fehler) {
@@ -183,7 +194,7 @@ if (isset($_POST['lg_speichern'])) {
             if (isset($_POST['lg_' . $s . '_meter'])) {
                 $m = (string) $_POST['lg_' . $s . '_meter'];
                 if (!array_key_exists($m, $profile)) {
-                    $sm_fehler[] = 'Unbekanntes Z&auml;hlerprofil f&uuml;r ' . sm_e($s) . '.';
+                    $sm_fehler[] = sprintf(sm_t('FEHLER.PROFIL'), sm_e($s));
                 } else {
                     $neu['METER'] = $m;
                 }
@@ -194,12 +205,12 @@ if (isset($_POST['lg_speichern'])) {
         }
 
         if (!$ok) {
-            $sm_fehler[] = 'Die Datei <span class="sm-mono">smartmeter.cfg</span> liess sich '
-                         . 'nicht vollst&auml;ndig schreiben.';
+            $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
+                                   '<span class="sm-mono">smartmeter.cfg</span>');
         } elseif (!$sm_fehler) {
             list($cron_ok, $cron_text) = sm_cron_setzen($lesen, $takt);
             if ($cron_ok) {
-                $sm_meldung = 'Gespeichert. ' . $cron_text;
+                $sm_meldung = sm_t('MELD.GESPEICHERT') . ' ' . $cron_text;
             } else {
                 $sm_fehler[] = $cron_text;
             }
@@ -213,9 +224,29 @@ if (isset($_POST['lg_abfragen'])) {
     $sm_tab = 'tab-legacy';
 }
 
+if (isset($_POST['lox_token_neu'])) {
+    if (sm_cfg_set('MAIN', array('TOKEN' => sm_token_erzeugen()))) {
+        $sm_meldung = sm_t('LOX.TOKEN_NEU');
+    } else {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'),
+            '<span class="sm-mono">smartmeter.cfg</span>');
+    }
+    $sm_tab = 'tab-loxone';
+}
+
+if (isset($_POST['lox_token_weg'])) {
+    if (sm_cfg_set('MAIN', array('TOKEN' => ''))) {
+        $sm_meldung = sm_t('LOX.TOKEN_WEG');
+    } else {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'),
+            '<span class="sm-mono">smartmeter.cfg</span>');
+    }
+    $sm_tab = 'tab-loxone';
+}
+
 if (isset($_POST['lg_cache'])) {
     $n = sm_cache_leeren();
-    $sm_meldung = 'Zwischenspeicher geleert (' . $n . ' Datei(en) entfernt).';
+    $sm_meldung = sprintf(sm_t('MELD.CACHE'), $n);
     $sm_tab = 'tab-legacy';
 }
 
@@ -235,12 +266,20 @@ $sm_diag    = sm_diagnose($sm_cfg);
 $sm_logtext = sm_logtail();
 $sm_host    = sm_hostname();
 
+// Adresse des Endpunkts und Zustand des freiwilligen Tokens.
+$sm_token = sm_cfg_get($sm_lcfg, 'MAIN', 'TOKEN', '');
+$sm_wirt = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
+    ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
+    : $sm_host;
+$sm_endpunkt = 'http://' . $sm_wirt . '/plugins/' . sm_paths()['plugin'] . '/index.php'
+    . ($sm_token !== '' ? '?token=' . $sm_token : '');
+
 $sm_version = '';
 if (class_exists('LBSystem', false) && method_exists('LBSystem', 'pluginversion')) {
     $sm_version = (string) LBSystem::pluginversion();
 }
 
-LBWeb::lbheader('Smartmeter' . ($sm_version !== '' ? ' V' . $sm_version : ''),
+LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : ''),
                 'https://wiki.loxberry.de/plugins/smartmeter/start', 'help.html');
 ?>
 
@@ -301,7 +340,7 @@ LBWeb::lbheader('Smartmeter' . ($sm_version !== '' ? ' V' . $sm_version : ''),
 <div class="sm-wrap">
 
 <?php if ($sm_fehler) { ?>
-<div class="sm-alert sm-warn"><b>Nicht gespeichert:</b><ul>
+<div class="sm-alert sm-warn"><b><?php echo sm_t('ALLG.NICHT_GESPEICHERT'); ?></b><ul>
 <?php foreach ($sm_fehler as $f) { echo '<li>' . $f . '</li>'; } ?>
 </ul></div>
 <?php } elseif ($sm_meldung !== '') { ?>
@@ -311,24 +350,43 @@ LBWeb::lbheader('Smartmeter' . ($sm_version !== '' ? ' V' . $sm_version : ''),
 <div class="sm-alert sm-warn"><?php echo sm_e($sm_hinweis); ?></div>
 <?php } ?>
 
+<?php
+/*
+ * Die Reiter sind echte Verweise, keine <div>. Vorher stand hier
+ * <div class="sm-tab" data-ziel="..."> - und weil alle Flaechen bis zum
+ * Lauf des JavaScripts auf display:none stehen, war die Seite ohne
+ * JavaScript vollstaendig leer. Jetzt setzt der Server die Klasse
+ * sm-active mit, das JavaScript spart nur den Seitenaufbau.
+ */
+$sm_beschriftung = array(
+    'vzlogger' => 'TAB.VZ',   'legacy' => 'TAB.LEGACY', 'mqtt' => 'TAB.MQTT',
+    'loxone'   => 'TAB.LOXONE', 'test'  => 'TAB.TEST',  'log'  => 'TAB.LOG',
+);
+$sm_reiter = array();
+foreach ($sm_reiter_ids as $sm_i) {
+    // Faellt eine Beschriftung aus, steht dort die Kennung - ein Reiter ohne
+    // Aufschrift waere schlimmer als einer mit einem haesslichen Namen.
+    $sm_reiter['tab-' . $sm_i] = isset($sm_beschriftung[$sm_i])
+        ? sm_t($sm_beschriftung[$sm_i]) : $sm_i;
+}
+?>
 <div class="sm-tabs">
-  <div class="sm-tab" data-ziel="tab-vzlogger">Smartmeter (vzLogger)</div>
-  <div class="sm-tab" data-ziel="tab-legacy">Smartmeter (Legacy)</div>
-  <div class="sm-tab" data-ziel="tab-mqtt">MQTT</div>
-  <div class="sm-tab" data-ziel="tab-loxone">Einbindung in Loxone</div>
-  <div class="sm-tab" data-ziel="tab-test">Test</div>
-  <div class="sm-tab" data-ziel="tab-log">Logdateien</div>
+<?php foreach ($sm_reiter as $sm_id => $sm_bez) { ?>
+  <a class="sm-tab<?php echo $sm_tab === $sm_id ? ' sm-active' : ''; ?>"
+     data-ziel="<?php echo sm_e($sm_id); ?>"
+     href="index.php?tab=<?php echo sm_e(substr($sm_id, 4)); ?>"><?php echo $sm_bez; ?></a>
+<?php } ?>
 </div>
 
 <!-- ============================== vzLogger ============================== -->
-<div class="sm-pane" id="tab-vzlogger">
+<div class="sm-pane<?php echo $sm_tab === 'tab-vzlogger' ? ' sm-active' : ''; ?>" id="tab-vzlogger">
 
 <?php if ($sm_installout !== '') { ?>
-<h2>Ausgabe der Installation</h2>
+<h2><?php echo sm_t('VZ.H_INSTALLAUSGABE'); ?></h2>
 <div class="sm-log"><?php echo sm_e($sm_installout); ?></div>
 <?php } ?>
 
-<h2>Zustand</h2>
+<h2><?php echo sm_t('VZ.H_ZUSTAND'); ?></h2>
 <table class="sm-tbl sm-diag">
 <?php foreach ($sm_diag as $z) { ?>
 <tr><td><?php echo sm_e($z[0]); ?></td>
@@ -340,47 +398,44 @@ LBWeb::lbheader('Smartmeter' . ($sm_version !== '' ? ' V' . $sm_version : ''),
 <?php if ($sm_bin === '') { ?>
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-vzlogger">
-    <button type="submit" name="vz_install" value="1">vzlogger installieren</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-vzlogger">
+    <button data-role="none" type="submit" name="vz_install" value="1"><?php echo sm_t('VZ.K_INSTALL'); ?></button>
   </form>
 </div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> Richtet eine Paketquelle ein und installiert ein Paket</span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_INSTALL'); ?></span>
 </div>
 <?php } else { ?>
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-vzlogger">
-    <button type="submit" name="vz_neustart" value="1">vzlogger neu starten</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-vzlogger">
+    <button data-role="none" type="submit" name="vz_neustart" value="1"><?php echo sm_t('VZ.K_NEUSTART'); ?></button>
   </form>
 </div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> Unterbricht das Lesen kurz</span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_NEUSTART'); ?></span>
 </div>
 <?php } ?>
 
 <form method="post" action="index.php">
-<input type="hidden" name="activetab" value="tab-vzlogger">
+<input data-role="none" type="hidden" name="activetab" value="tab-vzlogger">
 
-<h2>Leseweg</h2>
+<h2><?php echo sm_t('VZ.H_LESEWEG'); ?></h2>
 <div class="sm-row">
-  <label><input type="checkbox" name="vz_enabled" value="1"<?php
-    echo $sm_cfg['enabled'] ? ' checked' : ''; ?>> vzLogger einschalten</label>
-  <p class="sm-small">Es darf immer nur <b>ein</b> Leser laufen. Ist die
-  Legacy-Abfrage eingeschaltet, belegt sie dieselbe serielle Schnittstelle
-  &ndash; die Diagnose oben weist darauf hin.</p>
+  <label><input data-role="none" type="checkbox" name="vz_enabled" value="1"<?php
+    echo $sm_cfg['enabled'] ? ' checked' : ''; ?>> <?php echo sm_t('VZ.LABEL_ENABLED'); ?></label>
+  <p class="sm-small"><?php echo sm_t('VZ.HINT_EINLESER'); ?></p>
 </div>
 
-<h2>Lesekopf</h2>
+<h2><?php echo sm_t('VZ.H_LESEKOPF'); ?></h2>
 <?php if (!$sm_koepfe) { ?>
-<div class="sm-alert sm-warn">Es wurde kein Lesekopf erkannt
-(<span class="sm-mono">/dev/serial/smartmeter/*</span>). Lesekopf abziehen und
-neu anstecken &ndash; die udev-Regel wird beim Start des Plugins angelegt.</div>
+<div class="sm-alert sm-warn"><?php printf(sm_t('VZ.WARN_KEINKOPF'),
+  '<span class="sm-mono">/dev/serial/smartmeter/*</span>'); ?></div>
 <?php } ?>
 <div class="sm-row">
-  <label for="vz_device">Ger&auml;t</label>
-  <select id="vz_device" name="vz_device">
-    <option value="">&ndash; keines &ndash;</option>
+  <label for="vz_device"><?php echo sm_t('ALLG.GERAET'); ?></label>
+  <select data-role="none" id="vz_device" name="vz_device">
+    <option value="">&ndash; <?php echo sm_t('ALLG.KEINES'); ?> &ndash;</option>
 <?php
 $gefunden = false;
 foreach ($sm_koepfe as $d) {
@@ -392,27 +447,27 @@ foreach ($sm_koepfe as $d) {
 // verlieren.
 if (!$gefunden && $sm_cfg['device'] !== '') {
     echo '<option value="' . sm_e($sm_cfg['device']) . '" selected>'
-       . sm_e($sm_cfg['device']) . ' (derzeit nicht vorhanden)</option>';
+       . sm_e($sm_cfg['device']) . ' (' . sm_t('VZ.NICHT_VORHANDEN') . ')</option>';
 }
 ?>
   </select>
 </div>
 <div class="sm-row">
-  <label for="vz_protocol">Protokoll</label>
-  <select id="vz_protocol" name="vz_protocol">
-    <option value="sml"<?php echo $sm_cfg['protocol'] === 'sml' ? ' selected' : ''; ?>>SML &ndash; der Z&auml;hler sendet von selbst</option>
-    <option value="d0"<?php echo $sm_cfg['protocol'] === 'd0' ? ' selected' : ''; ?>>D0 &ndash; der Z&auml;hler muss gefragt werden</option>
+  <label for="vz_protocol"><?php echo sm_t('VZ.LABEL_PROTOCOL'); ?></label>
+  <select data-role="none" id="vz_protocol" name="vz_protocol">
+    <option value="sml"<?php echo $sm_cfg['protocol'] === 'sml' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_SML'); ?></option>
+    <option value="d0"<?php echo $sm_cfg['protocol'] === 'd0' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_D0'); ?></option>
   </select>
 </div>
 <div class="sm-row">
-  <label for="vz_baudrate">Baudrate</label>
-  <input type="text" id="vz_baudrate" name="vz_baudrate"
+  <label for="vz_baudrate"><?php echo sm_t('VZ.LABEL_BAUDRATE'); ?></label>
+  <input data-role="none" type="text" id="vz_baudrate" name="vz_baudrate"
          value="<?php echo sm_e($sm_cfg['baudrate']); ?>">
-  <p class="sm-small">9600 bei SML, oft 300 bei D0.</p>
+  <p class="sm-small"><?php echo sm_t('VZ.HINT_BAUDRATE'); ?></p>
 </div>
 <div class="sm-row">
-  <label for="vz_parity">Zeichenrahmung</label>
-  <select id="vz_parity" name="vz_parity">
+  <label for="vz_parity"><?php echo sm_t('VZ.LABEL_PARITY'); ?></label>
+  <select data-role="none" id="vz_parity" name="vz_parity">
 <?php foreach (array('8n1', '7n1', '7e1', '8e1') as $par) { ?>
     <option value="<?php echo $par; ?>"<?php
       echo $sm_cfg['parity'] === $par ? ' selected' : ''; ?>><?php echo $par; ?></option>
@@ -420,151 +475,139 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
   </select>
 </div>
 <div class="sm-row">
-  <label for="vz_localtime">Zeitstempel</label>
-  <select id="vz_localtime" name="vz_localtime">
-    <option value="1"<?php echo $sm_cfg['localtime'] ? ' selected' : ''; ?>>Rechner-Uhrzeit (empfohlen)</option>
-    <option value="0"<?php echo !$sm_cfg['localtime'] ? ' selected' : ''; ?>>Uhr des Z&auml;hlers</option>
+  <label for="vz_localtime"><?php echo sm_t('VZ.LABEL_LOCALTIME'); ?></label>
+  <select data-role="none" id="vz_localtime" name="vz_localtime">
+    <option value="1"<?php echo $sm_cfg['localtime'] ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_LOKALZEIT'); ?></option>
+    <option value="0"<?php echo !$sm_cfg['localtime'] ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_ZAEHLERZEIT'); ?></option>
   </select>
-  <p class="sm-small">Viele Haushaltsz&auml;hler senden keine gestellte Uhr.
-  vzlogger verwirft solche Telegramme dann mit
-  <span class="sm-mono">timestamp before 1990, IGNORING</span> &ndash; der
-  Z&auml;hler wird gelesen, aber kein einziger Wert kommt an.</p>
+  <p class="sm-small"><?php printf(sm_t('VZ.HINT_LOCALTIME'),
+    '<span class="sm-mono">timestamp before 1990, IGNORING</span>'); ?></p>
 </div>
 
-<h2>Kan&auml;le</h2>
+<h2><?php echo sm_t('VZ.H_KANAELE'); ?></h2>
 <div class="sm-row">
-  <label for="vz_channels">OBIS-Kennzahlen, eine je Zeile</label>
-  <textarea id="vz_channels" name="vz_channels"><?php
+  <label for="vz_channels"><?php echo sm_t('VZ.LABEL_CHANNELS'); ?></label>
+  <textarea data-role="none" id="vz_channels" name="vz_channels"><?php
     echo sm_e(implode("\n", $sm_cfg['channels'])); ?></textarea>
-  <p class="sm-small">Vorgabe: <span class="sm-mono">1-0:1.8.0</span> (Bezug),
-  <span class="sm-mono">1-0:2.8.0</span> (Einspeisung),
-  <span class="sm-mono">1-0:16.7.0</span> (aktuelle Leistung).</p>
+  <p class="sm-small"><?php echo sm_t('ALLG.VORGABE'); ?>:
+  <span class="sm-mono">1-0:1.8.0</span> (<?php echo sm_t('OBIS.BEZUG'); ?>),
+  <span class="sm-mono">1-0:2.8.0</span> (<?php echo sm_t('OBIS.EINSPEISUNG'); ?>),
+  <span class="sm-mono">1-0:16.7.0</span> (<?php echo sm_t('OBIS.LEISTUNG'); ?>).</p>
 </div>
 
-<h2>Weitergabe</h2>
+<h2><?php echo sm_t('VZ.H_WEITERGABE'); ?></h2>
 <div class="sm-row">
-  <label for="vz_serial">Z&auml;hlernummer</label>
-  <input type="text" id="vz_serial" name="vz_serial"
+  <label for="vz_serial"><?php echo sm_t('VZ.LABEL_SERIAL'); ?></label>
+  <input data-role="none" type="text" id="vz_serial" name="vz_serial"
          value="<?php echo sm_e($sm_cfg['serial']); ?>">
-  <p class="sm-small">Erscheint im MQTT-Thema und im UDP-Satz.</p>
+  <p class="sm-small"><?php echo sm_t('VZ.HINT_SERIAL'); ?></p>
 </div>
 <div class="sm-row">
-  <label><input type="checkbox" name="vz_sendudp" value="1"<?php
-    echo $sm_cfg['sendudp'] ? ' checked' : ''; ?>> zus&auml;tzlich per UDP senden</label>
-  <p class="sm-small">MQTT ist der Regelweg. UDP nur, wo Werte anders nicht
-  ankommen.</p>
+  <label><input data-role="none" type="checkbox" name="vz_sendudp" value="1"<?php
+    echo $sm_cfg['sendudp'] ? ' checked' : ''; ?>> <?php echo sm_t('ALLG.UDP_ZUSAETZLICH'); ?></label>
+  <p class="sm-small"><?php echo sm_t('VZ.HINT_UDP'); ?></p>
 </div>
 <div class="sm-row">
-  <label for="vz_udpport">UDP-Port</label>
-  <input type="text" id="vz_udpport" name="vz_udpport"
+  <label for="vz_udpport"><?php echo sm_t('ALLG.UDPPORT'); ?></label>
+  <input data-role="none" type="text" id="vz_udpport" name="vz_udpport"
          value="<?php echo sm_e($sm_cfg['udpport']); ?>">
 </div>
 <div class="sm-row">
-  <label for="vz_httpport">HTTP-Port von vzlogger</label>
-  <input type="text" id="vz_httpport" name="vz_httpport"
+  <label for="vz_httpport"><?php echo sm_t('VZ.LABEL_HTTPPORT'); ?></label>
+  <input data-role="none" type="text" id="vz_httpport" name="vz_httpport"
          value="<?php echo sm_e($sm_cfg['httpport']); ?>">
-  <p class="sm-small">&Uuml;ber diesen Port holt das Plugin die Messwerte ab.
-  Nur &auml;ndern, wenn der Port schon belegt ist.</p>
+  <p class="sm-small"><?php echo sm_t('VZ.HINT_HTTPPORT'); ?></p>
 </div>
 
 <div class="sm-knopfreihe sm-b-aktion">
-  <button type="submit" name="vz_speichern" value="1">Speichern und vzlogger neu starten</button>
+  <button data-role="none" type="submit" name="vz_speichern" value="1"><?php echo sm_t('VZ.K_SPEICHERN'); ?></button>
 </div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> Schreibt die Konfiguration neu und unterbricht das Lesen kurz</span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_SPEICHERN'); ?></span>
 </div>
 </form>
 </div>
 
 <!-- =============================== Legacy =============================== -->
-<div class="sm-pane" id="tab-legacy">
+<div class="sm-pane<?php echo $sm_tab === 'tab-legacy' ? ' sm-active' : ''; ?>" id="tab-legacy">
 
-<h2>Der klassische Leser</h2>
-<p class="sm-small">Fragt den Z&auml;hler &uuml;ber ein <b>Z&auml;hlerprofil</b>
-ab &ndash; 41 Modelle sind hinterlegt. Der Weg ist &auml;lter als vzLogger,
-funktioniert aber auch dort, wo vzLogger nichts liefert.</p>
+<h2><?php echo sm_t('LG.H_LESER'); ?></h2>
+<p class="sm-small"><?php echo sm_t('LG.HINT_LESER'); ?></p>
 
-<div class="sm-alert sm-info"><b>Es darf immer nur ein Leser laufen.</b> Beide
-greifen auf dieselbe serielle Schnittstelle zu.
-<?php echo $sm_cfg['enabled']
-    ? ' vzLogger ist derzeit <b>eingeschaltet</b> &ndash; bitte zuerst dort abschalten.'
-    : ' vzLogger ist derzeit ausgeschaltet.'; ?></div>
+<div class="sm-alert sm-info"><b><?php echo sm_t('LG.WARN_EINLESER'); ?></b>
+<?php echo $sm_cfg['enabled'] ? ' ' . sm_t('LG.VZ_AN') : ' ' . sm_t('LG.VZ_AUS'); ?></div>
 
 <?php $sm_lpid = sm_logger_pid(); ?>
 <p><span class="sm-scheibe <?php echo $sm_lpid !== null ? 'sm-gruen' : 'sm-rot'; ?>"></span>
 <?php echo $sm_lpid !== null
-    ? 'Der Leser l&auml;uft gerade (PID ' . sm_e($sm_lpid) . ').'
-    : 'Der Leser l&auml;uft gerade nicht.'; ?>
-<span class="sm-small">Abfragetakt laut Verkn&uuml;pfung:
+    ? sprintf(sm_t('LG.LAEUFT'), sm_e($sm_lpid))
+    : sm_t('LG.LAEUFT_NICHT'); ?>
+<span class="sm-small"><?php echo sm_t('LG.TAKT_LAUT_LINK'); ?>:
 <?php $sm_ist = sm_cron_ist();
       $sm_takte = sm_takte();
-      echo $sm_ist !== '' ? $sm_takte[$sm_ist][1] : 'keine eingerichtet'; ?></span></p>
+      echo $sm_ist !== '' ? $sm_takte[$sm_ist][1] : sm_t('LG.KEIN_TAKT'); ?></span></p>
 
 <form method="post" action="index.php">
-<input type="hidden" name="activetab" value="tab-legacy">
+<input data-role="none" type="hidden" name="activetab" value="tab-legacy">
 
-<h2>Abfrage</h2>
+<h2><?php echo sm_t('LG.H_ABFRAGE'); ?></h2>
 <div class="sm-row">
-  <label><input type="checkbox" name="lg_read" value="1"<?php
-    echo $sm_lcfg_read === '1' ? ' checked' : ''; ?>> Legacy-Leser einschalten</label>
+  <label><input data-role="none" type="checkbox" name="lg_read" value="1"<?php
+    echo $sm_lcfg_read === '1' ? ' checked' : ''; ?>> <?php echo sm_t('LG.LABEL_ENABLED'); ?></label>
 </div>
 <div class="sm-row">
-  <label for="lg_cron">Abfragetakt</label>
-  <select id="lg_cron" name="lg_cron">
+  <label for="lg_cron"><?php echo sm_t('LG.LABEL_TAKT'); ?></label>
+  <select data-role="none" id="lg_cron" name="lg_cron">
 <?php foreach (sm_takte() as $wert => $t) { ?>
     <option value="<?php echo $wert; ?>"<?php
       echo $sm_lcfg_cron === $wert ? ' selected' : ''; ?>><?php echo $t[1]; ?></option>
 <?php } ?>
   </select>
-  <p class="sm-small"><i>dauerhaft</i> l&auml;sst den Leser st&auml;ndig
-  mitlaufen &ndash; sinnvoll bei Z&auml;hlern, die von selbst senden.</p>
+  <p class="sm-small"><?php echo sm_t('LG.HINT_TAKT'); ?></p>
 </div>
 <div class="sm-row">
-  <label><input type="checkbox" name="lg_sendudp" value="1"<?php
-    echo $sm_lcfg_udp === '1' ? ' checked' : ''; ?>> zus&auml;tzlich per UDP senden</label>
+  <label><input data-role="none" type="checkbox" name="lg_sendudp" value="1"<?php
+    echo $sm_lcfg_udp === '1' ? ' checked' : ''; ?>> <?php echo sm_t('ALLG.UDP_ZUSAETZLICH'); ?></label>
 </div>
 <div class="sm-row">
-  <label for="lg_udpport">UDP-Port</label>
-  <input type="text" id="lg_udpport" name="lg_udpport"
+  <label for="lg_udpport"><?php echo sm_t('ALLG.UDPPORT'); ?></label>
+  <input data-role="none" type="text" id="lg_udpport" name="lg_udpport"
          value="<?php echo sm_e($sm_lcfg_udpport); ?>">
-  <p class="sm-small">MQTT wird im Reiter <i>MQTT</i> eingestellt &ndash; er
-  gilt f&uuml;r beide Lesewege.</p>
+  <p class="sm-small"><?php echo sm_t('LG.HINT_MQTT'); ?></p>
 </div>
 
-<h2>Leseköpfe</h2>
+<h2><?php echo sm_t('LG.H_KOEPFE'); ?></h2>
 <?php $sm_koepfe_liste = sm_koepfe(); ?>
 <?php if (!$sm_koepfe_liste) { ?>
-<div class="sm-alert sm-warn">Es ist kein Lesekopf eingerichtet. Lesekopf
-anstecken und die Seite neu laden &ndash; er wird dann selbst&auml;ndig
-eingetragen.</div>
+<div class="sm-alert sm-warn"><?php echo sm_t('LG.WARN_KEINKOPF'); ?></div>
 <?php } else { foreach ($sm_koepfe_liste as $sm_k) {
     $sm_s = $sm_k['ABSCHNITT']; ?>
 <h3 class="sm-h3"><?php echo sm_e($sm_s); ?>
 <?php if (!$sm_k['ANGESTECKT']) { ?>
-  <span class="sm-small">&ndash; derzeit nicht angesteckt</span>
+  <span class="sm-small">&ndash; <?php echo sm_t('LG.NICHT_ANGESTECKT'); ?></span>
 <?php } ?></h3>
 <div class="sm-row">
-  <label for="<?php echo sm_e($sm_s); ?>_name">Bezeichnung</label>
-  <input type="text" id="<?php echo sm_e($sm_s); ?>_name"
+  <label for="<?php echo sm_e($sm_s); ?>_name"><?php echo sm_t('LG.LABEL_NAME'); ?></label>
+  <input data-role="none" type="text" id="<?php echo sm_e($sm_s); ?>_name"
          name="lg_<?php echo sm_e($sm_s); ?>_name"
          value="<?php echo sm_e(isset($sm_k['NAME']) ? $sm_k['NAME'] : $sm_s); ?>">
 </div>
 <div class="sm-row">
-  <label for="<?php echo sm_e($sm_s); ?>_meter">Z&auml;hlerprofil</label>
-  <select id="<?php echo sm_e($sm_s); ?>_meter" name="lg_<?php echo sm_e($sm_s); ?>_meter">
+  <label for="<?php echo sm_e($sm_s); ?>_meter"><?php echo sm_t('LG.LABEL_PROFIL'); ?></label>
+  <select data-role="none" id="<?php echo sm_e($sm_s); ?>_meter" name="lg_<?php echo sm_e($sm_s); ?>_meter">
 <?php $sm_akt = isset($sm_k['METER']) ? $sm_k['METER'] : '0';
       foreach (sm_profile() as $sm_pk => $sm_pn) { ?>
     <option value="<?php echo sm_e($sm_pk); ?>"<?php
       echo $sm_akt === $sm_pk ? ' selected' : ''; ?>><?php echo $sm_pn; ?></option>
 <?php } ?>
   </select>
-  <p class="sm-small">Ger&auml;t: <span class="sm-mono"><?php
+  <p class="sm-small"><?php echo sm_t('ALLG.GERAET'); ?>: <span class="sm-mono"><?php
     echo sm_e($sm_k['DEVICE']); ?></span></p>
 </div>
 <?php $sm_w = sm_werte($sm_s); if ($sm_w) { ?>
-<p class="sm-small">Zuletzt gelesen:</p>
+<p class="sm-small"><?php echo sm_t('LG.ZULETZT'); ?>:</p>
 <table class="sm-tbl">
-<tr><th style="width:46%">Gr&ouml;&szlig;e</th><th>Wert</th></tr>
+<tr><th style="width:46%"><?php echo sm_t('ALLG.GROESSE'); ?></th><th><?php echo sm_t('ALLG.WERT'); ?></th></tr>
 <?php foreach ($sm_w as $sm_pv) { ?>
 <tr><td class="sm-mono"><?php echo sm_e($sm_pv[0]); ?></td>
     <td class="sm-mono"><?php echo sm_e($sm_pv[1]); ?></td></tr>
@@ -574,201 +617,196 @@ eingetragen.</div>
 <?php } } ?>
 
 <div class="sm-knopfreihe sm-b-aktion">
-  <button type="submit" name="lg_speichern" value="1">Speichern und Abfragetakt setzen</button>
+  <button data-role="none" type="submit" name="lg_speichern" value="1"><?php echo sm_t('LG.K_SPEICHERN'); ?></button>
 </div>
 </form>
 
 <div class="sm-knopfreihe sm-b-lesen">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-legacy">
-    <button type="submit" name="lg_abfragen" value="1">Jetzt einmal abfragen</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-legacy">
+    <button data-role="none" type="submit" name="lg_abfragen" value="1"><?php echo sm_t('LG.K_ABFRAGEN'); ?></button>
   </form>
 </div>
 <div class="sm-knopfreihe sm-b-technik">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-legacy">
-    <button type="submit" name="lg_cache" value="1">Zwischenspeicher leeren</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-legacy">
+    <button data-role="none" type="submit" name="lg_cache" value="1"><?php echo sm_t('LG.K_CACHE'); ?></button>
   </form>
 </div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> Ansehen &mdash; fragt den Z&auml;hler einmal ab</span>
-<span><i class="sm-punkt sm-b-technik"></i> Technischer Eingriff &mdash; verwirft zwischengespeicherte Werte</span>
-<span><i class="sm-punkt sm-b-aktion"></i> &Auml;ndert den Abfragetakt</span>
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.LG_ABFRAGEN'); ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.LG_CACHE'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.LG_SPEICHERN'); ?></span>
 </div>
 
 <?php if ($sm_lg_ausgabe !== '') { ?>
-<h2>Ausgabe</h2>
+<h2><?php echo sm_t('ALLG.AUSGABE'); ?></h2>
 <div class="sm-log"><?php echo sm_e($sm_lg_ausgabe); ?></div>
 <?php } ?>
 
-<h2>Wie der Leser arbeitet</h2>
-<p class="sm-small">Die Oberfl&auml;che und der Abholer
-(<span class="sm-mono">bin/fetch.php</span>) sind PHP. Der eigentliche Leser
-<span class="sm-mono">bin/sm_logger.pl</span> ist bewusst Perl geblieben: er
-spricht &uuml;ber <span class="sm-mono">Device::SerialPort</span> mit dem
-Z&auml;hler und wechselt bei D0-Z&auml;hlern mitten in der Sitzung die
-Baudrate. Daf&uuml;r gibt es in PHP kein verl&auml;ssliches Gegenst&uuml;ck,
-und die 41 Profile liessen sich ohne 41 Z&auml;hler auch nicht nachpr&uuml;fen.</p>
+<h2><?php echo sm_t('LG.H_WIE'); ?></h2>
+<p class="sm-small"><?php printf(sm_t('LG.TEXT_WIE'),
+  '<span class="sm-mono">bin/fetch.php</span>',
+  '<span class="sm-mono">bin/sm_logger.pl</span>',
+  '<span class="sm-mono">Device::SerialPort</span>'); ?></p>
 </div>
 
 <!-- ================================= MQTT ================================= -->
-<div class="sm-pane" id="tab-mqtt">
+<div class="sm-pane<?php echo $sm_tab === 'tab-mqtt' ? ' sm-active' : ''; ?>" id="tab-mqtt">
 
-<h2>Zustand des MQTT-Gateways</h2>
-<p class="sm-small">Das MQTT-Gateway ist seit LoxBerry&nbsp;3 <b>Bestandteil des
-Systems</b> und kein Plugin. Es wird unter <i>System &rarr; MQTT Gateway</i>
-eingerichtet.</p>
+<h2><?php echo sm_t('MQ.H_ZUSTAND'); ?></h2>
+<p class="sm-small"><?php echo sm_t('MQ.HINT_GATEWAY'); ?></p>
 
-<h2>Einstellungen</h2>
-<p class="sm-small">Dies ist die <b>einzige</b> Stelle, an der MQTT eingestellt
-wird &ndash; beide Lesewege benutzen sie.</p>
+<h2><?php echo sm_t('MQ.H_EINSTELLUNGEN'); ?></h2>
+<p class="sm-small"><?php echo sm_t('MQ.HINT_EINZIGE'); ?></p>
 <form method="post" action="index.php">
-<input type="hidden" name="activetab" value="tab-mqtt">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <div class="sm-row">
-  <label><input type="checkbox" name="mq_an" value="1"<?php
-    echo $sm_legacy['SENDMQTT'] === '1' ? ' checked' : ''; ?>> Werte per MQTT senden</label>
+  <label><input data-role="none" type="checkbox" name="mq_an" value="1"<?php
+    echo $sm_legacy['SENDMQTT'] === '1' ? ' checked' : ''; ?>> <?php echo sm_t('MQ.LABEL_AN'); ?></label>
 </div>
 <div class="sm-row">
-  <label for="mq_topic">Themenpr&auml;fix</label>
-  <input type="text" id="mq_topic" name="mq_topic"
+  <label for="mq_topic"><?php echo sm_t('MQ.LABEL_TOPIC'); ?></label>
+  <input data-role="none" type="text" id="mq_topic" name="mq_topic"
          value="<?php echo sm_e($sm_legacy['MQTTTOPIC']); ?>">
 </div>
 <div class="sm-knopfreihe sm-b-aktion">
-  <button type="submit" name="mq_speichern" value="1">Speichern</button>
+  <button data-role="none" type="submit" name="mq_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
 </div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> &Auml;ndert, wohin die Werte gemeldet werden</span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.MQ_SPEICHERN'); ?></span>
 </div>
 </form>
 
-<h2>Das einzutragende Abo</h2>
-<p class="sm-small"><b>Ohne diesen Eintrag kommt am Miniserver nichts an.</b>
-Einzutragen unter <i>System &rarr; MQTT Gateway &rarr; Abonnements</i>:</p>
+<h2><?php echo sm_t('MQ.H_ABO'); ?></h2>
+<p class="sm-small"><b><?php echo sm_t('MQ.OHNE_ABO'); ?></b>
+<?php echo sm_t('MQ.ABO_WO'); ?>:</p>
 <pre class="sm-pre"><?php echo sm_e($sm_legacy['MQTTTOPIC']); ?>/#</pre>
 
-<h2>Ver&ouml;ffentlichte Themen</h2>
+<h2><?php echo sm_t('MQ.H_THEMEN'); ?></h2>
 <table class="sm-tbl">
-<tr><th style="width:52%">Thema</th><th>Bedeutung</th></tr>
+<tr><th style="width:52%"><?php echo sm_t('MQ.SP_THEMA'); ?></th><th><?php echo sm_t('ALLG.BEDEUTUNG'); ?></th></tr>
 <?php foreach ($sm_cfg['channels'] as $c) { ?>
 <tr><td class="sm-mono"><?php echo sm_e($sm_legacy['MQTTTOPIC'] . '/'
       . $sm_cfg['serial'] . '/' . $c); ?></td>
     <td>OBIS <?php echo sm_e($c); ?><?php
-      if ($c === '1-0:1.8.0') { echo ' &ndash; Z&auml;hlerstand Bezug'; }
-      elseif ($c === '1-0:2.8.0') { echo ' &ndash; Z&auml;hlerstand Einspeisung'; }
-      elseif ($c === '1-0:16.7.0') { echo ' &ndash; aktuelle Wirkleistung'; }
+      if ($c === '1-0:1.8.0') { echo ' &ndash; ' . sm_t('OBIS.STAND_BEZUG'); }
+      elseif ($c === '1-0:2.8.0') { echo ' &ndash; ' . sm_t('OBIS.STAND_EINSPEISUNG'); }
+      elseif ($c === '1-0:16.7.0') { echo ' &ndash; ' . sm_t('OBIS.WIRKLEISTUNG'); }
     ?></td></tr>
 <?php } ?>
 </table>
 </div>
 
 <!-- ========================= Einbindung in Loxone ========================= -->
-<div class="sm-pane" id="tab-loxone">
+<div class="sm-pane<?php echo $sm_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 
-<h2>Einbindung in Loxone &ndash; Schritt f&uuml;r Schritt</h2>
+<h2><?php echo sm_t('LOX.H_TITEL'); ?></h2>
 
 <div class="sm-step">
-<b>Schritt 1: Weg festlegen</b><br><br>
-<b>MQTT ist der Regelweg.</b> Das Gateway legt die Namen selbst an; in Loxone
-braucht man nur virtuelle Eing&auml;nge mit passendem Titel. UDP steht als
-Ausweichweg bereit &ndash; einzuschalten im Reiter <i>Smartmeter (vzLogger)</i>.
+<b><?php echo sm_t('LOX.S1_TITEL'); ?></b><br><br>
+<?php echo sm_t('LOX.S1_TEXT'); ?>
 </div>
 
 <div class="sm-step">
-<b>Schritt 2: Abo im MQTT-Gateway eintragen</b><br><br>
-<b>Ohne diesen Eintrag kommt am Miniserver nichts an.</b> Unter
-<i>System &rarr; MQTT Gateway &rarr; Abonnements</i>:
+<b><?php echo sm_t('LOX.S2_TITEL'); ?></b><br><br>
+<b><?php echo sm_t('MQ.OHNE_ABO'); ?></b> <?php echo sm_t('MQ.ABO_WO'); ?>:
 <pre class="sm-pre"><?php echo sm_e($sm_legacy['MQTTTOPIC']); ?>/#</pre>
 </div>
 
 <div class="sm-step">
-<b>Schritt 3: Virtuelle Eing&auml;nge anlegen</b><br><br>
+<b><?php echo sm_t('LOX.S3_TITEL'); ?></b><br><br>
 <table class="sm-tbl">
-<tr><th>Titel des virtuellen Eingangs</th><th style="width:16%">Einheit</th><th style="width:30%">Bedeutung</th></tr>
+<tr><th><?php echo sm_t('LOX.SP_TITEL_VE'); ?></th><th style="width:16%"><?php echo sm_t('ALLG.EINHEIT'); ?></th><th style="width:30%"><?php echo sm_t('ALLG.BEDEUTUNG'); ?></th></tr>
 <?php foreach ($sm_cfg['channels'] as $c) {
     $titel = str_replace(array('/', ':', '-', '.'), '_',
         $sm_legacy['MQTTTOPIC'] . '_' . $sm_cfg['serial'] . '_' . $c);
     $einheit = ($c === '1-0:16.7.0') ? '&lt;v.0&gt;&nbsp;W' : '&lt;v.3&gt;&nbsp;kWh';
-    $bed = ($c === '1-0:1.8.0') ? 'Z&auml;hlerstand Bezug'
-         : (($c === '1-0:2.8.0') ? 'Z&auml;hlerstand Einspeisung'
-         : (($c === '1-0:16.7.0') ? 'aktuelle Wirkleistung' : 'OBIS ' . sm_e($c))); ?>
+    $bed = ($c === '1-0:1.8.0') ? sm_t('OBIS.STAND_BEZUG')
+         : (($c === '1-0:2.8.0') ? sm_t('OBIS.STAND_EINSPEISUNG')
+         : (($c === '1-0:16.7.0') ? sm_t('OBIS.WIRKLEISTUNG') : 'OBIS ' . sm_e($c))); ?>
 <tr><td class="sm-mono"><?php echo sm_e($titel); ?></td>
     <td><?php echo $einheit; ?></td><td><?php echo $bed; ?></td></tr>
 <?php } ?>
 </table>
-<p class="sm-small">Die endg&uuml;ltigen Namen zeigt das Gateway unter
-<i>Eingehende Daten</i> &ndash; weichen sie ab, gelten die dort angezeigten.</p>
+<p class="sm-small"><?php echo sm_t('LOX.S3_HINT'); ?></p>
 </div>
 
 <div class="sm-step">
-<b>Schritt 4: Der UDP-Weg</b><br><br>
+<b><?php echo sm_t('LOX.S4_TITEL'); ?></b><br><br>
 <?php if ($sm_cfg['sendudp']) { ?>
-Ein <i>virtueller UDP-Eingang</i> auf Port
-<b><?php echo sm_e($sm_cfg['udpport']); ?></b>, je Wert ein Befehl mit dieser
-Erkennung:
+<?php printf(sm_t('LOX.S4_AN'), '<b>' . sm_e($sm_cfg['udpport']) . '</b>'); ?>
 <pre class="sm-pre">\i<?php echo sm_e($sm_cfg['serial']); ?>/1-0:1.8.0,\i\v</pre>
 <?php } else { ?>
-UDP ist derzeit <b>ausgeschaltet</b>. Einschalten im Reiter
-<i>Smartmeter (vzLogger)</i>.
+<?php echo sm_t('LOX.S4_AUS'); ?>
 <?php } ?>
 </div>
 
 <div class="sm-step">
-<b>Schritt 5: Ausfallerkennung</b><br><br>
-Schweigt der Z&auml;hler, behalten die virtuellen Eing&auml;nge ihren
-<b>letzten Wert</b> &ndash; in der App sieht dann alles normal aus. Deshalb die
-aktuelle Wirkleistung mitf&uuml;hren: sie &auml;ndert sich st&auml;ndig. Bleibt
-sie exakt stehen, kommt nichts mehr an.
+<b><?php echo sm_t('LOX.S5_TITEL'); ?></b><br><br>
+<?php echo sm_t('LOX.S5_TEXT'); ?>
 </div>
 
 <div class="sm-step">
-<b>Schritt 6: Komplette Baustein-Liste zum 1:1-Nachbauen</b><br><br>
-Von oben nach unten abarbeiten. Die Bausteine findet man in Loxone Config
-&uuml;ber die Baustein-Suche (F5):
+<b><?php echo sm_t('LOX.S6_TITEL'); ?></b><br><br>
+<?php echo sm_t('LOX.S6_TEXT'); ?>
 <table class="sm-tbl">
-<tr><th>#</th><th>Baustein (Typ)</th><th>Name (Vorschlag)</th><th>Parameter</th><th>Eing&auml;nge verbinden mit</th></tr>
-<tr><td>1</td><td>Virtueller Eingang</td><td>Strom_Bezug</td><td>Einheit <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>MQTT <span class="sm-mono">1-0:1.8.0</span></td></tr>
-<tr><td>2</td><td>Virtueller Eingang</td><td>Strom_Einspeisung</td><td>Einheit <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>MQTT <span class="sm-mono">1-0:2.8.0</span></td></tr>
-<tr><td>3</td><td>Virtueller Eingang</td><td>Strom_Leistung</td><td>Einheit <span class="sm-mono">&lt;v.0&gt; W</span></td><td>MQTT <span class="sm-mono">1-0:16.7.0</span></td></tr>
-<tr><td>4</td><td>Z&auml;hler</td><td>Verbrauch_Tag</td><td>R&uuml;cksetzen um Mitternacht</td><td>Eingang &larr; #1</td></tr>
-<tr><td>5</td><td>Statistik</td><td>Strom_Verlauf</td><td>Aufzeichnung analog</td><td>Eingang &larr; #3</td></tr>
-<tr><td>6</td><td>Vergleicher</td><td>Einspeisung_aktiv</td><td>Schwelle 0&nbsp;W, Richtung kleiner</td><td>Eingang &larr; #3</td></tr>
-<tr><td>7</td><td>Analogspeicher</td><td>Leistung_Vorwert</td><td>&mdash;</td><td>Eingang &larr; #3</td></tr>
-<tr><td>8</td><td>Formel</td><td>Leistung_Aenderung</td><td><span class="sm-mono">ABS(I1-I2)</span></td><td>I1 = #3, I2 = #7</td></tr>
-<tr><td>9</td><td>Einschaltverz&ouml;gerung</td><td>Zaehler_schweigt</td><td>Verz&ouml;gerung <b>900</b> s</td><td>Eingang &larr; #8 = 0</td></tr>
-<tr><td>10</td><td>ODER</td><td>Strom_Meldungen</td><td>&mdash;</td><td>Eing&auml;nge &larr; #9 und weitere</td></tr>
-<tr><td>11</td><td>Benachrichtigung</td><td>Stromz&auml;hler pr&uuml;fen</td><td>Text frei</td><td>Eingang &larr; #10</td></tr>
-<tr><td>12 <i>(optional)</i></td><td>Status</td><td>Strom aktuell</td><td>Statustext siehe unten</td><td>v1 = #3, v2 = #1</td></tr>
+<tr><th>#</th><th><?php echo sm_t('LOX.SP_BAUSTEIN'); ?></th><th><?php echo sm_t('LOX.SP_NAME'); ?></th><th><?php echo sm_t('LOX.SP_PARAMETER'); ?></th><th><?php echo sm_t('LOX.SP_EINGAENGE'); ?></th></tr>
+<tr><td>1</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Bezug</td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>MQTT <span class="sm-mono">1-0:1.8.0</span></td></tr>
+<tr><td>2</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Einspeisung</td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>MQTT <span class="sm-mono">1-0:2.8.0</span></td></tr>
+<tr><td>3</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Leistung</td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.0&gt; W</span></td><td>MQTT <span class="sm-mono">1-0:16.7.0</span></td></tr>
+<tr><td>4</td><td><?php echo sm_t('BAUSTEIN.ZAEHLER'); ?></td><td>Verbrauch_Tag</td><td><?php echo sm_t('LOX.P_MITTERNACHT'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #1</td></tr>
+<tr><td>5</td><td><?php echo sm_t('BAUSTEIN.STATISTIK'); ?></td><td>Strom_Verlauf</td><td><?php echo sm_t('LOX.P_ANALOG'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
+<tr><td>6</td><td><?php echo sm_t('BAUSTEIN.VERGLEICHER'); ?></td><td>Einspeisung_aktiv</td><td><?php echo sm_t('LOX.P_SCHWELLE0'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
+<tr><td>7</td><td><?php echo sm_t('BAUSTEIN.ANALOGSPEICHER'); ?></td><td>Leistung_Vorwert</td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
+<tr><td>8</td><td><?php echo sm_t('BAUSTEIN.FORMEL'); ?></td><td>Leistung_Aenderung</td><td><span class="sm-mono">ABS(I1-I2)</span></td><td>I1 = #3, I2 = #7</td></tr>
+<tr><td>9</td><td><?php echo sm_t('BAUSTEIN.EVZ'); ?></td><td>Zaehler_schweigt</td><td><?php echo sm_t('LOX.P_VERZOEGERUNG'); ?> <b>900</b> s</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #8 = 0</td></tr>
+<tr><td>10</td><td><?php echo sm_t('BAUSTEIN.ODER'); ?></td><td>Strom_Meldungen</td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGAENGE'); ?> &larr; #9 &hellip;</td></tr>
+<tr><td>11</td><td><?php echo sm_t('BAUSTEIN.BENACHRICHTIGUNG'); ?></td><td><?php echo sm_t('LOX.N_ZAEHLER_PRUEFEN'); ?></td><td><?php echo sm_t('LOX.P_TEXT_FREI'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #10</td></tr>
+<tr><td>12 <i>(<?php echo sm_t('ALLG.OPTIONAL'); ?>)</i></td><td><?php echo sm_t('BAUSTEIN.STATUS'); ?></td><td>Strom_aktuell</td><td><?php echo sm_t('LOX.P_STATUSTEXT'); ?></td><td>v1 = #3, v2 = #1</td></tr>
 </table>
 <br>
-<b>Statustext f&uuml;r #12:</b>
-<pre class="sm-pre">&lt;v1.0&gt; W &middot; Z&auml;hlerstand &lt;v2.3&gt; kWh</pre>
-<b>Zu #9:</b> Die Schwelle muss deutlich &uuml;ber dem Sendetakt des
-Z&auml;hlers liegen &ndash; 900 Sekunden sind ein ruhiger Wert, damit ein
-einzelnes verpasstes Telegramm keine Meldung ausl&ouml;st.<br>
-<b>Zu #10 und #11:</b> Der Benachrichtigungs-Baustein sendet nur beim Wechsel
-von Aus auf Ein. <b>Niemals mehrere Quellen direkt an seinen Eingang</b> &ndash;
-erst &uuml;ber ODER zusammenf&uuml;hren, sonst verschluckt eine dauerhaft
-aktive Quelle alle &uuml;brigen.
+<b><?php echo sm_t('LOX.S6_STATUSTEXT'); ?></b>
+<pre class="sm-pre">&lt;v1.0&gt; W &middot; <?php echo sm_t('OBIS.ZAEHLERSTAND'); ?> &lt;v2.3&gt; kWh</pre>
+<b><?php echo sm_t('LOX.S6_ZU9'); ?></b> <?php echo sm_t('LOX.S6_ZU9_TEXT'); ?><br>
+<b><?php echo sm_t('LOX.S6_ZU1011'); ?></b> <?php echo sm_t('LOX.S6_ZU1011_TEXT'); ?>
 </div>
 
 <div class="sm-step">
-<b>Schritt 7: Gegenprobe</b><br><br>
-Im Reiter <i>Test</i> die <i>Antwort der HTTP-Schnittstelle</i> ansehen. Stehen
-dort Werte mit <span class="sm-mono">"last"</span> gr&ouml;&szlig;er null,
-liest das Plugin. Kommen sie in Loxone trotzdem nicht an, fehlt fast immer das
-Abo aus Schritt&nbsp;2.
+<b><?php echo sm_t('LOX.S7_TITEL'); ?></b><br><br>
+<?php printf(sm_t('LOX.S7_TEXT'), '<span class="sm-mono">"last"</span>'); ?>
+</div>
+
+<div class="sm-step">
+<b><?php echo sm_t('LOX.S8_TITEL'); ?></b><br><br>
+<?php echo sm_t('LOX.S8_TEXT'); ?>
+<pre class="sm-pre"><?php echo sm_e($sm_endpunkt); ?></pre>
+<?php if ($sm_token === '') { ?>
+<div class="sm-alert sm-warn"><?php echo sm_t('LOX.TOKEN_OFFEN'); ?></div>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<button data-role="none" class="sm-btn" type="submit" name="lox_token_neu" value="1"><?php echo sm_e(sm_t('LOX.TOKEN_SETZEN')); ?></button>
+</form>
+<?php } else { ?>
+<div class="sm-alert sm-ok"><?php echo sm_t('LOX.TOKEN_AKTIV'); ?></div>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<button data-role="none" class="sm-btn" type="submit" name="lox_token_neu" value="1"><?php echo sm_e(sm_t('LOX.TOKEN_ERNEUERN')); ?></button>
+<button data-role="none" class="sm-btn" type="submit" name="lox_token_weg" value="1"><?php echo sm_e(sm_t('LOX.TOKEN_ENTFERNEN')); ?></button>
+</form>
+<?php } ?>
 </div>
 </div>
 
 <!-- ================================= Test ================================= -->
-<div class="sm-pane" id="tab-test">
+<div class="sm-pane<?php echo $sm_tab === 'tab-test' ? ' sm-active' : ''; ?>" id="tab-test">
 
 <?php if ($sm_test_titel !== '') { ?>
 <div class="sm-alert sm-ok"><b><?php echo $sm_test_titel; ?></b></div>
 <?php echo $sm_test_text; ?>
 <?php } ?>
 
-<h2>Diagnose</h2>
+<h2><?php echo sm_t('TEST.H_DIAGNOSE'); ?></h2>
 <table class="sm-tbl sm-diag">
 <?php foreach ($sm_diag as $z) { ?>
 <tr><td><?php echo sm_e($z[0]); ?></td>
@@ -777,33 +815,33 @@ Abo aus Schritt&nbsp;2.
 <?php } ?>
 </table>
 
-<h2>Nachsehen</h2>
+<h2><?php echo sm_t('TEST.H_NACHSEHEN'); ?></h2>
 <div class="sm-knopfreihe sm-b-lesen">
-<?php foreach (array('umgebung' => 'Umgebung pr&uuml;fen',
-                     'http'     => 'Antwort der HTTP-Schnittstelle',
-                     'legacy'   => 'Legacy-Einstellungen') as $wert => $text) { ?>
+<?php foreach (array('umgebung' => sm_t('TEST.K_UMGEBUNG'),
+                     'http'     => sm_t('TEST.K_HTTP'),
+                     'legacy'   => sm_t('TEST.K_LEGACY')) as $wert => $text) { ?>
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-test">
-    <button type="submit" name="test" value="<?php echo sm_e($wert); ?>"><?php
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" type="submit" name="test" value="<?php echo sm_e($wert); ?>"><?php
       echo $text; ?></button>
   </form>
 <?php } ?>
 </div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts</span>
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.LESEN'); ?></span>
 </div>
 </div>
 
 <!-- ============================== Logdateien ============================== -->
-<div class="sm-pane" id="tab-log">
-<h2>Protokolle</h2>
-<p class="sm-small">Die letzten Zeilen aus
-<span class="sm-mono">vzlogger.log</span> und
-<span class="sm-mono">vzlogger_fetch.log</span>.</p>
+<div class="sm-pane<?php echo $sm_tab === 'tab-log' ? ' sm-active' : ''; ?>" id="tab-log">
+<h2><?php echo sm_t('LOG.H_PROTOKOLLE'); ?></h2>
+<p class="sm-small"><?php printf(sm_t('LOG.HINT'),
+  '<span class="sm-mono">vzlogger.log</span>',
+  '<span class="sm-mono">vzlogger_fetch.log</span>'); ?></p>
 <div class="sm-log"><?php echo sm_e($sm_logtext); ?></div>
 <?php
 if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
-    echo '<h2>Logdateien des LoxBerry</h2>';
+    echo '<h2>' . sm_t('LOG.H_LOXBERRY') . '</h2>';
     echo LBWeb::loglist_html();
 }
 ?>

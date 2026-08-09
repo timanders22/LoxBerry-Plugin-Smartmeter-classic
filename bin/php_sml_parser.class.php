@@ -92,11 +92,25 @@ class SML_PARSER {
     );
     function __construct() {
     }
+    /**
+     * Diagnosen gehoeren NACH STDERR, nicht nach STDOUT.
+     *
+     * Die Standardausgabe dieses Parsers ist eine Nutzlast: sm_logger.pl ruft
+     * ihn ueber Backticks auf und nimmt alles, was zurueckkommt, als
+     * Messwerte entgegen. Jede Zeile, die hier zusaetzlich herausfaellt, wird
+     * dort zu einem vermeintlichen Zaehlerwert.
+     *
+     * debug() und error() waren durch ein "return;" ohnehin stillgelegt -
+     * die Umstellung wirkt erst, wenn jemand es zum Suchen entfernt. Genau
+     * dann aber soll die Suche nicht die Daten zerschiessen.
+     */
+    public static function melde($text) {
+        $h = @fopen('php://stderr', 'w');
+        if ($h) { fwrite($h, $text . "\n"); fclose($h); }
+    }
     function debug($text,$showhexdata=true) {
         return; # ggfs. auskommentieren.
-        echo "DEBUG: '$text'";
-        if($showhexdata) echo " : ". substr($this->data,0,150);
-        echo "\n";
+        self::melde("DEBUG: '$text'" . ($showhexdata ? ' : ' . substr($this->data,0,150) : ''));
     }
     function error($message) {
         return; # ggfs. auskommentieren.
@@ -105,7 +119,7 @@ class SML_PARSER {
         $m = explode("\n",$m);
         unset($m[0]);
         $m = implode("\n",$m);
-        echo("ERROR: $message ! \n".$m."\n");
+        self::melde("ERROR: $message !\n" . $m);
     }
     function sml_crc16($part,$global=true) {
         /*  Vorlage C-Programm siehe:
@@ -428,7 +442,7 @@ class SML_PARSER {
             $this->debug('EXIT readValList : '.print_r($result,true),false);
             return $result;
         }else{
-            echo('Error reading value-list!');
+            self::melde('Error reading value-list!');
         }
     }
     #####################################################################################
@@ -514,7 +528,7 @@ class SML_PARSER {
         $start = strpos($this->data,$sml_header);
         if($start===false) return;
         if($start) {
-            echo "$start bytes skipped at begining!\n";
+            self::melde("$start bytes skipped at begining!");
             $this->data=substr($this->data,$start);
         }
         while($this->data) {
@@ -535,7 +549,7 @@ class SML_PARSER {
                     $start = strpos($this->data,$sml_header);
                     if($start===false) return;
                     if($start) {
-                        echo "$start bytes skipped in between!\n";
+                        self::melde("$start bytes skipped in between!");
                         $this->data=substr($this->data,$start);
                         $skip=true;
                         break;

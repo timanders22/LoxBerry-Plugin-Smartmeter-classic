@@ -34,7 +34,8 @@ echo "<INFO> Rename htaccess to .htaccess"
 mv $ARGV5/webfrontend/htmlauth/plugins/$ARGV3/htaccess $ARGV5/webfrontend/htmlauth/plugins/$ARGV3/.htaccess
 
 echo "<INFO> *******************************************************************"
-echo "<INFO> * Please reboot your LoxBerry to initialize the Smartmeter Plugin *"
+echo "<INFO> * Das Plugin ist einsatzbereit - ein Neustart ist nicht noetig.   *"
+echo "<INFO> * Die udev-Regel fuer die Lesekoepfe hat postroot.sh angelegt.    *"
 echo "<INFO> *******************************************************************"
 
 # Exit with Status 0

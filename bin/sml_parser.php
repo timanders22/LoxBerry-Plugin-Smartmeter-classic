@@ -15,6 +15,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+ * Die Standardausgabe dieses Skripts ist eine NUTZLAST: sm_logger.pl ruft es
+ * ueber Backticks auf und verarbeitet alles, was zurueckkommt, als Messwerte.
+ *
+ * Gemessen mit einem verstuemmelten Dump - so kam es bis 2.3.2 heraus:
+ *   PHP 7.4: "Warning: pack(): Type H: illegal hex digit"
+ *   PHP 8.1: dieselbe Warnung UND zusaetzlich
+ *            "Warning: Uninitialized string offset 0"
+ * Beides landete mitten im Datenstrom. Die Warnungen gehen jetzt nach
+ * STDERR; dort sieht sie, wer das Skript von Hand aufruft, und sie stehen
+ * nicht mehr zwischen den Zaehlerstaenden.
+ */
+ini_set('display_errors', 'stderr');
+ini_set('log_errors', '0');
+
 require_once	'php_sml_parser.class.php';
 
 if ($argc != 3 || in_array($argv[1], array('--help', '-help', '-h', '-?'))) {

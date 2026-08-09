@@ -25,6 +25,9 @@ require_once __DIR__ . '/sm_lib.php';
  * Werte ohne Anfuehrungszeichen enthalten, die PHPs INI-Leser anders
  * auslegen wuerde (etwa "on", "off", "none").
  */
+/** So lange darf eine Abfrage von Hand hoechstens dauern (Sekunden). */
+define('SM_ABFRAGE_GRENZE', 25);
+
 function sm_cfg_read()
 {
     $datei = sm_paths()['legacy'];
@@ -80,6 +83,21 @@ function sm_cfg_write($alles)
         return false;
     }
     return @rename($tmp, $datei);
+}
+
+/**
+ * Ein Zufallstoken fuer den unangemeldeten Endpunkt.
+ *
+ * Ohne mehrdeutige Zeichen (0/O, 1/l), weil man es abtippt.
+ */
+function sm_token_erzeugen($laenge = 24)
+{
+    $zeichen = 'abcdefghijkmnpqrstuvwxyz23456789';
+    $t = '';
+    for ($i = 0; $i < $laenge; $i++) {
+        $t .= $zeichen[random_int(0, strlen($zeichen) - 1)];
+    }
+    return $t;
 }
 
 /** Einzelne Werte in einem Abschnitt setzen. */
@@ -169,10 +187,12 @@ function sm_koepfe()
 function sm_profile()
 {
     return array(
-        '0'                     => 'noch nicht festgelegt',
-        'manual'                => 'von Hand einstellen',
-        'genericd0'             => 'Allgemeines D0-Protokoll',
-        'genericsml'            => 'Allgemeines SML-Protokoll',
+        // Nur diese vier Eintraege sind uebersetzbar - die uebrigen 41 sind
+        // Geraetebezeichnungen und bleiben in jeder Sprache gleich.
+        '0'                     => sm_t('PROFIL.OFFEN'),
+        'manual'                => sm_t('PROFIL.MANUELL'),
+        'genericd0'             => sm_t('PROFIL.D0'),
+        'genericsml'            => sm_t('PROFIL.SML'),
         'apatornorax3dsml'      => 'Apator Norax 3D (SML)',
         'apatorpicusehz060sml'  => 'Apator Picus eHZ.060.D (SML)',
         'bauerbsmqd36ad0'       => 'Bauer BSM-QD36A (D0)',
@@ -223,14 +243,14 @@ function sm_profile()
 function sm_takte()
 {
     return array(
-        'M'  => array('',              'dauerhaft &ndash; der Leser laeuft st&auml;ndig'),
-        '1'  => array('cron.01min',    'jede Minute'),
-        '3'  => array('cron.03min',    'alle 3 Minuten'),
-        '5'  => array('cron.05min',    'alle 5 Minuten'),
-        '10' => array('cron.10min',    'alle 10 Minuten'),
-        '15' => array('cron.15min',    'alle 15 Minuten'),
-        '30' => array('cron.30min',    'alle 30 Minuten'),
-        '60' => array('cron.hourly',   'st&uuml;ndlich'),
+        'M'  => array('',              sm_t('TAKT.DAUERHAFT')),
+        '1'  => array('cron.01min',    sm_t('TAKT.MIN01')),
+        '3'  => array('cron.03min',    sm_t('TAKT.MIN03')),
+        '5'  => array('cron.05min',    sm_t('TAKT.MIN05')),
+        '10' => array('cron.10min',    sm_t('TAKT.MIN10')),
+        '15' => array('cron.15min',    sm_t('TAKT.MIN15')),
+        '30' => array('cron.30min',    sm_t('TAKT.MIN30')),
+        '60' => array('cron.hourly',   sm_t('TAKT.STUENDLICH')),
     );
 }
 
@@ -257,7 +277,12 @@ function sm_cron_ordner()
 function sm_cron_setzen($lesen, $takt)
 {
     $p = sm_paths();
-    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', 'smartmeter');
+    // Der Rueckfall ist der ERMITTELTE Pluginordner, nicht "smartmeter": So
+    // heisst das Originalplugin, das neben diesem installiert sein kann. Und
+    // diese Funktion raeumt gleich unten "tabula rasa" alle Verknuepfungen
+    // dieses Namens weg - mit dem falschen Namen haette sie die Cron-Eintraege
+    // des FREMDEN Plugins geloescht.
+    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
     $basis = $p['home'] . '/system/cron/';
 
     // 1. Tabula rasa
@@ -268,12 +293,12 @@ function sm_cron_setzen($lesen, $takt)
         }
     }
     if (!$lesen) {
-        return array(true, 'Der Legacy-Leser ist abgeschaltet, alle Cron-Eintr&auml;ge entfernt.');
+        return array(true, sm_t('CRON.ABGESCHALTET'));
     }
 
     $takte = sm_takte();
     if (!isset($takte[$takt])) {
-        return array(false, 'Unbekannter Abfragetakt.');
+        return array(false, sm_t('CRON.UNBEKANNT'));
     }
 
     // 2. Genau eine Verknuepfung setzen
@@ -285,22 +310,24 @@ function sm_cron_setzen($lesen, $takt)
         $ziel   = $basis . $takte[$takt][0] . '/' . $name;
     }
     if (!file_exists($quelle)) {
-        return array(false, 'Die Datei ' . $quelle . ' fehlt.');
+        return array(false, sprintf(sm_t('CRON.DATEI_FEHLT'), $quelle));
     }
     if (!is_dir(dirname($ziel))) {
-        return array(false, 'Den Ordner ' . dirname($ziel) . ' gibt es nicht.');
+        return array(false, sprintf(sm_t('CRON.ORDNER_FEHLT'), dirname($ziel)));
     }
     if (!@symlink($quelle, $ziel)) {
-        return array(false, 'Die Verkn&uuml;pfung ' . $ziel . ' liess sich nicht anlegen.');
+        return array(false, sprintf(sm_t('CRON.LINK_FEHLER'), $ziel));
     }
-    return array(true, 'Abfragetakt gesetzt: ' . strip_tags($takte[$takt][1]) . '.');
+    return array(true, sprintf(sm_t('CRON.GESETZT'), strip_tags($takte[$takt][1])));
 }
 
 /** Wo liegt derzeit eine Verknuepfung? Liefert den Takt oder ''. */
 function sm_cron_ist()
 {
     $p = sm_paths();
-    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', 'smartmeter');
+    // Gegenstueck zu sm_cron_setzen(): derselbe Rueckfall, sonst suchte das
+    // Lesen an einer anderen Stelle als das Schreiben.
+    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
     $basis = $p['home'] . '/system/cron/';
     foreach (sm_takte() as $wert => $t) {
         $ordner = ($wert === 'M') ? 'cron.reboot' : $t[0];
@@ -342,10 +369,36 @@ function sm_manuell_abfragen()
     $p = sm_paths();
     $skript = $p['bin'] . '/fetch.php';
     if (!is_readable($skript)) {
-        return 'fetch.php wurde nicht gefunden (' . $skript . ').';
+        return sprintf(sm_t('LG.FETCH_FEHLT'), $skript);
     }
-    list(, $aus) = sm_sh('php ' . escapeshellarg($skript) . ' --verbose');
-    return trim($aus) !== '' ? $aus : '(keine Ausgabe)';
+    /* Mit Zeitgrenze aufrufen.
+     *
+     * sm_sh() benutzt exec() und blockiert, bis der Aufruf fertig ist. Dahinter
+     * haengt sm_logger.pl, das je nach Zaehlerprofil bis zu 120 Sekunden
+     * lauscht. Ein Webserver bricht die Anfrage lange vorher ab - der Benutzer
+     * sieht dann einen 504 statt einer Auskunft.
+     *
+     * Der eigentliche Grund fuer die langen Laufzeiten war ein Fehler in der
+     * Leseschleife (siehe READ_SERIAL in sm_logger.pl): sie endete nie von
+     * selbst, jede Abfrage dauerte deshalb IMMER die volle Zeitgrenze. Das ist
+     * behoben. Die Grenze hier bleibt trotzdem - ein Lesekopf, der gar nicht
+     * mehr antwortet, darf die Oberflaeche nicht mitnehmen.
+     *
+     * timeout gehoert zu den coreutils und ist auf jedem Debian vorhanden;
+     * fehlt es wider Erwarten, wird ohne Grenze aufgerufen statt gar nicht.
+     */
+    $vor = '';
+    list($rc_t, ) = sm_sh('command -v timeout');
+    if ($rc_t === 0) {
+        $vor = 'timeout -k 5 ' . SM_ABFRAGE_GRENZE . ' ';
+    }
+    list($rc, $aus) = sm_sh($vor . 'php ' . escapeshellarg($skript) . ' --verbose');
+    // 124 ist der Rueckgabewert, mit dem timeout einen Abbruch meldet.
+    if ($rc === 124) {
+        $aus = sprintf(sm_t('LG.ABFRAGE_ZEITGRENZE'), SM_ABFRAGE_GRENZE)
+             . (trim($aus) !== '' ? "\n\n" . $aus : '');
+    }
+    return trim($aus) !== '' ? $aus : '(' . sm_t('ALLG.KEINE_AUSGABE') . ')';
 }
 
 /**

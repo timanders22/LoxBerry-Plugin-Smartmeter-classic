@@ -14,20 +14,22 @@ udevadm control --reload-rules >>$logfile && udevadm trigger >>$logfile
 VZJSON=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.json
 VZCONF=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.conf
 if [ -f "$VZJSON" ] && [ -f "$VZCONF" ] && grep -Eq '"enabled"[[:space:]]*:[[:space:]]*(1|true)' "$VZJSON"; then
+	# Hier stand bis 2.3.1 zusaetzlich ein Zweig, der ein mitgeliefertes
+	# vzlogger unter bin/plugins/<ordner>/vzlogger/vzlogger gesucht hat.
+	# Dieses Plugin liefert kein vzlogger mit - der Ordner wird von keinem
+	# Skript angelegt, weder von postinstall.sh noch von vzlogger_pkg.sh,
+	# das vzlogger aus der Paketquelle von volkszaehler.org installiert.
+	# Der Zweig konnte also nie zutreffen; er stammt aus Smartmeter-NG,
+	# von dort wurde das Installationsverfahren uebernommen. Entfernt,
+	# damit niemand nach einem Ordner sucht, den es nicht gibt.
 	VZBIN="$(command -v vzlogger)"
-	if [ -z "$VZBIN" ] && [ -x REPLACEBYBASEFOLDER/bin/plugins/REPLACEBYSUBFOLDER/vzlogger/vzlogger ]; then
-		# Bundled binary (armhf) - test if runnable on this architecture
-		if REPLACEBYBASEFOLDER/bin/plugins/REPLACEBYSUBFOLDER/vzlogger/vzlogger --help >/dev/null 2>&1; then
-			VZBIN=REPLACEBYBASEFOLDER/bin/plugins/REPLACEBYSUBFOLDER/vzlogger/vzlogger
-		fi
-	fi
 	if [ -n "$VZBIN" ]; then
 		mkdir -p /dev/shm/REPLACEBYSUBFOLDER
 		chown loxberry:loxberry /dev/shm/REPLACEBYSUBFOLDER
 		su loxberry -s /bin/bash -c "nohup $VZBIN -c $VZCONF >/dev/null 2>&1 &"
 		echo "`date` - vzlogger started: $VZBIN " >>$logfile
 	else
-		echo "`date` - vzlogger enabled but no runnable binary found for this architecture " >>$logfile
+		echo "`date` - vzlogger enabled but not installed - see plugin tab vzLogger " >>$logfile
 	fi
 fi
 

@@ -1,2 +1,3 @@
 libstring-escape-perl
-libdevice-serialport-perl 
+libdevice-serialport-perl
+libdatetime-perl

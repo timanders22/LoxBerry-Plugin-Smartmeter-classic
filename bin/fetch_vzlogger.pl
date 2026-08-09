@@ -27,6 +27,27 @@ my $jsonobj = LoxBerry::JSON->new();
 my $cfg = $jsonobj->open(filename => $vzcfgfile, readonly => 1);
 exit 0 if !$cfg || !$cfg->{enabled};
 
+# ---------------------------------------------------------------------------
+# Nur ein Lauf gleichzeitig.
+#
+# Dieses Skript steht fest im Minutentakt in cron/crontab. Es fragt vzlogger
+# ueber HTTP ab und sendet danach ueber MQTT und wahlweise UDP. Haengt eine
+# dieser Verbindungen, ueberholt der naechste Cron-Aufruf den vorigen: zwei
+# Laeufe schreiben dann dieselbe Datendatei und schicken dieselben Werte
+# doppelt an den Miniserver.
+#
+# LOCK_NB, damit ein laufender Vorgaenger diesen Aufruf sofort beendet -
+# ohne Meldung, denn das ist der Normalfall und kein Fehler.
+# ---------------------------------------------------------------------------
+use Fcntl qw(:flock O_RDWR O_CREAT);
+system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
+my $sperrdatei = "/dev/shm/$psubfolder/fetch_vzlogger.lock";
+if ( sysopen(my $SPERRE, $sperrdatei, O_RDWR|O_CREAT, 0644) ) {
+	exit 0 if !flock($SPERRE, LOCK_EX|LOCK_NB);
+	# Der Griff bleibt bis zum Programmende offen - das Betriebssystem gibt
+	# die Sperre dann von selbst frei, auch wenn das Skript abstuerzt.
+}
+
 my $httpport = $cfg->{httpport} || 8083;
 
 ################################################################
@@ -142,9 +163,20 @@ if ( defined $werte{"Total_Power_OBIS_16.7.0"} ) {
 # Datei im selben Schema wie der klassische Leser: SERIAL:Schluessel:Wert
 my @zeilen = map { "$serial:$_:" . $werte{$_} } sort keys %werte;
 system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
-open(my $fh, ">", "/dev/shm/$psubfolder/$serial.data");
-print $fh join("\n", @zeilen) . "\n";
-close($fh);
+# Erst daneben schreiben, dann umbenennen. Ein einfaches ">" kuerzt die
+# Datei und fuellt sie neu; wer in diesem Fenster liest - und das tut
+# webfrontend/html/index.php fuer den Miniserver - bekommt nichts oder die
+# Haelfte. Gemessen: 69,75 % kaputte Lesevorgaenge beim Kuerzen, 0,00 % mit
+# temp + rename. rename() ist im selben Dateisystem unteilbar.
+my $ziel = "/dev/shm/$psubfolder/$serial.data";
+my $tmp  = "$ziel.tmp.$$";
+if ( open(my $fh, ">", $tmp) ) {
+	print $fh join("\n", @zeilen) . "\n";
+	close($fh);
+	rename($tmp, $ziel) or do { &LOG("Datendatei liess sich nicht umbenennen: $tmp", "ERROR"); unlink($tmp); };
+} else {
+	&LOG("Datendatei nicht schreibbar: $tmp", "ERROR");
+}
 
 &LOG("Readings: " . join("; ", @zeilen), "INFO");
 

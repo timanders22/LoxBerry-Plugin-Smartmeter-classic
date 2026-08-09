@@ -1,17 +1,25 @@
-# Auto detect text files and perform LF normalization
+# Zeilenenden. Hier steht bis 2.3.1 die msysgit-Vorlage mit Regeln fuer
+# Visual-Studio-Projekte, Word-Dokumente und RTF - in einem Plugin aus Perl,
+# PHP und Shell hatte davon nichts eine Wirkung.
+#
+# Was wirklich zaehlt: Shell- und Perl-Skripte MUESSEN mit LF enden. Ein
+# CRLF hinter der Shebang-Zeile macht aus "#!/bin/bash" ein "#!/bin/bash\r",
+# und der Kernel sucht dann nach einem Programm dieses Namens - Fehlermeldung
+# "bad interpreter: No such file or directory". Wer unter Windows an diesem
+# Plugin arbeitet, faellt ohne diese Datei hinein.
+
 * text=auto
 
-# Custom for Visual Studio
-*.cs     diff=csharp
+*.sh    text eol=lf
+*.pl    text eol=lf
+*.php   text eol=lf
+*.cfg   text eol=lf
+*.ini   text eol=lf
+daemon/daemon       text eol=lf
+cron/crontab        text eol=lf
+uninstall/uninstall text eol=lf
+sudoers/sudoers     text eol=lf
+dpkg/apt            text eol=lf
 
-# Standard to msysgit
-*.doc	 diff=astextplain
-*.DOC	 diff=astextplain
-*.docx diff=astextplain
-*.DOCX diff=astextplain
-*.dot  diff=astextplain
-*.DOT  diff=astextplain
-*.pdf  diff=astextplain
-*.PDF	 diff=astextplain
-*.rtf	 diff=astextplain
-*.RTF	 diff=astextplain
+*.png   binary
+*.svg   text eol=lf

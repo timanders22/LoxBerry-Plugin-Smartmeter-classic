@@ -5,7 +5,9 @@
 #
 # Herkunft: der Ablauf ist dem Plugin Smartmeter-NG entnommen und angepasst.
 # Vorher lieferte dieses Plugin ein vorkompiliertes armhf-Binary mit - das
-# konnte auf 64-Bit-Systemen nie laufen. Siehe AENDERUNGEN_1.6.md.
+# konnte auf 64-Bit-Systemen nie laufen. Seit 2.3.2 ist auch der letzte Rest
+# davon fort: der daemon suchte noch nach bin/plugins/<ordner>/vzlogger/,
+# einem Ordner, den kein Skript mehr anlegt. Siehe README.md.
 
 ARGV3=$3   # Installationsordner des Plugins
 ARGV5=$5   # Basisordner von LoxBerry
@@ -16,6 +18,40 @@ CHECK="$ARGV5/bin/plugins/$ARGV3/vz_check.sh"
 if [ "$(id -u)" != "0" ]; then
 	echo "<ERROR> postroot.sh muss als root laufen."
 	exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# udev-Regel fuer die Lesekoepfe
+#
+# Sie vergibt die stabilen Namen /dev/serial/smartmeter/<Seriennummer>. Ohne
+# sie heisst ein Lesekopf ttyUSB0 oder ttyUSB1 - je nachdem, in welcher
+# Reihenfolge er beim Start erkannt wurde. Bei zwei Koepfen liest das Plugin
+# dann irgendwann den falschen Zaehler aus.
+#
+# Bis 2.3.2 legte NUR daemon/daemon diese Regel an, und der laeuft erst beim
+# Systemstart. Genau deshalb stand in der plugin.cfg REBOOT=true: ohne
+# Neustart gab es keine Regel und damit keinen Lesekopf. Ein erzwungener
+# Neustart des ganzen LoxBerry ist dafuer ein hoher Preis - der Miniserver
+# verliert waehrenddessen alle Dienste, nicht nur dieses Plugin.
+#
+# Hier laeuft dasselbe schon als root waehrend der Installation. daemon/daemon
+# macht es beim Start weiterhin - schadet nicht und faengt den Fall ab, dass
+# jemand die Regeldatei entfernt. REBOOT steht jetzt auf false.
+# ---------------------------------------------------------------------------
+REGEL=/etc/udev/rules.d/99-smartmeter.rules
+echo "<INFO> Lege die udev-Regel fuer die Lesekoepfe an: $REGEL"
+{
+	echo "# LoxBerry Smartmeter classic - DO NOT EDIT BY HAND!"
+	echo "KERNEL==\"ttyUSB[0-9]*\",GROUP=\"loxberry\",MODE=\"0666\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\""
+} > "$REGEL"
+if command -v udevadm >/dev/null 2>&1; then
+	udevadm control --reload-rules >/dev/null 2>&1
+	# trigger, damit ein bereits angesteckter Lesekopf sofort seinen
+	# stabilen Namen bekommt - sonst erst beim naechsten Anstecken.
+	udevadm trigger --subsystem-match=tty >/dev/null 2>&1
+	echo "<OK> udev-Regel aktiv. Ein Neustart ist dafuer nicht noetig."
+else
+	echo "<WARNING> udevadm nicht gefunden - die Regel greift erst nach einem Neustart."
 fi
 
 chmod +x "$PKG" "$CHECK" 2>/dev/null

@@ -34,6 +34,31 @@ $sm_argv = isset($argv) ? (array) $argv : array();
 $sm_laut = in_array('--verbose', $sm_argv, true);
 
 @mkdir($sm_shm, 0775, true);
+
+/* ------------------------------------------------------------------
+ * Nur ein Lauf gleichzeitig
+ *
+ * Bei einem Takt von einer Minute kann der naechste Cron-Aufruf kommen,
+ * bevor der vorige fertig ist - zwei Prozesse greifen dann auf DENSELBEN
+ * Lesekopf zu. Eine serielle Schnittstelle laesst sich nicht teilen: beide
+ * bekommen Bruchstuecke, und beide schreiben sie in dieselbe Datendatei.
+ *
+ * flock mit LOCK_NB: laeuft schon einer, endet dieser Aufruf sofort und
+ * ohne Aufhebens - das ist der Normalfall und kein Fehler.
+ *
+ * Die Sperrdatei liegt bewusst NEBEN dem Protokoll auf der Ramdisk. Nach
+ * einem Neustart ist sie fort, was genau richtig ist: der Prozess, der sie
+ * gehalten hat, ist es auch.
+ * ------------------------------------------------------------------ */
+$sm_sperre = @fopen($sm_shm . '/fetch.lock', 'c');
+if ($sm_sperre === false) {
+    // Ohne Sperrdatei lieber lesen als gar nicht lesen.
+    $sm_sperre = null;
+} elseif (!flock($sm_sperre, LOCK_EX | LOCK_NB)) {
+    fclose($sm_sperre);
+    exit(0);
+}
+
 @unlink($sm_logdatei);
 
 function sm_log($text, $stufe = 'INFO')

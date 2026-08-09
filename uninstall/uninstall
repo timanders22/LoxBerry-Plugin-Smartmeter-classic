@@ -14,15 +14,38 @@ SOURCE_LIST="/etc/apt/sources.list.d/volkszaehler-volkszaehler-org-project.list"
 KEYRING="/usr/share/keyrings/volkszaehler-volkszaehler-org-project-archive-keyring.gpg"
 VZCONF="$ARGV5/config/plugins/$ARGV3/vzlogger.conf"
 
-# Erst das eigene vzlogger beenden, solange die Konfiguration noch da ist.
-pkill -f -- "-c $VZCONF" >/dev/null 2>&1
-sleep 1
-
+# ---------------------------------------------------------------------------
+# REIHENFOLGE: erst systemd fragen, dann selbst nachraeumen.
+#
+# Der Einwand, systemd koenne den mit pkill beendeten Prozess sofort neu
+# starten, trifft hier NICHT zu: dieses Plugin startet vzlogger gar nicht
+# ueber systemd. daemon/daemon startet es beim Systemstart mit nohup als
+# Benutzer loxberry, und bin/vzlogger_pkg.sh MASKIERT die mitgelieferte
+# vzlogger.service ausdruecklich, damit sie nicht danebenlaeuft. Ein
+# maskierter Dienst kann nichts neu starten.
+#
+# Die Reihenfolge ist trotzdem gedreht - sie kostet nichts und deckt den
+# Fall ab, dass jemand die Maskierung von Hand aufgehoben und den Dienst
+# gestartet hat.
+#
+# Das unmask ist dagegen KEINE ueberfluessige Zutat, wie manchmal vermutet:
+# eine Maskierung ist ein vom Verwalter angelegter Verweis
+# /etc/systemd/system/vzlogger.service -> /dev/null. Der gehoert keinem
+# Paket. "apt-get purge" entfernt nur Dateien, die dem Paket gehoeren - der
+# Verweis bliebe also liegen und wuerde eine spaetere Neuinstallation von
+# vzlogger stillschweigend lahmlegen. Deshalb wird vor dem Entfernen
+# demaskiert.
+# ---------------------------------------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
 	systemctl unmask vzlogger.service >/dev/null 2>&1
 	systemctl stop vzlogger.service >/dev/null 2>&1
 	systemctl disable vzlogger.service >/dev/null 2>&1
 fi
+
+# Jetzt das eigene, mit nohup gestartete vzlogger - solange die
+# Konfigurationsdatei noch da ist, denn an ihr wird es erkannt.
+pkill -f -- "-c $VZCONF" >/dev/null 2>&1
+sleep 1
 
 if [ -e "$MARKER" ]; then
 	echo "<INFO> vzlogger wurde von diesem Plugin installiert - es wird entfernt."

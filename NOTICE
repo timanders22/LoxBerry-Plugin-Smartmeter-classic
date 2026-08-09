@@ -19,8 +19,8 @@ weiter, weil der Legacy-Leser Zähler bedient, die vzlogger auf manchen
 Installationen nicht erreicht.
 
 Gemäß Apache License 2.0, Abschnitt 4(b): Die Dateien dieser Abspaltung wurden
-gegenüber dem Original verändert. Die Änderungen sind in den Dateien
-AENDERUNGEN_*.md dieses Repositories im Einzelnen beschrieben. Wesentlich sind:
+gegenüber dem Original verändert. Die Änderungen sind in README.md und in der
+Hilfe des Plugins (templates/help/help.html) beschrieben. Wesentlich sind:
 
   - vzLogger-Betriebsart mit eigener Konfigurationserzeugung, Diagnose und
     Protokoll

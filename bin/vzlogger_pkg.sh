@@ -10,7 +10,7 @@
 #
 # Herkunft: das Verfahren ist dem Plugin Smartmeter-NG von Michael Schlenstedt
 # entnommen (bin/vzlogger_pkg.sh, Fassung V2.0) und fuer dieses Plugin
-# angepasst. Der Grund fuer die Uebernahme steht in AENDERUNGEN_1.6.md.
+# angepasst. Der Grund fuer die Uebernahme steht in NOTICE und in README.md.
 #
 # Das Paket bringt einen eigenen systemd-Dienst mit und startet ihn im
 # postinst. Dieses Plugin startet vzlogger selbst, deshalb wird der Dienst

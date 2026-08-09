@@ -26,7 +26,10 @@ function sm_paths()
     // einzutragen.
     $ordner = basename(dirname(__FILE__));
     if ($ordner === '' || $ordner === 'htmlauth') {
-        $ordner = 'smartmeter';
+        // NICHT "smartmeter": so heisst der Ordner des Originalplugins, das
+        // neben diesem installiert sein kann. Der Rueckfall zeigte damit auf
+        // dessen Konfiguration, dessen /dev/shm und dessen Protokoll.
+        $ordner = 'smartmeter-classic';
     }
     $p = array(
         'home'    => $home,
@@ -48,6 +51,71 @@ function sm_paths()
 function sm_e($s)
 {
     return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+}
+
+/* ==================================================================
+ * Sprache
+ *
+ * Bis 2.3.2 lagen zwar templates/lang/language_de.ini und _en.ini im
+ * Plugin, gelesen hat sie aber niemand: die Oberflaeche schrieb ihre
+ * Texte unmittelbar auf Deutsch ins HTML. Zwanzig Schluessel standen in
+ * den Dateien, keiner davon kam im Programm vor - eine begonnene und nie
+ * zu Ende gefuehrte Uebersetzung.
+ *
+ * Seit 2.3.2 geht jeder sichtbare Text durch sm_t(). Englisch ist die
+ * Rueckfallebene: fehlt ein Schluessel in der gewaehlten Sprache, wird
+ * der englische genommen; fehlt auch der, kommt der Schluesselname
+ * selbst heraus. Das ist Absicht - eine leere Seite verschweigt den
+ * Fehler, ein sichtbares "VZ.LABEL_DEVICE" nicht.
+ * ================================================================== */
+
+function sm_sprache()
+{
+    $sprache = 'de';
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'lblanguage')) {
+        $sprache = LBSystem::lblanguage();
+    } elseif (getenv('LBLANG')) {
+        $sprache = getenv('LBLANG');
+    }
+    $sprache = strtolower(substr((string) $sprache, 0, 2));
+    return in_array($sprache, array('de', 'en'), true) ? $sprache : 'en';
+}
+
+/** Text zu einem Schluessel 'ABSCHNITT.SCHLUESSEL'. */
+function sm_t($schluessel)
+{
+    static $texte = null;
+    if ($texte === null) {
+        $p = sm_paths();
+        // Installiert liegen die Sprachdateien unter
+        // <home>/templates/plugins/<ordner>/lang/. Im ausgepackten Archiv
+        // (Entwicklung) liegen sie neben dem Plugin.
+        $pfad = $p['home'] . '/templates/plugins/' . $p['plugin'] . '/lang';
+        if (!is_dir($pfad)) {
+            $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
+        }
+        $texte = @parse_ini_file($pfad . '/language_' . sm_sprache() . '.ini', true, INI_SCANNER_RAW);
+        if (!is_array($texte)) {
+            $texte = array();
+        }
+        $rueck = @parse_ini_file($pfad . '/language_en.ini', true, INI_SCANNER_RAW);
+        if (is_array($rueck)) {
+            $texte = array_replace_recursive($rueck, $texte);
+        }
+        // INI_SCANNER_RAW gibt die Werte samt der Anfuehrungszeichen zurueck,
+        // in die sie in der Datei stehen muessen. Die gehoeren nicht in die
+        // Ausgabe.
+        foreach ($texte as $ab => $paare) {
+            if (!is_array($paare)) {
+                continue;
+            }
+            foreach ($paare as $s => $w) {
+                $texte[$ab][$s] = trim((string) $w, '"');
+            }
+        }
+    }
+    $teile = array_pad(explode('.', $schluessel, 2), 2, '');
+    return isset($texte[$teile[0]][$teile[1]]) ? $texte[$teile[0]][$teile[1]] : $schluessel;
 }
 
 /** Einen Befehl ausfuehren und die Ausgabe zurueckgeben. */

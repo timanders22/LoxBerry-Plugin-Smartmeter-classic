@@ -22,10 +22,10 @@ function sm_diagnose($cfg)
 
     // 1 - Betriebsart
     if (!$cfg['enabled']) {
-        $add('Betriebsart', 'warn', 'vzLogger ist ausgeschaltet. Es wird nichts gelesen.');
+        $add(sm_t('DIAG.BETRIEBSART'), 'warn', sm_t('DIAG.VZ_AUS'));
         return $d;
     }
-    $add('Betriebsart', 'ok', 'vzLogger ist eingeschaltet.');
+    $add(sm_t('DIAG.BETRIEBSART'), 'ok', sm_t('DIAG.VZ_AN'));
 
     // 2 - Programm
     list($bin, $warum) = sm_vz_binary();
@@ -36,77 +36,69 @@ function sm_diagnose($cfg)
         $v = trim($v);
         $txt = $bin . ($v !== '' ? ' - ' . $v : '');
         if ($akt !== '') {
-            $txt .= ' (Paket ' . $akt
-                  . (($verf !== '' && $verf !== $akt) ? ', verfuegbar ' . $verf : '') . ')';
+            $txt .= ' (' . sprintf(sm_t('DIAG.PAKET'), $akt)
+                  . (($verf !== '' && $verf !== $akt)
+                     ? ', ' . sprintf(sm_t('DIAG.PAKET_VERFUEGBAR'), $verf) : '') . ')';
         }
-        $add('Programm', ($verf !== '' && $akt !== '' && $verf !== $akt) ? 'warn' : 'ok', $txt);
+        $add(sm_t('DIAG.PROGRAMM'), ($verf !== '' && $akt !== '' && $verf !== $akt) ? 'warn' : 'ok', $txt);
     } else {
-        $add('Programm', 'fail', $warum);
+        $add(sm_t('DIAG.PROGRAMM'), 'fail', $warum);
     }
 
     // 3 - Prozess
     $pid = sm_vz_running();
     if ($pid !== '') {
-        $add('Prozess', 'ok', 'laeuft, PID ' . $pid);
+        $add(sm_t('DIAG.PROZESS'), 'ok', sprintf(sm_t('DIAG.LAEUFT_PID'), $pid));
     } else {
-        $add('Prozess', 'fail', 'Es laeuft kein vzlogger mit unserer Konfiguration ('
-                              . $p['vzconf'] . ').');
+        $add(sm_t('DIAG.PROZESS'), 'fail', sprintf(sm_t('DIAG.KEIN_PROZESS'), $p['vzconf']));
     }
 
     // 4 - Konfigurationsdatei
     if (!is_readable($p['vzconf'])) {
-        $add('Konfiguration', 'fail', $p['vzconf'] . ' fehlt. Einmal Speichern erzeugt sie neu.');
+        $add(sm_t('DIAG.KONFIG'), 'fail', sprintf(sm_t('DIAG.KONFIG_FEHLT'), $p['vzconf']));
     } else {
         $txt = (string) @file_get_contents($p['vzconf']);
         $n = substr_count($txt, '"identifier"');
         if (strpos($txt, '"meters"') === false) {
-            $add('Konfiguration', 'fail', 'In ' . $p['vzconf'] . ' steht kein meters-Abschnitt.');
+            $add(sm_t('DIAG.KONFIG'), 'fail', sprintf(sm_t('DIAG.KONFIG_OHNE_METERS'), $p['vzconf']));
         } elseif (!$n) {
-            $add('Konfiguration', 'fail', 'Kein einziger Kanal in der Konfiguration. '
-                                        . 'Ohne Kanal liest vzlogger nichts.');
+            $add(sm_t('DIAG.KONFIG'), 'fail', sm_t('DIAG.KONFIG_OHNE_KANAL'));
         } elseif (preg_match('/"interval"\s*:\s*-/', $txt)) {
-            $add('Konfiguration', 'warn', $n . ' Kanaele - aber es steht ein negatives '
-                . 'interval darin. Bei sendenden SML-Zaehlern gehoert der Schluessel weggelassen.');
+            $add(sm_t('DIAG.KONFIG'), 'warn', sprintf(sm_t('DIAG.KONFIG_INTERVAL'), $n));
         } else {
-            $add('Konfiguration', 'ok', $n . ' Kanaele, kein interval-Schluessel '
-                . '(richtig fuer sendende SML-Zaehler).');
+            $add(sm_t('DIAG.KONFIG'), 'ok', sprintf(sm_t('DIAG.KONFIG_OK'), $n));
         }
     }
 
     // 5 - Lesekopf
     $dev = (string) $cfg['device'];
     if ($dev === '') {
-        $add('Lesekopf', 'fail', 'Kein Geraet ausgewaehlt.');
+        $add(sm_t('DIAG.LESEKOPF'), 'fail', sm_t('DIAG.KEIN_GERAET'));
     } elseif (!file_exists($dev)) {
-        $add('Lesekopf', 'fail', $dev . ' gibt es nicht. Lesekopf abziehen und neu '
-            . 'anstecken; die udev-Regel wird beim Start des Plugins angelegt.');
+        $add(sm_t('DIAG.LESEKOPF'), 'fail', sprintf(sm_t('DIAG.GERAET_FEHLT'), $dev));
     } elseif (!is_readable($dev)) {
-        $add('Lesekopf', 'fail', $dev . ' ist nicht lesbar (Rechte).');
+        $add(sm_t('DIAG.LESEKOPF'), 'fail', sprintf(sm_t('DIAG.GERAET_RECHTE'), $dev));
     } else {
         $ziel = is_link($dev) ? readlink($dev) : '';
-        $add('Lesekopf', 'ok', $dev . ($ziel !== '' ? ' -> ' . $ziel : ''));
+        $add(sm_t('DIAG.LESEKOPF'), 'ok', $dev . ($ziel !== '' ? ' -> ' . $ziel : ''));
     }
 
     // 6 - Belegung der Schnittstelle (der haeufigste Fallstrick)
     $busy = sm_vz_device_busy($dev);
     if (sm_legacy_aktiv()) {
-        $add('Schnittstelle belegt', 'fail', 'Die Legacy-Abfrage ist eingeschaltet und '
-            . 'greift auf dasselbe Geraet zu. Zwei Leser koennen sich eine serielle '
-            . 'Schnittstelle nicht teilen. Entweder Legacy abschalten oder vzLogger.');
+        $add(sm_t('DIAG.BELEGT'), 'fail', sm_t('DIAG.BELEGT_LEGACY'));
     } elseif ($busy !== '') {
-        $add('Schnittstelle belegt', 'warn', 'Fremder Zugriff auf ' . $dev . ': ' . $busy);
+        $add(sm_t('DIAG.BELEGT'), 'warn', sprintf(sm_t('DIAG.BELEGT_FREMD'), $dev, $busy));
     } else {
-        $add('Schnittstelle belegt', 'ok', 'Niemand sonst greift auf ' . $dev . ' zu.');
+        $add(sm_t('DIAG.BELEGT'), 'ok', sprintf(sm_t('DIAG.BELEGT_FREI'), $dev));
     }
 
     // 7 und 8 - HTTP-Schnittstelle und Messwerte
     $port = (int) $cfg['httpport'];
     list(, $roh) = sm_sh('curl -s -m 5 http://127.0.0.1:' . $port . '/');
     if (strpos($roh, 'vzlogger') === false) {
-        $add('HTTP-Schnittstelle', 'fail', 'Port ' . $port . ' antwortet nicht. Entweder '
-            . 'laeuft vzlogger nicht, oder der Port ist belegt.');
-        $add('Messwerte', 'fail', 'Keine Werte - ohne HTTP-Schnittstelle kann das Plugin '
-            . 'sie nicht abholen.');
+        $add(sm_t('DIAG.HTTP'), 'fail', sprintf(sm_t('DIAG.HTTP_STUMM'), $port));
+        $add(sm_t('DIAG.MESSWERTE'), 'fail', sm_t('DIAG.KEINE_WERTE'));
         return $d;
     }
 
@@ -117,12 +109,10 @@ function sm_diagnose($cfg)
     $gut = 0;
     foreach ($letzte as $x) { if ($x > 0) { $gut++; } }
 
-    $add('HTTP-Schnittstelle', 'ok', 'Port ' . $port . ' antwortet, ' . $cnt
-       . ' Kanaele angemeldet.');
+    $add(sm_t('DIAG.HTTP'), 'ok', sprintf(sm_t('DIAG.HTTP_OK'), $port, $cnt));
 
     if (!$cnt) {
-        $add('Messwerte', 'fail', 'vzlogger laeuft, kennt aber keine Kanaele. Einmal '
-            . 'Speichern und danach den Dienst neu starten.');
+        $add(sm_t('DIAG.MESSWERTE'), 'fail', sm_t('DIAG.KEINE_KANAELE'));
     } elseif (!$gut) {
         $zeitfehler = false;
         if (is_readable($p['vzlog'])) {
@@ -130,24 +120,18 @@ function sm_diagnose($cfg)
             $zeitfehler = (strpos($t, 'timestamp before 1990') !== false);
         }
         if ($zeitfehler) {
-            $add('Messwerte', 'fail', 'Der Zaehler wird gelesen, aber vzlogger verwirft '
-                . 'jedes Telegramm: "timestamp before 1990, IGNORING". Dieser Zaehler '
-                . 'sendet keine gestellte Uhr. Abhilfe: "Zeitstempel" auf '
-                . '"Rechner-Uhrzeit" stellen und speichern'
-                . (!$cfg['localtime'] ? ' - die Einstellung steht derzeit auf der Uhr des Zaehlers.' : '.'));
+            $add(sm_t('DIAG.MESSWERTE'), 'fail', sm_t('DIAG.ZEITSTEMPEL')
+                . (!$cfg['localtime'] ? ' ' . sm_t('DIAG.ZEITSTEMPEL_ZUSATZ') : ''));
         } else {
-            $add('Messwerte', 'fail', 'Alle ' . $cnt . ' Kanaele stehen auf last=0 - es ist '
-                . 'noch kein einziges Telegramm angekommen. Pruefe Sitz des Lesekopfs, '
-                . 'Baudrate und Protokoll. Das Protokoll unten zeigt, was vzlogger meldet.');
+            $add(sm_t('DIAG.MESSWERTE'), 'fail', sprintf(sm_t('DIAG.ALLE_NULL'), $cnt));
         }
     } else {
         // vzlogger meldet je nach Fassung Sekunden oder Millisekunden.
         $alter = ($max > 1000000000000)
             ? (int) (time() - $max / 1000)
             : (int) (time() - $max);
-        $add('Messwerte', ($alter > 300 ? 'warn' : 'ok'),
-            $gut . ' von ' . $cnt . ' Kanaelen liefern Werte, letzter Empfang vor '
-          . $alter . ' Sekunden.');
+        $add(sm_t('DIAG.MESSWERTE'), ($alter > 300 ? 'warn' : 'ok'),
+            sprintf(sm_t('DIAG.WERTE_OK'), $gut, $cnt, $alter));
     }
 
     return $d;
@@ -180,31 +164,35 @@ function sm_test_ausfuehren($was, $cfg)
         case 'http':
             $port = (int) $cfg['httpport'];
             list(, $roh) = sm_sh('curl -s -m 5 http://127.0.0.1:' . $port . '/');
-            return array('Antwort der HTTP-Schnittstelle',
+            return array(sm_t('TEST.K_HTTP'),
                 sm_block(trim($roh) !== '' ? $roh
-                    : 'Keine Antwort auf Port ' . $port . '.'));
+                    : sprintf(sm_t('TEST.HTTP_STUMM'), $port)));
 
         case 'umgebung':
             $z = array();
-            $z[] = 'PHP-Fassung       : ' . PHP_VERSION;
+            $unbekannt = sm_t('TEST.UNBEKANNT');
+            $z[] = sprintf('%-18s: %s', sm_t('TEST.U_PHP'), PHP_VERSION);
             list(, $arch) = sm_sh('uname -m');
-            $z[] = 'Architektur       : ' . trim($arch);
+            $z[] = sprintf('%-18s: %s', sm_t('TEST.U_ARCH'), trim($arch));
             list($bin, $warum) = sm_vz_binary();
-            $z[] = 'vzlogger          : ' . ($bin !== '' ? $bin : 'nicht lauffaehig');
-            if ($bin === '') { $z[] = '  Grund           : ' . $warum; }
-            $z[] = 'Paket installiert : ' . (sm_vz_paket('current') ?: 'unbekannt');
-            $z[] = 'Paket verfuegbar  : ' . (sm_vz_paket('available') ?: 'unbekannt');
+            $z[] = sprintf('%-18s: %s', 'vzlogger',
+                           $bin !== '' ? $bin : sm_t('TEST.U_NICHT_LAUFFAEHIG'));
+            if ($bin === '') { $z[] = sprintf('  %-16s: %s', sm_t('TEST.U_GRUND'), $warum); }
+            $z[] = sprintf('%-18s: %s', sm_t('TEST.U_PAKET_INST'), sm_vz_paket('current') ?: $unbekannt);
+            $z[] = sprintf('%-18s: %s', sm_t('TEST.U_PAKET_VERF'), sm_vz_paket('available') ?: $unbekannt);
             $z[] = '';
             $koepfe = sm_lesekoepfe();
-            $z[] = 'Lesekoepfe        : ' . ($koepfe ? implode(', ', $koepfe) : 'keiner erkannt');
+            $z[] = sprintf('%-18s: %s', sm_t('TEST.U_KOEPFE'),
+                           $koepfe ? implode(', ', $koepfe) : sm_t('TEST.U_KEINER'));
             $z[] = '';
             foreach (array('vzjson' => 'vzlogger.json', 'vzconf' => 'vzlogger.conf',
                            'legacy' => 'smartmeter.cfg') as $k => $name) {
                 $z[] = sprintf('%-18s: %s', $name, is_readable($p[$k])
-                    ? 'vorhanden (' . number_format(filesize($p[$k]) / 1024, 1, ',', '.') . ' kB)'
-                    : 'nicht vorhanden');
+                    ? sprintf(sm_t('TEST.U_VORHANDEN'),
+                              number_format(filesize($p[$k]) / 1024, 1, ',', '.'))
+                    : sm_t('TEST.U_NICHT_VORHANDEN'));
             }
-            return array('Umgebung', sm_block(implode("\n", $z)));
+            return array(sm_t('TEST.K_UMGEBUNG'), sm_block(implode("\n", $z)));
 
         case 'legacy':
             $l = sm_legacy_read();
@@ -213,11 +201,9 @@ function sm_test_ausfuehren($was, $cfg)
                 $z[] = sprintf('%-12s: %s', $k, $v);
             }
             $z[] = '';
-            $z[] = $l['READ'] === '1'
-                ? 'Der Legacy-Leser ist EINGESCHALTET - er belegt die serielle Schnittstelle.'
-                : 'Der Legacy-Leser ist ausgeschaltet.';
-            return array('Legacy-Einstellungen', sm_block(implode("\n", $z)));
+            $z[] = $l['READ'] === '1' ? sm_t('TEST.LG_AN') : sm_t('TEST.LG_AUS');
+            return array(sm_t('TEST.K_LEGACY'), sm_block(implode("\n", $z)));
     }
-    return array('Unbekannte Pr&uuml;fung',
-        '<p class="sm-small">Diese Pr&uuml;fung gibt es nicht.</p>');
+    return array(sm_t('TEST.UNBEKANNTE_PRUEFUNG'),
+        '<p class="sm-small">' . sm_t('TEST.GIBT_ES_NICHT') . '</p>');
 }
