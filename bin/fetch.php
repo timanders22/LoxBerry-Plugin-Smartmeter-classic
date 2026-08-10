@@ -17,11 +17,11 @@
 // ---------------------------------------------------------------- Pfade
 $sm_home = getenv('LBHOMEDIR');
 if (!$sm_home || !is_dir($sm_home)) {
-    foreach (array('/opt/loxberry', '/home/loxberry/loxberry') as $k) {
+    foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
         if (is_dir($k)) { $sm_home = $k; break; }
     }
 }
-$sm_home = $sm_home ? $sm_home : '/opt/loxberry';
+$sm_home = $sm_home ? $sm_home : lb_wurzel_ermitteln();
 // Der Pluginordner ergibt sich aus dem Ablageort dieser Datei
 // (<home>/bin/plugins/<ordner>/fetch.php).
 $sm_ordner = basename(dirname(__FILE__));
@@ -60,6 +60,35 @@ if ($sm_sperre === false) {
 }
 
 @unlink($sm_logdatei);
+
+
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+ *
+ * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+ * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
+ * Installation genauso wie eine an einem anderen Ort - und es trifft auch
+ * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
+ * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
+ * abfangen muss).
+ *
+ * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
+ * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
+ */
+if (!function_exists('lb_wurzel_ermitteln')) {
+    function lb_wurzel_ermitteln()
+    {
+        $d = __DIR__;
+        for ($i = 0; $i < 8; $i++) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+                return $d;
+            }
+            $eltern = dirname($d);
+            if ($eltern === $d) { break; }
+            $d = $eltern;
+        }
+        return '';
+    }
+}
 
 function sm_log($text, $stufe = 'INFO')
 {
@@ -160,6 +189,21 @@ function sm_gateway_udpin($home)
 }
 
 /** Eine Zeile per UDP schicken. */
+/**
+ * Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
+ *
+ * Das Gateway liest ZEILENWEISE. Ein Zeilenumbruch im Wert - aus einer
+ * Fehlermeldung, einem Geraetenamen oder der Ausgabe eines Systembefehls -
+ * zerlegt die Uebertragung, und aus den Bruchstuecken bildet das Gateway
+ * erfundene Themen. Ein Tabulator schadet ebenso, weil Leerzeichen Thema und
+ * Wert trennt.
+ */
+function sm_mqtt_wert_saeubern($v)
+{
+    $wert = str_replace(array("\r\n", "\r", "\n", "\t"), ' ', (string) $v);
+    return trim(preg_replace('/ {2,}/', ' ', $wert));
+}
+
 function sm_udp($ziel, $port, $text)
 {
     $s = @fsockopen('udp://' . $ziel, $port, $errno, $errstr, 2);
@@ -277,7 +321,8 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
                     continue;
                 }
                 if (sm_udp('127.0.0.1', $sm_udpin,
-                           'publish ' . $sm_topic . '/' . $sm_serial . '/' . $sm_k . ' ' . $sm_v)) {
+                           'publish ' . $sm_topic . '/' . $sm_serial . '/' . $sm_k . ' '
+                           . sm_mqtt_wert_saeubern($sm_v))) {
                     $sm_anzahl++;
                 }
             }
