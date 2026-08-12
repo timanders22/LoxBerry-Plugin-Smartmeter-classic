@@ -115,4 +115,17 @@ if [ -s "$NETZ_CFG/smartmeter.cfg" ]; then
 fi
 echo "<INFO> Zweitschrift der Einstellungen angelegt."
 
+
+# NICHT MITGELIEFERTE Dateien - und gerade deshalb die wichtigen.
+# Das Archiv liefert sie nie, also standen sie bis jetzt auf keiner Liste;
+# geloescht werden sie vom Installer trotzdem, samt Token und Zugangsdaten.
+if [ -s "$NETZ_CFG/vzlogger.json" ]; then
+    cp -p "$NETZ_CFG/vzlogger.json" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.json" 2>/dev/null \
+        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.json" 2>/dev/null
+fi
+if [ -s "$NETZ_CFG/vzlogger.conf" ]; then
+    cp -p "$NETZ_CFG/vzlogger.conf" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.conf" 2>/dev/null \
+        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.conf" 2>/dev/null
+fi
+
 exit 0

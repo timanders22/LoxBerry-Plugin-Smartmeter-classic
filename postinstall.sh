@@ -75,4 +75,24 @@ netz_zurueck() {
 }
 netz_zurueck "smartmeter.cfg" "e480800fe480043a1744f470d7d898505c6b135a6e44f3c4c459ae4e4810254c"
 
+
+# Zurueckspielen fuer Dateien OHNE mitgelieferte Vorgabe: es gibt nichts,
+# womit man vergleichen koennte, also ist das Kriterium "fehlt oder leer".
+# Eine vorhandene Datei wird nie ueberschrieben.
+netz_ohne_vorgabe() {
+    ziel="$NETZ_CFG/$1"
+    zweit="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$1"
+    [ -f "$zweit" ] || return 0
+    if [ ! -s "$ziel" ]; then
+        if cp -p "$zweit" "$ziel" 2>/dev/null; then
+            chmod 0600 "$ziel" 2>/dev/null
+            echo "<OK> $1 aus der Zweitschrift wiederhergestellt."
+        else
+            echo "<WARNING> $1 liess sich nicht zurueckspielen ($zweit)."
+        fi
+    fi
+}
+netz_ohne_vorgabe "vzlogger.json"
+netz_ohne_vorgabe "vzlogger.conf"
+
 exit 0
