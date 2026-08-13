@@ -38,6 +38,15 @@ $sm_tab = preg_match('/^tab-(' . implode('|', $sm_reiter_ids) . ')$/', $sm_wunsc
 $sm_cfg    = sm_vz_read();
 $sm_legacy = sm_legacy_read();
 
+// ---------- Loxone-Vorlage herunterladen (Hausstandard) ----------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage']) && function_exists('sm_vorlage')) {
+    list($sm_vname, $sm_vinhalt) = sm_vorlage();
+    header('Content-Type: application/x-download');
+    header('Content-Disposition: attachment; filename="' . $sm_vname . '"');
+    echo $sm_vinhalt;
+    exit;
+}
+
 $sm_test_titel = '';
 $sm_test_text  = '';
 $sm_installout = '';
@@ -289,6 +298,8 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 .sm-wrap h2 { color: #4f7d17; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px;
   font-size: 1.15em; margin: 22px 0 8px; }
 .sm-small { font-size: 0.88em; color: #555; }
+.sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
+    padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-mono { font-family: monospace; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
 .sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0;
@@ -335,6 +346,14 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
   white-space: pre-wrap; font-size: 0.86em; }
 .sm-diag td:first-child { width: 22%; font-weight: 600; }
 .sm-diag td:nth-child(2) { width: 4%; text-align: center; font-weight: 700; }
+
+/* Nachgetragene Definitionen (CSS-Luecken-Durchgang 13.08.2026):
+   benutzt, aber nie definiert - wortgleich aus der Hausstandard-Vorlage
+   bzw. der Referenzimplementierung uebernommen. */
+.sm-scheibe { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle; }
+.sm-gruen { background: #1a7f1a; }
+.sm-rot { background: #b00000; }
 </style>
 
 <div class="sm-wrap">
@@ -731,6 +750,13 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <?php } ?>
 </table>
 <p class="sm-small"><?php echo sm_t('LOX.S3_HINT'); ?></p>
+
+<h2><?php echo sm_t('LOX.H_VORLAGE'); ?></h2>
+<div class="sm-hinweis"><?php echo sm_t('LOX.H_VORLAGE_TEXT'); ?></div>
+<form action="index.php" method="post" style="margin-bottom:14px;">
+  <input data-role="none" type="hidden" name="vorlage" value="1">
+  <button data-role="none" class="sm-btn" type="submit" style="background:#546e7a;"><?php echo sm_t('LOX.K_VORLAGE'); ?></button>
+</form>
 </div>
 
 <div class="sm-step">

@@ -518,3 +518,41 @@ function sm_hostname()
     $h = gethostname();
     return $h ? $h : 'loxberry';
 }
+
+/** Vorlage der Gateway-Eingaenge nach dem Heimkino-Kunstgriff (12.08.2026):
+ *  VirtualInHttp mit Dummy-Adresse http://localhost und Abfragezyklus 604800 s,
+ *  nur damit Loxone die richtig benannten Eingaenge anlegt - die Werte kommen
+ *  vom MQTT-Gateway. Format wie Original-Export aus Loxone Config 17.1.
+ *  Titel und Einheiten exakt wie die Tabelle im Reiter "Einbindung in Loxone". */
+function sm_vorlage()
+{
+    $cfg    = sm_vz_read();
+    $legacy = sm_legacy_read();
+    $crlf = "\r\n";
+    $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualInHttp HintText="" Title="Smartmeter Zaehlerwerte" Comment="Erzeugt vom LoxBerry-Plugin Smartmeter classic (' . date('d.m.Y') . '). Werte kommen vom MQTT-Gateway - Abo ' . htmlspecialchars($legacy['MQTTTOPIC'], ENT_QUOTES | ENT_XML1, 'UTF-8') . '/# noetig." Address="http://localhost" PollingTime="604800">' . $crlf;
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
+    foreach ($cfg['channels'] as $c) {
+        $titel = str_replace(array('/', ':', '-', '.'), '_',
+            $legacy['MQTTTOPIC'] . '_' . $cfg['serial'] . '_' . $c);
+        if ($c === '1-0:16.7.0') {
+            $einheit = '<v.0> W';
+            $bed     = 'aktuelle Wirkleistung';
+            $signed  = 'true';
+            $min     = '-100000';
+            $max     = '100000';
+        } else {
+            $einheit = '<v.3> kWh';
+            $bed     = ($c === '1-0:1.8.0') ? 'Zaehlerstand Bezug'
+                     : (($c === '1-0:2.8.0') ? 'Zaehlerstand Einspeisung' : 'OBIS ' . $c);
+            $signed  = 'false';
+            $min     = '0';
+            $max     = '1000000';
+        }
+        $o .= "\t" . '<VirtualInHttpCmd Title="' . htmlspecialchars($titel, ENT_QUOTES | ENT_XML1, 'UTF-8') . '" ';
+        $o .= 'Comment="' . htmlspecialchars($bed, ENT_QUOTES | ENT_XML1, 'UTF-8') . '" Check=" " ';
+        $o .= 'Signed="' . $signed . '" Analog="true" SourceValLow="0" DestValLow="0" SourceValHigh="1" DestValHigh="1" DefVal="0" MinVal="' . $min . '" MaxVal="' . $max . '" Unit="' . htmlspecialchars($einheit, ENT_QUOTES | ENT_XML1, 'UTF-8') . '" HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualInHttp>' . $crlf;
+    return array('VI_smartmeter.xml', $o);
+}
