@@ -653,6 +653,7 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 
 <!-- ================================= MQTT ================================= -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-mqtt' ? ' sm-active' : ''; ?>" id="tab-mqtt">
+<?php if (!function_exists('sm_hs_autostart')) { function sm_hs_autostart() { $h = getenv('LBHOMEDIR') ?: '/opt/loxberry'; $g = $h . '/config/system/general.json'; if (!is_file($g)) { return null; } $j = json_decode((string) @file_get_contents($g), true); if (!is_array($j) || !isset($j['Mqtt'])) { return null; } return !empty($j['Mqtt']['Gatewayautostart']); } } if (sm_hs_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo sm_t('MQ.W_AUTOSTART'); ?></div><?php } ?>
 
 <h2><?php echo sm_t('MQ.H_ZUSTAND'); ?></h2>
 <p class="sm-small"><?php echo sm_t('MQ.HINT_GATEWAY'); ?></p>
