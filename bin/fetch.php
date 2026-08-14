@@ -94,6 +94,14 @@ function sm_log($text, $stufe = 'INFO')
 {
     global $sm_logdatei, $sm_laut;
     $zeile = date('Y-m-d H:i:s') . " <$stufe> $text";
+    /* Kappung nach dem Hausmuster (fer_log, FerienFeiertage): ab 500 kB
+     * bleiben die letzten 200 Zeilen stehen. Ohne sie waechst die Datei
+     * unbegrenzt - auf einem LoxBerry mit SD-Karte ist das kein
+     * Schoenheitsfehler. */
+    if (is_file($sm_logdatei) && filesize($sm_logdatei) > 512000) {
+        $rest = array_slice(file($sm_logdatei, FILE_IGNORE_NEW_LINES) ?: array(), -200);
+        @file_put_contents($sm_logdatei, implode("\n", $rest) . "\n");
+    }
     @file_put_contents($sm_logdatei, $zeile . "\n", FILE_APPEND);
     if ($sm_laut) {
         echo $zeile . "\n";
