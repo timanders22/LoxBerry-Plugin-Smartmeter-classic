@@ -11,10 +11,40 @@
  *   php fetch.php            vom Cron
  *   php fetch.php --verbose  von Hand, mit Ausgabe
  *
- * Wird als Verknuepfung in system/cron/cron.XXmin/ gelegt.
+ * Wird als Verknuepfung in system/cron/cron.XXmin/ gelegt und dort DIREKT
+ * ausgefuehrt - die Shebang-Zeile oben zaehlt also.
+ *
+ * ZEILENENDEN: LF, und das ist kein Geschmack.
+ * Bis 2.3.14 war diese Datei als einzige PHP-Datei des Plugins durchgehend
+ * CRLF. Der Kernel nimmt aus "#!/usr/bin/env php\r" den Interpreter
+ * /usr/bin/env mit dem Argument "php\r" und findet den nicht - der
+ * Cron-Eintrag des klassischen Lesers konnte nie laufen. Der Aufruf ueber
+ * "Jetzt einmal abfragen" ging weiter, weil dort php ausdruecklich
+ * davorsteht; deshalb ist es nie aufgefallen.
  */
 
 // ---------------------------------------------------------------- Pfade
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+ *
+ * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+ * config/plugins UND webfrontend enthaelt.
+ */
+if (!function_exists('lb_wurzel_ermitteln')) {
+    function lb_wurzel_ermitteln()
+    {
+        $d = __DIR__;
+        for ($i = 0; $i < 8; $i++) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+                return $d;
+            }
+            $eltern = dirname($d);
+            if ($eltern === $d) { break; }
+            $d = $eltern;
+        }
+        return '';
+    }
+}
+
 $sm_home = getenv('LBHOMEDIR');
 if (!$sm_home || !is_dir($sm_home)) {
     foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
@@ -33,24 +63,48 @@ $sm_bin      = $sm_home . '/bin/plugins/' . $sm_ordner;
 $sm_argv = isset($argv) ? (array) $argv : array();
 $sm_laut = in_array('--verbose', $sm_argv, true);
 
+/* Ein unbekannter Schalter darf nicht stillschweigend durchfallen: wer ein
+ * Werkzeug von Hand aufruft, soll bei einem Tippfehler eine Antwort sehen,
+ * keinen Lauf. */
+foreach ($sm_argv as $sm_i => $sm_a) {
+    if ($sm_i === 0 || strncmp((string) $sm_a, '--', 2) !== 0) { continue; }
+    if (!in_array($sm_a, array('--verbose'), true)) {
+        fwrite(STDERR, 'Unbekannter Schalter: ' . $sm_a . "\n");
+        exit(2);
+    }
+}
+
 @mkdir($sm_shm, 0775, true);
 
+// Der gemeinsame Vorlauf - dieselbe Datei, die auch Oberflaeche und
+// Endpunkt lesen. Ohne ihn stuenden Altersgrenze, Wertsaeuberung und der
+// Zaehler dreimal im Plugin.
+$sm_gemein = __DIR__ . '/sm_gemein.php';
+if (!is_file($sm_gemein)) {
+    fwrite(STDERR, "sm_gemein.php fehlt: $sm_gemein\n");
+    exit(1);
+}
+require_once $sm_gemein;
+
 /* ------------------------------------------------------------------
- * Nur ein Lauf gleichzeitig
+ * Nur ein Lauf gleichzeitig - eine Sperrdatei je DATENBESTAND
  *
  * Bei einem Takt von einer Minute kann der naechste Cron-Aufruf kommen,
  * bevor der vorige fertig ist - zwei Prozesse greifen dann auf DENSELBEN
  * Lesekopf zu. Eine serielle Schnittstelle laesst sich nicht teilen: beide
  * bekommen Bruchstuecke, und beide schreiben sie in dieselbe Datendatei.
  *
+ * Die Sperre heisst seit 2.3.14 daten.lock und NICHT mehr fetch.lock:
+ * bin/fetch_vzlogger.pl sperrte fetch_vzlogger.lock und schrieb dieselben
+ * Dateien - die beiden sperrten sich also gerade nicht gegeneinander. Eine
+ * Sperrdatei gehoert zum Datenbestand, nicht zum Skript. Sichtbar wird das,
+ * sobald jemand der Empfehlung aus dem README folgt und im vzLogger-Reiter
+ * DIESELBE Zaehlernummer eintraegt wie beim klassischen Leser.
+ *
  * flock mit LOCK_NB: laeuft schon einer, endet dieser Aufruf sofort und
  * ohne Aufhebens - das ist der Normalfall und kein Fehler.
- *
- * Die Sperrdatei liegt bewusst NEBEN dem Protokoll auf der Ramdisk. Nach
- * einem Neustart ist sie fort, was genau richtig ist: der Prozess, der sie
- * gehalten hat, ist es auch.
  * ------------------------------------------------------------------ */
-$sm_sperre = @fopen($sm_shm . '/fetch.lock', 'c');
+$sm_sperre = @fopen($sm_shm . '/daten.lock', 'c');
 if ($sm_sperre === false) {
     // Ohne Sperrdatei lieber lesen als gar nicht lesen.
     $sm_sperre = null;
@@ -60,35 +114,6 @@ if ($sm_sperre === false) {
 }
 
 @unlink($sm_logdatei);
-
-
-/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
- *
- * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
- *
- * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
- * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
- */
-if (!function_exists('lb_wurzel_ermitteln')) {
-    function lb_wurzel_ermitteln()
-    {
-        $d = __DIR__;
-        for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
-                return $d;
-            }
-            $eltern = dirname($d);
-            if ($eltern === $d) { break; }
-            $d = $eltern;
-        }
-        return '';
-    }
-}
 
 function sm_log($text, $stufe = 'INFO')
 {
@@ -108,53 +133,41 @@ function sm_log($text, $stufe = 'INFO')
     }
 }
 
-// ------------------------------------------------------ Konfiguration
-function sm_cfg_lesen($datei)
+/**
+ * Ein Abbruch geht AUCH auf die Fehlerausgabe.
+ *
+ * Der Cron schreibt nach /dev/null, das Protokoll liegt auf der Ramdisk -
+ * ein Lauf, der mit 1 endet und nur dorthin schreibt, ist von aussen
+ * stumm. installationslage_pruefen.py meldete genau das als
+ * "Abbruch ohne Meldung, Rueckgabewert 1".
+ */
+function sm_abbruch($text)
 {
-    $alles = array();
-    if (!is_readable($datei)) {
-        return $alles;
-    }
-    $abschnitt = 'MAIN';
-    foreach ((array) @file($datei, FILE_IGNORE_NEW_LINES) as $z) {
-        $z = trim($z);
-        if ($z === '' || $z[0] === ';' || $z[0] === '#') {
-            continue;
-        }
-        if ($z[0] === '[' && substr($z, -1) === ']') {
-            $abschnitt = substr($z, 1, -1);
-            continue;
-        }
-        $pos = strpos($z, '=');
-        if ($pos === false) {
-            continue;
-        }
-        $alles[$abschnitt][trim(substr($z, 0, $pos))] = trim(substr($z, $pos + 1));
-    }
-    return $alles;
-}
-
-function sm_wert($alles, $abschnitt, $schluessel, $vorgabe = '')
-{
-    return (isset($alles[$abschnitt][$schluessel]) && $alles[$abschnitt][$schluessel] !== '')
-        ? $alles[$abschnitt][$schluessel] : $vorgabe;
-}
-
-$sm_cfg = sm_cfg_lesen($sm_cfgdatei);
-if (!$sm_cfg) {
-    sm_log('Konfiguration nicht lesbar: ' . $sm_cfgdatei, 'ERROR');
+    sm_log($text, 'ERROR');
+    fwrite(STDERR, $text . "\n");
     exit(1);
 }
 
-if (sm_wert($sm_cfg, 'MAIN', 'READ', '0') !== '1') {
+$sm_cfg = smg_cfg_lesen($sm_cfgdatei);
+if (!$sm_cfg) {
+    sm_abbruch('Konfiguration nicht lesbar: ' . $sm_cfgdatei);
+}
+
+if (smg_wert($sm_cfg, 'MAIN', 'READ', '0') !== '1') {
     sm_log('Der Legacy-Leser ist abgeschaltet (READ=0). Nichts zu tun.', 'INFO');
     exit(0);
 }
 
-$sm_sendudp  = sm_wert($sm_cfg, 'MAIN', 'SENDUDP', '0') === '1';
-$sm_udpport  = (int) sm_wert($sm_cfg, 'MAIN', 'UDPPORT', '7000');
-$sm_sendmqtt = sm_wert($sm_cfg, 'MAIN', 'SENDMQTT', '1') === '1';
-$sm_topic    = sm_wert($sm_cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter');
+/* Die Vorgaben stehen an EINER Stelle - in sm_vorgaben() der Bibliothek.
+ * Diese Datei kann sie nicht aufrufen (getrennte Baeume), sie liest
+ * deshalb dieselben Werte aus der Datei und faellt auf dieselben Vorgaben
+ * zurueck. Bis 2.3.14 stand SENDMQTT hier auf '1' und in der Oberflaeche
+ * auf '0': fehlte der Schluessel, zeigte die Oberflaeche den Haken AUS,
+ * waehrend dieser Lauf sendete. */
+$sm_sendudp  = smg_wert($sm_cfg, 'MAIN', 'SENDUDP', '0') === '1';
+$sm_udpport  = (int) smg_wert($sm_cfg, 'MAIN', 'UDPPORT', '7000');
+$sm_sendmqtt = smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '1') === '1';
+$sm_topic    = trim(smg_wert($sm_cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), '/');
 
 // ------------------------------------------------- Miniserver ermitteln
 /**
@@ -197,21 +210,6 @@ function sm_gateway_udpin($home)
 }
 
 /** Eine Zeile per UDP schicken. */
-/**
- * Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
- *
- * Das Gateway liest ZEILENWEISE. Ein Zeilenumbruch im Wert - aus einer
- * Fehlermeldung, einem Geraetenamen oder der Ausgabe eines Systembefehls -
- * zerlegt die Uebertragung, und aus den Bruchstuecken bildet das Gateway
- * erfundene Themen. Ein Tabulator schadet ebenso, weil Leerzeichen Thema und
- * Wert trennt.
- */
-function sm_mqtt_wert_saeubern($v)
-{
-    $wert = str_replace(array("\r\n", "\r", "\n", "\t"), ' ', (string) $v);
-    return trim(preg_replace('/ {2,}/', ' ', $wert));
-}
-
 function sm_udp($ziel, $port, $text)
 {
     $s = @fsockopen('udp://' . $ziel, $port, $errno, $errstr, 2);
@@ -225,6 +223,8 @@ function sm_udp($ziel, $port, $text)
 
 // ------------------------------------------------------- Hauptdurchlauf
 $sm_gelesen = 0;
+$sm_versucht = 0;
+$sm_gescheitert = 0;
 
 foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
     if ($sm_abschnitt === 'MAIN' || !isset($sm_werte['DEVICE'])) {
@@ -299,9 +299,11 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
             sm_log('UDP: kein Miniserver in general.json gefunden.', 'WARN');
         }
         foreach ($sm_ms as $sm_ziel) {
+            $sm_versucht++;
             if (sm_udp($sm_ziel, $sm_udpport, $sm_text)) {
                 sm_log('UDP an ' . $sm_ziel . ':' . $sm_udpport . ' gesendet.', 'OK');
             } else {
+                $sm_gescheitert++;
                 sm_log('UDP an ' . $sm_ziel . ':' . $sm_udpport . ' fehlgeschlagen.', 'WARN');
             }
         }
@@ -314,6 +316,7 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
             sm_log('MQTT: Kein UDP-In-Port des MQTT Gateways gefunden - uebersprungen.', 'WARN');
         } else {
             $sm_anzahl = 0;
+            $sm_fehl = 0;
             foreach ($sm_zeilen as $sm_z) {
                 if ($sm_z === '' || $sm_z[0] === '#') {
                     continue;
@@ -324,21 +327,38 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
                     continue;
                 }
                 $sm_k = preg_replace('/[^A-Za-z0-9_\.\-]/', '_', $sm_teile[1]);
-                $sm_v = $sm_teile[2];
+                $sm_v = smg_wert_saeubern($sm_teile[2]);
                 if ($sm_k === '' || $sm_v === '') {
                     continue;
                 }
                 if (sm_udp('127.0.0.1', $sm_udpin,
-                           'publish ' . $sm_topic . '/' . $sm_serial . '/' . $sm_k . ' '
-                           . sm_mqtt_wert_saeubern($sm_v))) {
+                           'publish ' . $sm_topic . '/' . $sm_serial . '/' . $sm_k . ' ' . $sm_v)) {
                     $sm_anzahl++;
+                } else {
+                    $sm_fehl++;
                 }
             }
+            $sm_versucht += $sm_anzahl + $sm_fehl;
+            $sm_gescheitert += $sm_fehl;
+            // Ein Zaehler zaehlt Zustellungen, nicht Schleifendurchlaeufe -
+            // und die Schlussmeldung nennt beides getrennt.
             sm_log('MQTT: ' . $sm_anzahl . ' Werte an ' . $sm_topic . '/' . $sm_serial
-                 . ' (Gateway-Relais 127.0.0.1:' . $sm_udpin . ')', 'OK');
+                 . ($sm_fehl ? ', ' . $sm_fehl . ' gescheitert' : '')
+                 . ' (Gateway-Relais 127.0.0.1:' . $sm_udpin . ')',
+                 $sm_fehl ? 'WARN' : 'OK');
         }
     }
 }
 
-sm_log('Durchlauf beendet, ' . $sm_gelesen . ' Lesekopf/Lesekoepfe mit Daten.', 'OK');
+/* Das Lebenszeichen. Es geht bei JEDEM abgeschlossenen Durchlauf eine
+ * Stelle weiter - auch dann, wenn kein Zaehler geantwortet hat. Ob WERTE
+ * ankamen, beantwortet der Zeitstempel Last_UpdateUnix, den sm_logger.pl
+ * nur nach einer erfolgreichen Messung schreibt. Zwei verschiedene Fragen,
+ * zwei verschiedene Groessen. */
+$sm_stand = smg_zaehler_weiter($sm_shm . '/zaehler');
+
+sm_log('Durchlauf beendet, ' . $sm_gelesen . ' Lesekopf/Lesekoepfe mit Daten, '
+     . 'Zaehler ' . $sm_stand
+     . ($sm_gescheitert ? ', ' . $sm_gescheitert . ' von ' . $sm_versucht . ' Zustellungen gescheitert' : ''),
+     $sm_gescheitert ? 'WARN' : 'OK');
 exit(0);

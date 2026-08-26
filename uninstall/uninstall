@@ -60,4 +60,65 @@ fi
 rm -f /etc/udev/rules.d/99-smartmeter.rules
 command -v udevadm >/dev/null 2>&1 && udevadm control --reload-rules >/dev/null 2>&1
 
+# ===========================================================================
+# DIE ZWEITSCHRIFTEN NEBEN DEM KONFIGURATIONSORDNER
+#
+# ERGAENZT AM 26.08.2026. Bis dahin erwaehnte dieses Skript sie mit null
+# Zeilen - gemessen.
+#
+# preupgrade.sh legt drei Dateien EINE EBENE UEBER dem Konfigurationsordner
+# an, damit sie ein Update ueberleben:
+#
+#     config/plugins/<ordner>.backup.smartmeter.cfg   <- traegt das TOKEN
+#     config/plugins/<ordner>.backup.vzlogger.json
+#     config/plugins/<ordner>.backup.vzlogger.conf
+#
+# LoxBerry entfernt beim Deinstallieren nur das VERZEICHNIS
+# config/plugins/<ordner>/. Was daneben liegt, bleibt - mit zwei Folgen:
+# ein Zugriffstoken liegt unbegrenzt im Dateisystem, und eine spaetere
+# NEUinstallation holt daraus stillschweigend die alte Konfiguration samt
+# altem Token zurueck. Eine saubere Neuinstallation waere damit keine.
+#
+# Ueberschrieben wird vor dem Loeschen. Und die Zusage dazu bleibt ehrlich:
+# auf einer Speicherkarte entscheidet der Flash-Controller selbst, wohin
+# geschrieben wird - das ERSCHWERT das Wiederfinden, es loescht nicht
+# sicher.
+# ===========================================================================
+SM_CFGDIR="$ARGV5/config/plugins"
+SM_WEG=0
+SM_UEBRIG=0
+for SM_N in smartmeter.cfg vzlogger.json vzlogger.conf; do
+	SM_Z="$SM_CFGDIR/$ARGV3.backup.$SM_N"
+	[ -f "$SM_Z" ] || continue
+	SM_GROESSE=$(wc -c < "$SM_Z" 2>/dev/null)
+	case "$SM_GROESSE" in
+		''|*[!0-9]*) SM_GROESSE=4096 ;;
+	esac
+	dd if=/dev/zero of="$SM_Z" bs=1 count="$SM_GROESSE" conv=notrunc >/dev/null 2>&1
+	rm -f "$SM_Z"
+	if [ -f "$SM_Z" ]; then
+		SM_UEBRIG=$((SM_UEBRIG + 1))
+	else
+		SM_WEG=$((SM_WEG + 1))
+	fi
+done
+
+# Nachzaehlen. "Zugangsdaten entfernt" wird nur gemeldet, wenn wirklich
+# keine Zweitschrift mehr daliegt - ein "alles entfernt" nach einem
+# fehlgeschlagenen rm waere die schlechteste Zeile dieser Datei.
+if [ "$SM_UEBRIG" -gt 0 ]; then
+	echo "<WARNING> $SM_UEBRIG Zweitschrift(en) liessen sich NICHT entfernen."
+	echo "<WARNING> Sie liegen unter $SM_CFGDIR/$ARGV3.backup.* und enthalten"
+	echo "<WARNING> das Zugriffstoken. Bitte von Hand loeschen."
+elif [ "$SM_WEG" -gt 0 ]; then
+	echo "<INFO> $SM_WEG Zweitschrift(en) ueberschrieben und entfernt."
+else
+	echo "<INFO> Es lag keine Zweitschrift neben dem Konfigurationsordner."
+fi
+
+# Der Zwischenspeicher auf der Ramdisk verschwindet beim naechsten Neustart
+# ohnehin - hier steht er trotzdem, damit eine Neuinstallation am selben Tag
+# nicht auf alten Zaehlerwerten aufsetzt.
+rm -rf "/dev/shm/$ARGV3" 2>/dev/null
+
 exit 0

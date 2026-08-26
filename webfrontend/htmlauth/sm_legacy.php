@@ -8,115 +8,31 @@
  * Dafuer gibt es in PHP kein verlaessliches Gegenstueck, und 41 Profile
  * liessen sich ohne 41 Zaehler auch nicht nachpruefen.
  *
- * Diese Datei kuemmert sich um alles davor und danach: Einstellungen,
- * Zaehlerprofile, Abfragetakt.
+ * Diese Datei kuemmert sich um alles davor und danach: Lesekoepfe,
+ * Zaehlerprofile, Abfragetakt, Suchlauf.
+ *
+ * Die Konfigurationsdatei selbst liest und schreibt sm_lib.php
+ * (sm_cfg_read/sm_cfg_write) - dort steht auch die einzige Vorgabeliste.
  */
 
 require_once __DIR__ . '/sm_lib.php';
 
-/* ==================================================================
- * smartmeter.cfg - abschnittsweise lesen und schreiben
- * ================================================================== */
-
-/**
- * Die ganze Datei als array[Abschnitt][Schluessel] = Wert.
- *
- * Nicht mit parse_ini_file: die Datei stammt von Config::Simple und darf
- * Werte ohne Anfuehrungszeichen enthalten, die PHPs INI-Leser anders
- * auslegen wuerde (etwa "on", "off", "none").
- */
 /** So lange darf eine Abfrage von Hand hoechstens dauern (Sekunden). */
 define('SM_ABFRAGE_GRENZE', 25);
 
-function sm_cfg_read()
-{
-    $datei = sm_paths()['legacy'];
-    $alles = array();
-    if (!is_readable($datei)) {
-        return $alles;
-    }
-    $abschnitt = 'MAIN';
-    foreach ((array) @file($datei, FILE_IGNORE_NEW_LINES) as $z) {
-        $z = trim($z);
-        if ($z === '' || $z[0] === ';' || $z[0] === '#') {
-            continue;
-        }
-        if ($z[0] === '[' && substr($z, -1) === ']') {
-            $abschnitt = substr($z, 1, -1);
-            if (!isset($alles[$abschnitt])) { $alles[$abschnitt] = array(); }
-            continue;
-        }
-        $pos = strpos($z, '=');
-        if ($pos === false) {
-            continue;
-        }
-        $k = trim(substr($z, 0, $pos));
-        $v = trim(substr($z, $pos + 1));
-        $alles[$abschnitt][$k] = $v;
-    }
-    return $alles;
-}
-
-/** Die ganze Datei zurueckschreiben. */
-function sm_cfg_write($alles)
-{
-    $datei = sm_paths()['legacy'];
-    $z = "; Smartmeter classic\n; Geschrieben von der Oberflaeche.\n\n";
-    // MAIN zuerst - so war die Datei schon immer aufgebaut.
-    $reihenfolge = array_merge(array('MAIN'),
-        array_diff(array_keys($alles), array('MAIN')));
-    foreach ($reihenfolge as $abschnitt) {
-        if (!isset($alles[$abschnitt]) || !is_array($alles[$abschnitt])) {
-            continue;
-        }
-        $z .= '[' . $abschnitt . "]\n";
-        foreach ($alles[$abschnitt] as $k => $v) {
-            // Zeilenumbrueche wuerden die Datei zerlegen.
-            $v = str_replace(array("\r", "\n"), '', (string) $v);
-            $z .= $k . '=' . $v . "\n";
-        }
-        $z .= "\n";
-    }
-    @mkdir(dirname($datei), 0775, true);
-    $tmp = $datei . '.tmp';
-    if (@file_put_contents($tmp, $z) === false) {
-        return false;
-    }
-    return @rename($tmp, $datei);
-}
+/** So lange darf ein einzelner Versuch des Suchlaufs dauern (Sekunden). */
+define('SM_SUCHE_GRENZE', 20);
 
 /**
  * Ein Zufallstoken fuer den unangemeldeten Endpunkt.
  *
- * Ohne mehrdeutige Zeichen (0/O, 1/l), weil man es abtippt.
+ * Der Name bleibt, weil er an mehreren Stellen steht; gebildet wird es von
+ * sm_zufall() in sm_lib.php - ein zweiter Zufallsgenerator waere eine
+ * zweite Wahrheit.
  */
 function sm_token_erzeugen($laenge = 24)
 {
-    $zeichen = 'abcdefghijkmnpqrstuvwxyz23456789';
-    $t = '';
-    for ($i = 0; $i < $laenge; $i++) {
-        $t .= $zeichen[random_int(0, strlen($zeichen) - 1)];
-    }
-    return $t;
-}
-
-/** Einzelne Werte in einem Abschnitt setzen. */
-function sm_cfg_set($abschnitt, $paare)
-{
-    $alles = sm_cfg_read();
-    if (!isset($alles[$abschnitt])) {
-        $alles[$abschnitt] = array();
-    }
-    foreach ($paare as $k => $v) {
-        $alles[$abschnitt][$k] = $v;
-    }
-    return sm_cfg_write($alles);
-}
-
-function sm_cfg_get($alles, $abschnitt, $schluessel, $vorgabe = '')
-{
-    return (isset($alles[$abschnitt][$schluessel]) && $alles[$abschnitt][$schluessel] !== '')
-        ? $alles[$abschnitt][$schluessel] : $vorgabe;
+    return sm_zufall($laenge);
 }
 
 /* ==================================================================
@@ -139,22 +55,31 @@ function sm_koepfe_anlegen()
 {
     $alles = sm_cfg_read();
     $neu = false;
+    $namen = array();
     foreach (sm_lesekoepfe() as $pfad) {
         $serial = basename($pfad);
         if (isset($alles[$serial]['DEVICE']) && $alles[$serial]['DEVICE'] !== '') {
             continue;
         }
-        $alles[$serial] = array(
-            'NAME' => $serial, 'SERIAL' => $serial, 'DEVICE' => $pfad,
-            'METER' => '0', 'PROTOCOL' => '', 'STARTBAUDRATE' => '',
-            'BAUDRATE' => '', 'TIMEOUT' => '', 'DELAY' => '',
-            'HANDSHAKE' => '', 'DATABITS' => '', 'STOPBITS' => '',
-            'PARITY' => '', 'CRC' => '',
-        );
+        // Die Feldliste steht in sm_kopf_felder() - hier stand sie ein
+        // zweites Mal ausgeschrieben. Kommt ein Feld hinzu und wird nur eine
+        // der beiden Stellen nachgezogen, bekommt ein neu angesteckter
+        // Lesekopf einen Abschnitt ohne dieses Feld, und niemand sieht warum.
+        $kopf = array();
+        foreach (sm_kopf_felder() as $sm_feld) {
+            $kopf[$sm_feld] = '';
+        }
+        $kopf['NAME']   = $serial;
+        $kopf['SERIAL'] = $serial;
+        $kopf['DEVICE'] = $pfad;
+        $kopf['METER']  = '0';
+        $alles[$serial] = $kopf;
+        $namen[] = $serial;
         $neu = true;
     }
     if ($neu) {
         sm_cfg_write($alles);
+        sm_log('Neuer Lesekopf eingetragen: ' . implode(', ', $namen));
     }
     return $neu;
 }
@@ -239,11 +164,28 @@ function sm_profile()
  * Abfragetakt (Cron)
  * ================================================================== */
 
-/** Die moeglichen Takte: Wert => (Ordner, Beschriftung) */
+/**
+ * Die moeglichen Takte: Wert => (Ordner, Beschriftung)
+ *
+ * BERICHTIGT 26.08.2026. Der Eintrag 'M' hiess "dauerhaft - der Leser
+ * laeuft staendig", und der Hilfetext daneben sagte, er lasse den Leser
+ * staendig mitlaufen. Beides war falsch. Die Kette dahinter ist drei
+ * Glieder lang und endet nach EINEM Durchlauf:
+ *
+ *   sm_cron_setzen('M')   verknuepft bin/reboot_cron_runner.sh in cron.reboot
+ *   reboot_cron_runner.sh sleep 15, dann EIN Aufruf von fetch.php
+ *   fetch.php             laeuft einmal ueber alle Lesekoepfe, dann exit(0)
+ *   sm_logger.pl          endet nach einem Durchlauf ebenfalls mit exit
+ *
+ * Der Takt liefert also einen Zaehlerstand je Neustart des LoxBerry und
+ * danach nie wieder - und in Loxone behaelt der virtuelle Eingang seinen
+ * letzten Wert, es sieht also aus wie ein ruhiger Tag. Der Eintrag heisst
+ * deshalb jetzt, was er tut.
+ */
 function sm_takte()
 {
     return array(
-        'M'  => array('',              sm_t('TAKT.DAUERHAFT')),
+        'M'  => array('',              sm_t('TAKT.START')),
         '1'  => array('cron.01min',    sm_t('TAKT.MIN01')),
         '3'  => array('cron.03min',    sm_t('TAKT.MIN03')),
         '5'  => array('cron.05min',    sm_t('TAKT.MIN05')),
@@ -252,6 +194,29 @@ function sm_takte()
         '30' => array('cron.30min',    sm_t('TAKT.MIN30')),
         '60' => array('cron.hourly',   sm_t('TAKT.STUENDLICH')),
     );
+}
+
+/**
+ * Ab wann gilt ein Messwert als zu alt?
+ *
+ * Eine Grenze, zwei Verbraucher - der Endpunkt, der OK und ALTER an Loxone
+ * liefert, und der Reiter Test, der dieselbe Frage beantwortet. Gerechnet
+ * wird sie in bin/sm_gemein.php, weil der Endpunkt in einem anderen Baum
+ * liegt und diese Datei nicht einbinden kann.
+ *
+ * Und wenn der gemeinsame Vorlauf fehlt, gilt KEINE Ersatzgrenze: wer die
+ * Grenze nicht kennt, faellt kein Altersurteil. Eine Untergrenze waere hier
+ * kein Fail safe, sondern ein Zuschlagen, sobald der echte Wert groesser
+ * ist.
+ */
+function sm_alter_grenze()
+{
+    if (!function_exists('smg_alter_grenze')) {
+        return 0;
+    }
+    $cfg = sm_legacy_read();
+    $vz  = sm_vz_read();
+    return smg_alter_grenze($cfg['CRON'], !empty($vz['enabled']));
 }
 
 /** Alle Ordner, in denen eine Verknuepfung liegen koennte. */
@@ -293,6 +258,7 @@ function sm_cron_setzen($lesen, $takt)
         }
     }
     if (!$lesen) {
+        sm_log('Klassischer Leser abgeschaltet, Cron-Eintraege entfernt.');
         return array(true, sm_t('CRON.ABGESCHALTET'));
     }
 
@@ -318,6 +284,7 @@ function sm_cron_setzen($lesen, $takt)
     if (!@symlink($quelle, $ziel)) {
         return array(false, sprintf(sm_t('CRON.LINK_FEHLER'), $ziel));
     }
+    sm_log('Abfragetakt gesetzt: ' . $takt . ' (' . $ziel . ')');
     return array(true, sprintf(sm_t('CRON.GESETZT'), strip_tags($takte[$takt][1])));
 }
 
@@ -340,12 +307,70 @@ function sm_cron_ist()
     return '';
 }
 
+/**
+ * Liegt der eigene Cron-Eintrag da, und ist er eine DATEI?
+ *
+ * Ein Plugin muss seinen eigenen Cron-Eintrag pruefen: es kann vollstaendig
+ * installiert dastehen, alle Selbstpruefungen gruen, und trotzdem nichts
+ * tun, weil der Eintrag an der falschen Stelle liegt. Die Oberflaeche
+ * meldet dann nichts, weil sie gar nicht hinsieht.
+ *
+ * Rueckgabe: array(zustand, Text). zustand ist 1 (Haken), 0 (Kreuz) oder
+ * 2 (Strich - nicht feststellbar).
+ */
+function sm_cron_lage()
+{
+    $p = sm_paths();
+    $cfg = sm_legacy_read();
+    $vz  = sm_vz_read();
+    $basis = $p['home'] . '/system/cron/';
+    if ($p['home'] === '' || !is_dir($basis)) {
+        return array(2, sm_t('CRON.LAGE_UNBEKANNT'));
+    }
+    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
+
+    // Der vzLogger-Weg haengt an cron/crontab, nicht an einer Verknuepfung.
+    // Der klassische Weg haengt an genau einer Verknuepfung.
+    $gefunden = array();
+    $verzeichnisse = array();
+    foreach (sm_cron_ordner() as $ordner) {
+        $ziel = $basis . $ordner . '/' . $name;
+        if (is_dir($ziel) && !is_link($ziel)) {
+            $verzeichnisse[] = $ordner;
+        } elseif (is_link($ziel) || is_file($ziel)) {
+            $gefunden[] = $ordner;
+        }
+    }
+    if ($verzeichnisse) {
+        // cron/cron.XXmin ist eine DATEI, kein Verzeichnis - LoxBerry fuehrt
+        // in diesen Ordnern nur Dateien aus.
+        return array(0, sprintf(sm_t('CRON.LAGE_VERZEICHNIS'), implode(', ', $verzeichnisse)));
+    }
+    if ($cfg['READ'] !== '1') {
+        if ($gefunden) {
+            return array(0, sprintf(sm_t('CRON.LAGE_UEBERZAEHLIG'), implode(', ', $gefunden)));
+        }
+        return array(1, sm_t('CRON.LAGE_AUS'));
+    }
+    if (!$gefunden) {
+        return array(0, sm_t('CRON.LAGE_FEHLT'));
+    }
+    if (count($gefunden) > 1) {
+        return array(0, sprintf(sm_t('CRON.LAGE_MEHRFACH'), implode(', ', $gefunden)));
+    }
+    $soll = ($cfg['CRON'] === 'M') ? 'cron.reboot' : sm_takte()[$cfg['CRON']][0];
+    if ($gefunden[0] !== $soll) {
+        return array(0, sprintf(sm_t('CRON.LAGE_FALSCH'), $gefunden[0], $soll));
+    }
+    return array(1, sprintf(sm_t('CRON.LAGE_OK'), $gefunden[0]));
+}
+
 /** Laeuft der Legacy-Leser gerade? */
 function sm_logger_pid()
 {
     list(, $roh) = sm_sh('pgrep -f sm_logger.pl');
     foreach (preg_split('/\s+/', trim($roh)) as $pid) {
-        if ($pid !== '' && ctype_digit($pid) && is_dir('/proc/' . $pid)) {
+        if ($pid !== '' && preg_match('/^[0-9]+$/', $pid) && is_dir('/proc/' . $pid)) {
             return $pid;
         }
     }
@@ -360,6 +385,7 @@ function sm_cache_leeren()
     foreach ((array) glob($p['shm'] . '/*') as $f) {
         if (is_file($f) && @unlink($f)) { $n++; }
     }
+    sm_log('Zwischenspeicher geleert, ' . $n . ' Datei(en) entfernt.');
     return $n;
 }
 
@@ -377,12 +403,6 @@ function sm_manuell_abfragen()
      * haengt sm_logger.pl, das je nach Zaehlerprofil bis zu 120 Sekunden
      * lauscht. Ein Webserver bricht die Anfrage lange vorher ab - der Benutzer
      * sieht dann einen 504 statt einer Auskunft.
-     *
-     * Der eigentliche Grund fuer die langen Laufzeiten war ein Fehler in der
-     * Leseschleife (siehe READ_SERIAL in sm_logger.pl): sie endete nie von
-     * selbst, jede Abfrage dauerte deshalb IMMER die volle Zeitgrenze. Das ist
-     * behoben. Die Grenze hier bleibt trotzdem - ein Lesekopf, der gar nicht
-     * mehr antwortet, darf die Oberflaeche nicht mitnehmen.
      *
      * timeout gehoert zu den coreutils und ist auf jedem Debian vorhanden;
      * fehlt es wider Erwarten, wird ohne Grenze aufgerufen statt gar nicht.
@@ -426,4 +446,167 @@ function sm_werte($serial)
         $paare[] = array($teile[1], $teile[2]);
     }
     return $paare;
+}
+
+/* ==================================================================
+ * Suchlauf: welches Zaehlerprofil passt?
+ *
+ * Der Anwender steht sonst vor einer Liste mit 45 Eintraegen und muss
+ * raten. Raet er falsch, laeuft die Abfrage bis zur Zeitgrenze des Profils
+ * und liefert nichts - ohne einen Hinweis, was als Naechstes zu tun waere.
+ *
+ * Gebaut wird nichts Neues: bin/sm_logger.pl nimmt ueber GetOptions jeden
+ * Parameter einzeln entgegen, und bin/fetch.php reicht genau diese zehn
+ * Werte schon durch, wenn das Profil "manual" gewaehlt ist.
+ *
+ * Der Suchlauf SCHLAEGT VOR, er uebernimmt nicht: der erste Klick zeigt,
+ * der zweite schreibt. Und was mehrdeutig bleibt - zwei Wege liefern beide
+ * etwas - bleibt offen und wird als offen benannt.
+ * ================================================================== */
+
+/**
+ * Die Wege, die der Suchlauf probiert.
+ *
+ * Vier allgemeine Faelle, keine Geraeteprofile: die 41 Modelle
+ * unterscheiden sich fast nur in Zeitgrenzen und Wartezeiten, und ein
+ * Suchlauf ueber 41 Profile mit je bis zu 120 Sekunden waere kein
+ * Suchlauf, sondern ein Nachmittag.
+ */
+function sm_suche_wege()
+{
+    return array(
+        array('bez' => 'SUCHE.W_SML9600', 'protocol' => 'genericsml',
+              'startbaudrate' => 9600, 'baudrate' => 9600,
+              'databits' => 8, 'parity' => 'none'),
+        array('bez' => 'SUCHE.W_SML300', 'protocol' => 'genericsml',
+              'startbaudrate' => 300, 'baudrate' => 300,
+              'databits' => 7, 'parity' => 'even'),
+        array('bez' => 'SUCHE.W_D09600', 'protocol' => 'genericd0',
+              'startbaudrate' => 9600, 'baudrate' => 9600,
+              'databits' => 8, 'parity' => 'none'),
+        array('bez' => 'SUCHE.W_D0300', 'protocol' => 'genericd0',
+              'startbaudrate' => 300, 'baudrate' => 9600,
+              'databits' => 7, 'parity' => 'even'),
+    );
+}
+
+/**
+ * Einen Lesekopf durchprobieren.
+ *
+ * Rueckgabe: array(Zeilen fuer die Anzeige, Vorschlag oder '').
+ *
+ * Er laeuft NICHT, solange ein Leser eingeschaltet ist: zwei Prozesse
+ * koennen sich eine serielle Schnittstelle nicht teilen, und das Ergebnis
+ * waere Bruchstueckwerk aus beiden.
+ */
+function sm_suchlauf($device)
+{
+    $p = sm_paths();
+    $zeilen = array();
+    $vorschlag = '';
+    $treffer = array();
+
+    if ($device === '' || !file_exists($device)) {
+        return array(array(sprintf(sm_t('SUCHE.KEIN_GERAET'), sm_e($device))), '');
+    }
+    $vz = sm_vz_read();
+    if ($vz['enabled'] || sm_legacy_aktiv()) {
+        return array(array(sm_t('SUCHE.LESER_LAEUFT')), '');
+    }
+    $belegt = sm_vz_device_busy($device);
+    if ($belegt !== '') {
+        return array(array(sprintf(sm_t('SUCHE.BELEGT'), sm_e($device), sm_e($belegt))), '');
+    }
+    $logger = $p['bin'] . '/sm_logger.pl';
+    if (!is_readable($logger)) {
+        return array(array(sprintf(sm_t('LG.FETCH_FEHLT'), $logger)), '');
+    }
+
+    $vor = '';
+    list($rc_t, ) = sm_sh('command -v timeout');
+    if ($rc_t === 0) {
+        $vor = 'timeout -k 5 ' . SM_SUCHE_GRENZE . ' ';
+    }
+    $serial = basename($device);
+    $datendatei = $p['shm'] . '/' . $serial . '.data';
+
+    foreach (sm_suche_wege() as $w) {
+        // Der vorige Stand darf das Ergebnis nicht faelschen.
+        @unlink($datendatei);
+        $b = escapeshellarg($logger)
+           . ' --device ' . escapeshellarg($device)
+           . ' --protocol ' . escapeshellarg($w['protocol'])
+           . ' --startbaudrate ' . (int) $w['startbaudrate']
+           . ' --baudrate ' . (int) $w['baudrate']
+           . ' --databits ' . (int) $w['databits']
+           . ' --parity ' . escapeshellarg($w['parity'])
+           . ' --timeout ' . (int) (SM_SUCHE_GRENZE - 5);
+        $start = microtime(true);
+        sm_sh($vor . 'perl ' . $b);
+        $dauer = round(microtime(true) - $start, 1);
+
+        $werte = sm_werte($serial);
+        // Last_Update und Last_UpdateLoxEpoche schreibt der Leser IMMER -
+        // sie sind kein Beleg dafuer, dass ein Telegramm ankam. Gezaehlt
+        // werden nur die gemessenen Groessen.
+        $echte = array();
+        foreach ($werte as $pv) {
+            if (strncmp($pv[0], 'Last_Update', 11) !== 0) {
+                $echte[] = $pv[0];
+            }
+        }
+        if ($echte) {
+            $treffer[] = $w;
+            $zeilen[] = sprintf(sm_t('SUCHE.TREFFER'), sm_t($w['bez']), $dauer,
+                count($echte), implode(', ', array_slice($echte, 0, 6)));
+        } else {
+            $zeilen[] = sprintf(sm_t('SUCHE.NICHTS'), sm_t($w['bez']), $dauer);
+        }
+    }
+    @unlink($datendatei);
+
+    if (count($treffer) === 1) {
+        $vorschlag = $treffer[0]['protocol'];
+        $zeilen[] = '';
+        $zeilen[] = sprintf(sm_t('SUCHE.VORSCHLAG'), sm_t($treffer[0]['bez']));
+    } elseif (count($treffer) > 1) {
+        // Mehrdeutig bleibt mehrdeutig. Wer hier einen der beiden waehlt,
+        // waehlt ihn fuer den Anwender, ohne es zu wissen.
+        $namen = array();
+        foreach ($treffer as $t) { $namen[] = sm_t($t['bez']); }
+        $zeilen[] = '';
+        $zeilen[] = sprintf(sm_t('SUCHE.MEHRDEUTIG'), implode(', ', $namen));
+    } else {
+        $zeilen[] = '';
+        $zeilen[] = sm_t('SUCHE.NICHTS_GEFUNDEN');
+    }
+    sm_log('Suchlauf an ' . $device . ': ' . count($treffer) . ' von '
+         . count(sm_suche_wege()) . ' Wegen lieferten Werte.');
+    return array($zeilen, $vorschlag);
+}
+
+/**
+ * Der letzte Mitschnitt eines Lesekopfs.
+ *
+ * bin/sm_logger.pl schreibt bei jedem Lauf die rohen Bytes nach
+ * <serial>.dump - bei SML als Hex. Die Oberflaeche hat ihn bis 2.3.14 nie
+ * gezeigt, obwohl jede Fehlersuche, die ueber "es kommt nichts" hinausgeht,
+ * genau daran haengt.
+ *
+ * Der Puffer darf bis 1 MiB wachsen; angezeigt wird ein Ausschnitt.
+ */
+function sm_mitschnitt($serial, $grenze = 4000)
+{
+    $datei = sm_paths()['shm'] . '/' . $serial . '.dump';
+    if (!is_readable($datei)) {
+        return array('', 0);
+    }
+    $gross = (int) filesize($datei);
+    $fp = @fopen($datei, 'rb');
+    if ($fp === false) {
+        return array('', $gross);
+    }
+    $text = (string) fread($fp, $grenze);
+    fclose($fp);
+    return array($text, $gross);
 }

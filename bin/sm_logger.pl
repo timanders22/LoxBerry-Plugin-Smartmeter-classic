@@ -37,6 +37,13 @@ use DateTime::TimeZone;
 ################################
 
 ### Defaults
+# Die drei Namen der Datendatei stehen auf DATEIEBENE, nicht in
+# DATA_OEFFNEN: ein "our" im Rumpf einer Funktion gilt lexikalisch nur
+# dort, und die beiden anderen Funktionen sehen die Deklaration dann
+# nicht. Ohne "use strict" faellt das nicht auf - der Pruefstand
+# Pruefung-Smartmeter-classic-2.3.14/logger_zeitstempel.pl hat es beim
+# ersten Lauf gemeldet, weil er selbst streng uebersetzt.
+our ($sm_datendatei, $sm_datentmp, $sm_gemessen);
 our $verbose = 0;
 our $device = "";
 our $serial = "";
@@ -1217,17 +1224,60 @@ sub INITIALIZE_PORT
 
 sub DATA_OEFFNEN
 {
-	our $sm_datendatei = "/dev/shm/$psubfolder/$serial" . ".data";
-	our $sm_datentmp   = $sm_datendatei . ".tmp." . $$;
+	$sm_datendatei = "/dev/shm/$psubfolder/$serial" . ".data";
+	$sm_datentmp   = $sm_datendatei . ".tmp." . $$;
 	if (!open(F, ">$sm_datentmp")) {
 		&LOG ("Datendatei nicht schreibbar: $sm_datentmp", "ERROR");
 		return 0;
 	}
+	# Der Zaehler der wirklich geschriebenen Messwerte beginnt bei jedem
+	# Oeffnen neu.
+	$sm_gemessen = 0;
+	return 1;
+}
+
+################################
+### SUB: einen gemessenen Wert schreiben
+###
+### Bis 2.3.14 stand die Bedingung "nur schreiben, wenn nicht leer" an 99
+### Stellen ausgeschrieben. Jetzt steht sie einmal hier - und nebenbei
+### zaehlt sie mit, wie viele Werte ein Durchlauf wirklich gebracht hat.
+### Genau diese Zahl entscheidet, ob Last_UpdateUnix entsteht.
+################################
+
+sub DATA_WERT
+{
+	my ($name, $wert) = @_;
+	return 0 if !defined $wert || $wert eq "";
+	print F "$serial:$name:$wert" . "\n";
+	$sm_gemessen++;
 	return 1;
 }
 
 sub DATA_SCHLIESSEN
 {
+	my ($lesbar, $loxepoche) = @_;
+
+	# Die Zeitstempel stehen am ENDE, weil erst dann feststeht, ob ueberhaupt
+	# etwas gemessen wurde. Fuer Loxone ist die Reihenfolge gleichgueltig -
+	# dort wird nach dem Feldnamen gesucht, nicht nach der Zeile.
+	print F "$serial:Last_Update:$lesbar" . "\n"                 if defined $lesbar;
+	print F "$serial:Last_UpdateLoxEpoche:$loxepoche" . "\n"     if defined $loxepoche;
+
+	# Last_UpdateUnix ist der Zeitstempel der MESSUNG, nicht des
+	# Schreibvorgangs. Der Endpunkt rechnet daraus das ALTER zur Lesezeit.
+	# Hat dieser Durchlauf keinen einzigen Wert gebracht, entsteht er NICHT:
+	# ein Zeitstempel ohne Messung dahinter meldet "gerade eben gemessen",
+	# waehrend seit Stunden nichts ankommt - die stille Falschaussage in
+	# Reinform. Der alte Wert bleibt dann in der vorigen Datei stehen, und
+	# das Alter waechst. Das ist die wahre Aussage: die Werte sind alt,
+	# nicht weg.
+	if ( $sm_gemessen > 0 ) {
+		print F "$serial:Last_UpdateUnix:" . time() . "\n";
+	} else {
+		&LOG("Kein einziger Messwert in diesem Durchlauf - Last_UpdateUnix wird NICHT geschrieben.", "WARN");
+	}
+
 	close (F);
 	if (!rename($sm_datentmp, $sm_datendatei)) {
 		&LOG ("Datendatei liess sich nicht umbenennen: $sm_datentmp", "ERROR");
@@ -1525,117 +1575,111 @@ sub PARSE_DUMP
 	if ( $type eq "HEAT" ) {
 
 		&DATA_OEFFNEN();
-		print F "$serial:Last_Update:$datereadable\n";
-		print F "$serial:Last_UpdateLoxEpoche:$epoche_time_lox\n";
-		print F "$serial:Consumption_Total_OBIS_6.8.0:$readingconsT0\n"             if ( $readingconsT0 ne "" );
-		print F "$serial:Consumption_Tarif1_OBIS_6.8.1:$readingconsT1\n"            if ( $readingconsT1 ne "" );
-		print F "$serial:Consumption_Tarif2_OBIS_6.8.2:$readingconsT2\n"            if ( $readingconsT2 ne "" );
-		print F "$serial:Consumption_Tarif3_OBIS_6.8.3:$readingconsT3\n"            if ( $readingconsT3 ne "" );
-		print F "$serial:Consumption_Tarif4_OBIS_6.8.4:$readingconsT4\n"            if ( $readingconsT4 ne "" );
-		print F "$serial:Consumption_Tarif5_OBIS_6.8.5:$readingconsT5\n"            if ( $readingconsT5 ne "" );
-		print F "$serial:Consumption_Tarif6_OBIS_6.8.6:$readingconsT6\n"            if ( $readingconsT6 ne "" );
-		print F "$serial:Consumption_Tarif7_OBIS_6.8.7:$readingconsT7\n"            if ( $readingconsT7 ne "" );
-		print F "$serial:Consumption_Tarif8_OBIS_6.8.8:$readingconsT8\n"            if ( $readingconsT8 ne "" );
-		print F "$serial:Consumption_Tarif9_OBIS_6.8.9:$readingconsT9\n"            if ( $readingconsT9 ne "" );
-		print F "$serial:Consumption_CalculatedPower_OBIS_1.99.0:$powercalccons\n"  if ( $powercalccons ne "" );
-		print F "$serial:Max_Power_OBIS_6.6.0:$power1\n"                            if ( $power1 ne "" );
-		print F "$serial:Volume_OBIS_6.26.0:$volume1\n"                             if ( $volume1 ne "" );
-		print F "$serial:Hour_OBIS_6.31.0:$hour1\n"                                 if ( $hour1 ne "" );
-		print F "$serial:Hour_OBIS_6.32.0:$hour2\n"                                 if ( $hour2 ne "" );
-		print F "$serial:Hour_OBIS_9.31.0:$hour3\n"                                 if ( $hour3 ne "" );
-		print F "$serial:Flow_OBIS_6.33.0:$flow1\n"                                 if ( $flow1 ne "" );
-		print F "$serial:Heating_Flow_OBIS_9.4:$heating_flow\n"                     if ( $heating_flow ne "" );
-		print F "$serial:Heating_Return_OBIS_9.4:$heating_return\n"                 if ( $heating_return ne "" );
-		&DATA_SCHLIESSEN();
+				&DATA_WERT("Consumption_Total_OBIS_6.8.0", $readingconsT0);
+		&DATA_WERT("Consumption_Tarif1_OBIS_6.8.1", $readingconsT1);
+		&DATA_WERT("Consumption_Tarif2_OBIS_6.8.2", $readingconsT2);
+		&DATA_WERT("Consumption_Tarif3_OBIS_6.8.3", $readingconsT3);
+		&DATA_WERT("Consumption_Tarif4_OBIS_6.8.4", $readingconsT4);
+		&DATA_WERT("Consumption_Tarif5_OBIS_6.8.5", $readingconsT5);
+		&DATA_WERT("Consumption_Tarif6_OBIS_6.8.6", $readingconsT6);
+		&DATA_WERT("Consumption_Tarif7_OBIS_6.8.7", $readingconsT7);
+		&DATA_WERT("Consumption_Tarif8_OBIS_6.8.8", $readingconsT8);
+		&DATA_WERT("Consumption_Tarif9_OBIS_6.8.9", $readingconsT9);
+		&DATA_WERT("Consumption_CalculatedPower_OBIS_1.99.0", $powercalccons);
+		&DATA_WERT("Max_Power_OBIS_6.6.0", $power1);
+		&DATA_WERT("Volume_OBIS_6.26.0", $volume1);
+		&DATA_WERT("Hour_OBIS_6.31.0", $hour1);
+		&DATA_WERT("Hour_OBIS_6.32.0", $hour2);
+		&DATA_WERT("Hour_OBIS_9.31.0", $hour3);
+		&DATA_WERT("Flow_OBIS_6.33.0", $flow1);
+		&DATA_WERT("Heating_Flow_OBIS_9.4", $heating_flow);
+		&DATA_WERT("Heating_Return_OBIS_9.4", $heating_return);
+		&DATA_SCHLIESSEN($datereadable, $epoche_time_lox);
 
 	}
 	elsif ( $type eq "FLANDERS" ) {
 	
 		&DATA_OEFFNEN();
-		print F "$serial:Last_Update:$datereadable\n";
-		print F "$serial:Last_UpdateLoxEpoche:$epoche_time_lox\n";
-		print F "$serial:Consumption_Total_OBIS_1.8.0:$readingconsT0\n"             if ( $readingconsT0 ne "" );
-		print F "$serial:Consumption_Tarif1_OBIS_1.8.1:$readingconsT1\n"            if ( $readingconsT1 ne "" );
-		print F "$serial:Consumption_Tarif2_OBIS_1.8.2:$readingconsT2\n"            if ( $readingconsT2 ne "" );
-		print F "$serial:Consumption_Tarif3_OBIS_1.8.3:$readingconsT3\n"            if ( $readingconsT3 ne "" );
-		print F "$serial:Consumption_Tarif4_OBIS_1.8.4:$readingconsT4\n"            if ( $readingconsT4 ne "" );
-		print F "$serial:Consumption_Tarif5_OBIS_1.8.5:$readingconsT5\n"            if ( $readingconsT5 ne "" );
-		print F "$serial:Consumption_Tarif6_OBIS_1.8.6:$readingconsT6\n"            if ( $readingconsT6 ne "" );
-		print F "$serial:Consumption_Tarif7_OBIS_1.8.7:$readingconsT7\n"            if ( $readingconsT7 ne "" );
-		print F "$serial:Consumption_Tarif8_OBIS_1.8.8:$readingconsT8\n"            if ( $readingconsT8 ne "" );
-		print F "$serial:Consumption_Tarif9_OBIS_1.8.9:$readingconsT9\n"            if ( $readingconsT9 ne "" );
-		print F "$serial:Consumption_CalculatedPower_OBIS_1.99.0:$powercalccons\n"  if ( $powercalccons ne "" );
-		print F "$serial:Consumption_Power_OBIS_1.7.0:$power1\n"                    if ( $power1 ne "" );
-		print F "$serial:Consumption_Power_L1_OBIS_21.7.0:$power5\n"                if ( $power5 ne "" );
-		print F "$serial:Consumption_Power_L2_OBIS_41.7.0:$power6\n"                if ( $power6 ne "" );
-		print F "$serial:Consumption_Power_L3_OBIS_61.7.0:$power7\n"                if ( $power7 ne "" );
-		print F "$serial:Delivery_Total_OBIS_2.8.0:$readingdelT0\n"                 if ( $readingdelT0 ne "" );
-		print F "$serial:Delivery_Tarif1_OBIS_2.8.1:$readingdelT1\n"                if ( $readingdelT1 ne "" );
-		print F "$serial:Delivery_Tarif2_OBIS_2.8.2:$readingdelT2\n"                if ( $readingdelT2 ne "" );
-		print F "$serial:Delivery_Tarif3_OBIS_2.8.3:$readingdelT3\n"                if ( $readingdelT3 ne "" );
-		print F "$serial:Delivery_Tarif4_OBIS_2.8.4:$readingdelT4\n"                if ( $readingdelT4 ne "" );
-		print F "$serial:Delivery_Tarif5_OBIS_2.8.5:$readingdelT5\n"                if ( $readingdelT5 ne "" );
-		print F "$serial:Delivery_Tarif6_OBIS_2.8.6:$readingdelT6\n"                if ( $readingdelT6 ne "" );
-		print F "$serial:Delivery_Tarif7_OBIS_2.8.7:$readingdelT7\n"                if ( $readingdelT7 ne "" );
-		print F "$serial:Delivery_Tarif8_OBIS_2.8.8:$readingdelT8\n"                if ( $readingdelT8 ne "" );
-		print F "$serial:Delivery_Tarif9_OBIS_2.8.9:$readingdelT9\n"                if ( $readingdelT9 ne "" );
-		print F "$serial:Delivery_CalculatedPower_OBIS_2.99.0:$powercalcdel\n"      if ( $powercalcdel ne "" );
-		print F "$serial:Delivery_Power_OBIS_2.7.0:$power2\n"                       if ( $power2 ne "" );
-		print F "$serial:Total_Power_OBIS_15.7.0:$power3\n"                         if ( $power3 ne "" );
-		print F "$serial:Total_Power_OBIS_16.7.0:$power4\n"                         if ( $power4 ne "" );
-		print F "$serial:Instantaneous_Voltage_L1_32.7.0:$volt1\n"                  if ( $volt1 ne "" );
-		print F "$serial:Instantaneous_Voltage_L2_52.7.0:$volt2\n"                  if ( $volt2 ne "" );
-		print F "$serial:Instantaneous_Voltage_L3_72.7.0:$volt3\n"                  if ( $volt3 ne "" );
-		print F "$serial:Instantaneous_Current_L1_31.7.0:$current1\n"               if ( $current1 ne "" );
-		print F "$serial:Instantaneous_Current_L2_51.7.0:$current2\n"               if ( $current2 ne "" );
-		print F "$serial:Instantaneous_Current_L3_71.7.0:$current3\n"               if ( $current3 ne "" );
-		print F "$serial:Equipment_Identifier_96.1.1:$eid\n"                        if ( $eid ne "" );
-		print F "$serial:Version_Information_96.1.4:$version\n"                     if ( $version ne "" );
-		print F "$serial:Tarif_Indicator_Electricity_96.14.0:$currenttarif\n"       if ( $currenttarif ne "" );
-		print F "$serial:Breaker_State_Electricity_96.1.4:$breakerstate\n"          if ( $breakerstate ne "" );
-		print F "$serial:Text_Message_96.13.0:$messagetext\n"                       if ( $messagetext ne "" );
-		print F "$serial:Message_Code_96.13.1:$messagecode\n"                       if ( $messagecode ne "" );
-		&DATA_SCHLIESSEN();
+				&DATA_WERT("Consumption_Total_OBIS_1.8.0", $readingconsT0);
+		&DATA_WERT("Consumption_Tarif1_OBIS_1.8.1", $readingconsT1);
+		&DATA_WERT("Consumption_Tarif2_OBIS_1.8.2", $readingconsT2);
+		&DATA_WERT("Consumption_Tarif3_OBIS_1.8.3", $readingconsT3);
+		&DATA_WERT("Consumption_Tarif4_OBIS_1.8.4", $readingconsT4);
+		&DATA_WERT("Consumption_Tarif5_OBIS_1.8.5", $readingconsT5);
+		&DATA_WERT("Consumption_Tarif6_OBIS_1.8.6", $readingconsT6);
+		&DATA_WERT("Consumption_Tarif7_OBIS_1.8.7", $readingconsT7);
+		&DATA_WERT("Consumption_Tarif8_OBIS_1.8.8", $readingconsT8);
+		&DATA_WERT("Consumption_Tarif9_OBIS_1.8.9", $readingconsT9);
+		&DATA_WERT("Consumption_CalculatedPower_OBIS_1.99.0", $powercalccons);
+		&DATA_WERT("Consumption_Power_OBIS_1.7.0", $power1);
+		&DATA_WERT("Consumption_Power_L1_OBIS_21.7.0", $power5);
+		&DATA_WERT("Consumption_Power_L2_OBIS_41.7.0", $power6);
+		&DATA_WERT("Consumption_Power_L3_OBIS_61.7.0", $power7);
+		&DATA_WERT("Delivery_Total_OBIS_2.8.0", $readingdelT0);
+		&DATA_WERT("Delivery_Tarif1_OBIS_2.8.1", $readingdelT1);
+		&DATA_WERT("Delivery_Tarif2_OBIS_2.8.2", $readingdelT2);
+		&DATA_WERT("Delivery_Tarif3_OBIS_2.8.3", $readingdelT3);
+		&DATA_WERT("Delivery_Tarif4_OBIS_2.8.4", $readingdelT4);
+		&DATA_WERT("Delivery_Tarif5_OBIS_2.8.5", $readingdelT5);
+		&DATA_WERT("Delivery_Tarif6_OBIS_2.8.6", $readingdelT6);
+		&DATA_WERT("Delivery_Tarif7_OBIS_2.8.7", $readingdelT7);
+		&DATA_WERT("Delivery_Tarif8_OBIS_2.8.8", $readingdelT8);
+		&DATA_WERT("Delivery_Tarif9_OBIS_2.8.9", $readingdelT9);
+		&DATA_WERT("Delivery_CalculatedPower_OBIS_2.99.0", $powercalcdel);
+		&DATA_WERT("Delivery_Power_OBIS_2.7.0", $power2);
+		&DATA_WERT("Total_Power_OBIS_15.7.0", $power3);
+		&DATA_WERT("Total_Power_OBIS_16.7.0", $power4);
+		&DATA_WERT("Instantaneous_Voltage_L1_32.7.0", $volt1);
+		&DATA_WERT("Instantaneous_Voltage_L2_52.7.0", $volt2);
+		&DATA_WERT("Instantaneous_Voltage_L3_72.7.0", $volt3);
+		&DATA_WERT("Instantaneous_Current_L1_31.7.0", $current1);
+		&DATA_WERT("Instantaneous_Current_L2_51.7.0", $current2);
+		&DATA_WERT("Instantaneous_Current_L3_71.7.0", $current3);
+		&DATA_WERT("Equipment_Identifier_96.1.1", $eid);
+		&DATA_WERT("Version_Information_96.1.4", $version);
+		&DATA_WERT("Tarif_Indicator_Electricity_96.14.0", $currenttarif);
+		&DATA_WERT("Breaker_State_Electricity_96.1.4", $breakerstate);
+		&DATA_WERT("Text_Message_96.13.0", $messagetext);
+		&DATA_WERT("Message_Code_96.13.1", $messagecode);
+		&DATA_SCHLIESSEN($datereadable, $epoche_time_lox);
 
 	}	else {
 
 		&DATA_OEFFNEN();
-		print F "$serial:Last_Update:$datereadable\n";
-		print F "$serial:Last_UpdateLoxEpoche:$epoche_time_lox\n";
-		print F "$serial:Consumption_Total_OBIS_1.8.0:$readingconsT0\n"             if ( $readingconsT0 ne "" );
-		print F "$serial:Consumption_Tarif1_OBIS_1.8.1:$readingconsT1\n"            if ( $readingconsT1 ne "" );
-		print F "$serial:Consumption_Tarif2_OBIS_1.8.2:$readingconsT2\n"            if ( $readingconsT2 ne "" );
-		print F "$serial:Consumption_Tarif3_OBIS_1.8.3:$readingconsT3\n"            if ( $readingconsT3 ne "" );
-		print F "$serial:Consumption_Tarif4_OBIS_1.8.4:$readingconsT4\n"            if ( $readingconsT4 ne "" );
-		print F "$serial:Consumption_Tarif5_OBIS_1.8.5:$readingconsT5\n"            if ( $readingconsT5 ne "" );
-		print F "$serial:Consumption_Tarif6_OBIS_1.8.6:$readingconsT6\n"            if ( $readingconsT6 ne "" );
-		print F "$serial:Consumption_Tarif7_OBIS_1.8.7:$readingconsT7\n"            if ( $readingconsT7 ne "" );
-		print F "$serial:Consumption_Tarif8_OBIS_1.8.8:$readingconsT8\n"            if ( $readingconsT8 ne "" );
-		print F "$serial:Consumption_Tarif9_OBIS_1.8.9:$readingconsT9\n"            if ( $readingconsT9 ne "" );
-		print F "$serial:Consumption_CalculatedPower_OBIS_1.99.0:$powercalccons\n"  if ( $powercalccons ne "" );
-		print F "$serial:Consumption_Power_OBIS_1.7.0:$power1\n"                    if ( $power1 ne "" );
-		print F "$serial:Consumption_Power_L1_OBIS_21.7.0:$power5\n"                if ( $power5 ne "" );
-		print F "$serial:Consumption_Power_L2_OBIS_41.7.0:$power6\n"                if ( $power6 ne "" );
-		print F "$serial:Consumption_Power_L3_OBIS_61.7.0:$power7\n"                if ( $power7 ne "" );
-		print F "$serial:Consumption_Power_L1_OBIS_36.7.0:$power8\n"                if ( $power8 ne "" );
-		print F "$serial:Consumption_Power_L2_OBIS_56.7.0:$power9\n"                if ( $power9 ne "" );
-		print F "$serial:Consumption_Power_L3_OBIS_76.7.0:$power10\n"               if ( $power10 ne "" );
-		print F "$serial:Delivery_Total_OBIS_2.8.0:$readingdelT0\n"                 if ( $readingdelT0 ne "" );
-		print F "$serial:Delivery_Tarif1_OBIS_2.8.1:$readingdelT1\n"                if ( $readingdelT1 ne "" );
-		print F "$serial:Delivery_Tarif2_OBIS_2.8.2:$readingdelT2\n"                if ( $readingdelT2 ne "" );
-		print F "$serial:Delivery_Tarif3_OBIS_2.8.3:$readingdelT3\n"                if ( $readingdelT3 ne "" );
-		print F "$serial:Delivery_Tarif4_OBIS_2.8.4:$readingdelT4\n"                if ( $readingdelT4 ne "" );
-		print F "$serial:Delivery_Tarif5_OBIS_2.8.5:$readingdelT5\n"                if ( $readingdelT5 ne "" );
-		print F "$serial:Delivery_Tarif6_OBIS_2.8.6:$readingdelT6\n"                if ( $readingdelT6 ne "" );
-		print F "$serial:Delivery_Tarif7_OBIS_2.8.7:$readingdelT7\n"                if ( $readingdelT7 ne "" );
-		print F "$serial:Delivery_Tarif8_OBIS_2.8.8:$readingdelT8\n"                if ( $readingdelT8 ne "" );
-		print F "$serial:Delivery_Tarif9_OBIS_2.8.9:$readingdelT9\n"                if ( $readingdelT9 ne "" );
-		print F "$serial:Delivery_CalculatedPower_OBIS_2.99.0:$powercalcdel\n"      if ( $powercalcdel ne "" );
-		print F "$serial:Delivery_Power_OBIS_2.7.0:$power2\n"                       if ( $power2 ne "" );
-		print F "$serial:Total_Power_OBIS_15.7.0:$power3\n"                         if ( $power3 ne "" );
-		print F "$serial:Total_Power_OBIS_16.7.0:$power4\n"                         if ( $power4 ne "" );
-        print F "$serial:Delivery_Consumption_OBIS_C.5.0:$del_cons\n"               if ( $del_cons ne "" );
-		&DATA_SCHLIESSEN();
+				&DATA_WERT("Consumption_Total_OBIS_1.8.0", $readingconsT0);
+		&DATA_WERT("Consumption_Tarif1_OBIS_1.8.1", $readingconsT1);
+		&DATA_WERT("Consumption_Tarif2_OBIS_1.8.2", $readingconsT2);
+		&DATA_WERT("Consumption_Tarif3_OBIS_1.8.3", $readingconsT3);
+		&DATA_WERT("Consumption_Tarif4_OBIS_1.8.4", $readingconsT4);
+		&DATA_WERT("Consumption_Tarif5_OBIS_1.8.5", $readingconsT5);
+		&DATA_WERT("Consumption_Tarif6_OBIS_1.8.6", $readingconsT6);
+		&DATA_WERT("Consumption_Tarif7_OBIS_1.8.7", $readingconsT7);
+		&DATA_WERT("Consumption_Tarif8_OBIS_1.8.8", $readingconsT8);
+		&DATA_WERT("Consumption_Tarif9_OBIS_1.8.9", $readingconsT9);
+		&DATA_WERT("Consumption_CalculatedPower_OBIS_1.99.0", $powercalccons);
+		&DATA_WERT("Consumption_Power_OBIS_1.7.0", $power1);
+		&DATA_WERT("Consumption_Power_L1_OBIS_21.7.0", $power5);
+		&DATA_WERT("Consumption_Power_L2_OBIS_41.7.0", $power6);
+		&DATA_WERT("Consumption_Power_L3_OBIS_61.7.0", $power7);
+		&DATA_WERT("Consumption_Power_L1_OBIS_36.7.0", $power8);
+		&DATA_WERT("Consumption_Power_L2_OBIS_56.7.0", $power9);
+		&DATA_WERT("Consumption_Power_L3_OBIS_76.7.0", $power10);
+		&DATA_WERT("Delivery_Total_OBIS_2.8.0", $readingdelT0);
+		&DATA_WERT("Delivery_Tarif1_OBIS_2.8.1", $readingdelT1);
+		&DATA_WERT("Delivery_Tarif2_OBIS_2.8.2", $readingdelT2);
+		&DATA_WERT("Delivery_Tarif3_OBIS_2.8.3", $readingdelT3);
+		&DATA_WERT("Delivery_Tarif4_OBIS_2.8.4", $readingdelT4);
+		&DATA_WERT("Delivery_Tarif5_OBIS_2.8.5", $readingdelT5);
+		&DATA_WERT("Delivery_Tarif6_OBIS_2.8.6", $readingdelT6);
+		&DATA_WERT("Delivery_Tarif7_OBIS_2.8.7", $readingdelT7);
+		&DATA_WERT("Delivery_Tarif8_OBIS_2.8.8", $readingdelT8);
+		&DATA_WERT("Delivery_Tarif9_OBIS_2.8.9", $readingdelT9);
+		&DATA_WERT("Delivery_CalculatedPower_OBIS_2.99.0", $powercalcdel);
+		&DATA_WERT("Delivery_Power_OBIS_2.7.0", $power2);
+		&DATA_WERT("Total_Power_OBIS_15.7.0", $power3);
+		&DATA_WERT("Total_Power_OBIS_16.7.0", $power4);
+        &DATA_WERT("Delivery_Consumption_OBIS_C.5.0", $del_cons);
+		&DATA_SCHLIESSEN($datereadable, $epoche_time_lox);
 
 	}
 

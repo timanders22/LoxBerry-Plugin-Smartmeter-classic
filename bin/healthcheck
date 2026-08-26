@@ -1,0 +1,198 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Smartmeter classic - Healthcheck des LoxBerry
+ *
+ * Seit LoxBerry 2.2 ruft sbin/healthcheck.pl eine ausfuehrbare Datei dieses
+ * Namens im bin/-Ordner des Plugins auf, einmal mit "title" und einmal mit
+ * "check". plugininstall.pl setzt bin/ rekursiv auf 755; die Datei ist damit
+ * von selbst ausfuehrbar.
+ *
+ * Antwort ist JSON mit desc, status, result, optional url und logfile.
+ * Statuswerte nach der LoxBerry-Skala:
+ *     leer/0  unbekannt
+ *     3       Fehler
+ *     4       Warnung
+ *     5       in Ordnung
+ *     6       Hinweis
+ *
+ * Nebeneffekt ohne Zusatzarbeit: healthcheck.pl veroeffentlicht das Ergebnis
+ * zusaetzlich retained nach MQTT unter <rechnername>/healthcheck/<titel>.
+ *
+ * WARUM DAS ZAEHLT
+ * Wenn der Zaehler schweigt, stand der Klartext dazu bis 2.3.14
+ * ausschliesslich auf der Plugin-Seite. Wer sie nicht oeffnet, sieht ein
+ * unauffaelliges Symbol - und in Loxone behaelt der virtuelle Eingang
+ * seinen letzten Wert, es sieht also aus wie ein ruhiger Tag.
+ *
+ * Der Befund kommt aus DERSELBEN Rechnung wie die Zeile im Reiter Test:
+ * smg_alter_grenze() in bin/sm_gemein.php. Drei Stellen, die dasselbe
+ * anders sagen, sind zwei zu viel.
+ *
+ * Kompatibel mit PHP 7.4 und PHP 8.x.
+ */
+
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+ini_set('display_errors', '0');
+
+$sm_was = isset($argv[1]) ? (string) $argv[1] : 'check';
+
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen. */
+function sm_hc_wurzel()
+{
+    $d = __DIR__;
+    for ($i = 0; $i < 8; $i++) {
+        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            return $d;
+        }
+        $eltern = dirname($d);
+        if ($eltern === $d) { break; }
+        $d = $eltern;
+    }
+    return '';
+}
+
+function sm_hc_antwort($desc, $status, $result, $extra = array())
+{
+    $a = array('desc' => $desc, 'status' => $status, 'result' => $result);
+    foreach ($extra as $k => $v) { $a[$k] = $v; }
+    $j = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    // json_encode gibt bei ungueltigem UTF-8 false zurueck - dann lieber eine
+    // ehrliche Notantwort als eine leere Zeile, die wie "kein Befund" aussieht.
+    if ($j === false) {
+        $j = '{"desc":"Smartmeter classic","status":0,'
+           . '"result":"Die Antwort liess sich nicht als JSON schreiben."}';
+    }
+    echo $j . "\n";
+    exit(0);
+}
+
+$sm_ordner = basename(__DIR__);
+if ($sm_ordner === '' || $sm_ordner === 'bin') {
+    $sm_ordner = 'smartmeter-classic';
+}
+$sm_titel = 'Smartmeter classic';
+
+if ($sm_was === 'title') {
+    sm_hc_antwort($sm_titel, 0, '');
+}
+
+$sm_home = getenv('LBHOMEDIR');
+if (!$sm_home || !is_dir($sm_home)) {
+    $sm_home = sm_hc_wurzel();
+}
+if ($sm_home === '') {
+    sm_hc_antwort($sm_titel, 0, 'Der LoxBerry-Ordner liess sich nicht bestimmen.');
+}
+
+$sm_gemein = __DIR__ . '/sm_gemein.php';
+if (!is_file($sm_gemein)) {
+    sm_hc_antwort($sm_titel, 3, 'sm_gemein.php fehlt - die Installation ist unvollstaendig.');
+}
+require_once $sm_gemein;
+
+$sm_cfgdatei = $sm_home . '/config/plugins/' . $sm_ordner . '/smartmeter.cfg';
+$sm_vzjson   = $sm_home . '/config/plugins/' . $sm_ordner . '/vzlogger.json';
+$sm_shm      = '/dev/shm/' . $sm_ordner;
+$sm_log      = $sm_home . '/log/plugins/' . $sm_ordner . '/smartmeter.log';
+
+$sm_cfg = smg_cfg_lesen($sm_cfgdatei);
+if (!$sm_cfg) {
+    sm_hc_antwort($sm_titel, 3,
+        'Die Konfiguration ist nicht lesbar: ' . $sm_cfgdatei);
+}
+
+$sm_vz_an = false;
+if (is_readable($sm_vzjson)) {
+    $sm_d = json_decode((string) @file_get_contents($sm_vzjson), true);
+    $sm_vz_an = is_array($sm_d) && !empty($sm_d['enabled']);
+}
+$sm_lg_an = (smg_wert($sm_cfg, 'MAIN', 'READ', '0') === '1');
+
+/* Ueber eine leere Menge wird nicht geurteilt. Laeuft kein Leser, ist das
+ * keine Stoerung, sondern eine Einstellung. */
+if (!$sm_vz_an && !$sm_lg_an) {
+    sm_hc_antwort($sm_titel, 6,
+        'Es ist kein Leser eingeschaltet - es wird nichts gelesen. '
+        . 'Das ist eine Einstellung, kein Fehler.');
+}
+
+/* Zwei Leser an einer seriellen Schnittstelle koennen nicht arbeiten. */
+if ($sm_vz_an && $sm_lg_an) {
+    sm_hc_antwort($sm_titel, 3,
+        'Beide Leser sind eingeschaltet. Sie greifen auf dieselbe serielle '
+        . 'Schnittstelle zu; einer von beiden gehoert abgeschaltet.',
+        array('logfile' => $sm_log));
+}
+
+if (!is_dir($sm_shm)) {
+    sm_hc_antwort($sm_titel, 4,
+        'Es liegen noch keine Messwerte vor (' . $sm_shm . ' fehlt).',
+        array('logfile' => $sm_log));
+}
+
+/* Das Alter der letzten ERFOLGREICHEN Messung - zur Lesezeit gerechnet,
+ * nicht beim Schreiben eingefroren. */
+$sm_juengste = 0;
+$sm_dateien = glob($sm_shm . '/*.data');
+if (!is_array($sm_dateien)) { $sm_dateien = array(); }
+foreach ($sm_dateien as $sm_d) {
+    $sm_inhalt = (string) @file_get_contents($sm_d);
+    if (preg_match_all('/:Last_UpdateUnix:([0-9]+)/', $sm_inhalt, $sm_m)) {
+        foreach ($sm_m[1] as $sm_ts) {
+            if ((int) $sm_ts > $sm_juengste) { $sm_juengste = (int) $sm_ts; }
+        }
+    }
+}
+
+$sm_grenze = smg_alter_grenze(smg_wert($sm_cfg, 'MAIN', 'CRON', '5'), $sm_vz_an);
+$sm_zaehler = smg_zaehler_lesen($sm_shm . '/zaehler');
+
+if (!$sm_dateien) {
+    sm_hc_antwort($sm_titel, 4,
+        'Es liegt keine Datendatei vor - bisher hat kein Lesekopf geantwortet.',
+        array('logfile' => $sm_log));
+}
+if ($sm_juengste <= 0) {
+    sm_hc_antwort($sm_titel, 4,
+        'Es gibt Datendateien, aber keinen Zeitstempel einer erfolgreichen '
+        . 'Messung. Entweder hat der Zaehler noch nie geantwortet, oder die '
+        . 'Dateien stammen aus einer Fassung vor 2.3.14.',
+        array('logfile' => $sm_log));
+}
+
+$sm_alter = time() - $sm_juengste;
+if ($sm_alter < 0) {
+    // Ein Zeitsprung nach vorn. max(0, ...) haette daraus "gerade eben
+    // gemessen" gemacht.
+    sm_hc_antwort($sm_titel, 4,
+        'Der Zeitstempel der letzten Messung liegt in der Zukunft - die Uhr '
+        . 'des Rechners ist gesprungen. Das Alter ist nicht bestimmbar; der '
+        . 'umlaufende Zaehler steht auf ' . $sm_zaehler . '.',
+        array('logfile' => $sm_log));
+}
+
+if ($sm_grenze <= 0) {
+    // Nur beim Systemstart gelesen: ueber etwas, das absichtlich alt ist,
+    // wird kein Altersurteil gefaellt.
+    sm_hc_antwort($sm_titel, 6,
+        'Der Abfragetakt steht auf "nur beim Systemstart". Die letzte Messung '
+        . 'ist ' . $sm_alter . ' s alt; eine Altersgrenze gibt es hier '
+        . 'absichtlich nicht.',
+        array('logfile' => $sm_log));
+}
+
+if ($sm_alter > $sm_grenze) {
+    sm_hc_antwort($sm_titel, 3,
+        'Der Zaehler schweigt: die letzte Messung ist ' . $sm_alter
+        . ' s alt, erlaubt sind ' . $sm_grenze . ' s. In Loxone behalten die '
+        . 'virtuellen Eingaenge ihren letzten Wert - dort sieht es aus wie ein '
+        . 'ruhiger Tag.',
+        array('logfile' => $sm_log));
+}
+
+sm_hc_antwort($sm_titel, 5,
+    'Der Zaehler wird gelesen. Letzte Messung vor ' . $sm_alter . ' s (erlaubt '
+    . $sm_grenze . ' s), ' . count($sm_dateien) . ' Datendatei(en), umlaufender '
+    . 'Zaehler ' . $sm_zaehler . '.',
+    array('logfile' => $sm_log));

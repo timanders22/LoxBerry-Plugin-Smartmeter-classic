@@ -46,13 +46,35 @@ ARGV6=$6 # Sechstes Argument ist der Arbeitsordner des Installers (absolut)
 # ---------------------------------------------------------------------------
 # WARUM ES DIESE SICHERUNG UEBERHAUPT BRAUCHT
 #
-# LoxBerry loescht den Konfigordner beim Upgrade NICHT - es kopiert aber die
-# mitgelieferten Dateien darueber:
-#     cp -r -v $tempfolder/config/* $lbhomedir/config/plugins/$pfolder
-# (sbin/plugininstall.pl). Dieses Plugin liefert config/smartmeter.cfg mit.
-# Ohne diese Sicherung waeren nach jedem Upgrade Zaehlerprofile, Takt und
+# BERICHTIGT AM 26.08.2026. Hier stand: "LoxBerry loescht den Konfigordner
+# beim Upgrade NICHT - es kopiert aber die mitgelieferten Dateien darueber."
+# Der zweite Halbsatz stimmt, der erste nicht.
+#
+# Nachgemessen an sbin/plugininstall.pl, Zweig master, Commit 666baf1de87a
+# vom 21.08.2026 (die Fundstellen stehen in REGELN_2 unter "Was der
+# Installateur beim Upgrade wirklich tut"):
+#
+#     :858    if ($isupgrade) {
+#     :886        &purge_installation;      <- IM Upgrade-Zweig
+#     :1629/:1631 rm -rf auf config/plugins/<ordner>/ UND data/plugins/<ordner>/,
+#                 im Rumpf, ohne Pruefung auf $option eq "all"
+#     :916/:920   ERST DANACH wird config/plugins/<ordner>/ neu angelegt und
+#                 der Archivinhalt hineinkopiert
+#
+# Beim Upgrade ueberlebt in config/ und data/ also NICHTS. Fuer diese
+# Sicherung aendert das nichts - sie liegt ohnehin ausserhalb -, wohl aber
+# fuer alles, was jemand kuenftig IN den Ordner legen wollte.
+#
+# Es gibt genau ein Rettungsfenster und genau ein Rueckgabefenster:
+# preupgrade.sh laeuft vor :886 und ist die letzte Gelegenheit, etwas
+# herauszutragen; postinstall.sh laeuft nach dem Kopieren und ist die erste,
+# es zurueckzulegen. postupgrade.sh ist dafuer eine Stufe spaeter.
+#
+# Dieses Plugin liefert config/smartmeter.cfg mit. Ohne diese Sicherung
+# waeren nach jedem Upgrade Zaehlerprofile, Takt, Zugriffstoken und
 # Lesekopf-Bezeichnungen auf Werkseinstellung zurueck. Die Reihenfolge im
-# Installer passt genau dazu: preupgrade -> Konfig kopieren -> postupgrade.
+# Installateur: preupgrade -> abraeumen -> Konfig kopieren -> postinstall
+# -> postupgrade.
 #
 # WOHIN GESICHERT WIRD - UND WARUM NICHT NACH /tmp
 #
@@ -88,7 +110,12 @@ else
 	echo "<INFO> Kein Arbeitsordner uebergeben - Rueckfall auf /tmp"
 	SICHERUNG="/tmp/${ARGV1}_upgrade"
 fi
-echo "$SICHERUNG" > "$ARGV5/config/plugins/$ARGV3/.upgrade_pfad" 2>/dev/null
+# Hier stand bis 2.3.14 ein Merker .upgrade_pfad IM Konfigurationsordner,
+# den postupgrade.sh lesen sollte. Er kann dort nie ankommen:
+# purge_installation entfernt genau dieses Verzeichnis, bevor postupgrade
+# laeuft (siehe oben). Der Merker war also eine falsche Faehrte - beide
+# Skripte rechnen den Pfad ohnehin aus DEMSELBEN Argument aus, und das ist
+# die eine Stelle, an der sie nicht auseinanderlaufen koennen.
 
 echo "<INFO> Sicherungsordner: $SICHERUNG"
 mkdir -p "$SICHERUNG/config"

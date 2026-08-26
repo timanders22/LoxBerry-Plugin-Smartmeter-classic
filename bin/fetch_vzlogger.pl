@@ -9,6 +9,16 @@
 #
 # Runs every minute via cron - exits immediately if vzLogger mode is
 # disabled, so it produces no load in legacy-only setups.
+#
+# Aufrufe von Hand:
+#   fetch_vzlogger.pl            ein Durchlauf
+#   fetch_vzlogger.pl --themen   nur ausgeben, welche Feldnamen fuer die
+#                                eingestellten Kanaele entstuenden. Kein
+#                                Geraetekontakt, kein Schreibvorgang.
+#                                Der Reiter Test ruft das auf und haelt die
+#                                Antwort gegen seine eigene Liste - ein
+#                                Vergleich zweier Listen, die beide aus PHP
+#                                stammen, misst nichts.
 
 use LoxBerry::System;
 use LoxBerry::JSON;
@@ -20,15 +30,100 @@ use strict;
 my $psubfolder = $lbpplugindir;
 my $vzcfgfile  = "$lbpconfigdir/vzlogger.json";
 
+# Ein unbekannter Schalter darf nicht stillschweigend durchfallen und in
+# einem Durchlauf landen: wer von Hand aufruft, soll bei einem Tippfehler
+# eine Antwort sehen.
+my $nur_themen = 0;
+foreach my $a ( @ARGV ) {
+	next if $a !~ /^--/;
+	if ( $a eq "--themen" ) { $nur_themen = 1; next; }
+	print STDERR "Unbekannter Schalter: $a\n";
+	exit 2;
+}
+
 # Not configured -> nothing to do
 exit 0 if !-e $vzcfgfile;
 
 my $jsonobj = LoxBerry::JSON->new();
 my $cfg = $jsonobj->open(filename => $vzcfgfile, readonly => 1);
-exit 0 if !$cfg || !$cfg->{enabled};
+exit 0 if !$cfg;
+exit 0 if !$cfg->{enabled} && !$nur_themen;
+
+################################################################
+### Die EINE Quelle: bin/sm_felder.json
+###
+### Bis 2.3.14 stand die Zuordnung OBIS -> Feldname hier als %SM_NAME, und
+### die Oberflaeche baute ihre Themen-Tabelle und ihre Loxone-Vorlage nach
+### eigenen Regeln. Gemessen am 26.08.2026: die Vorlage legte
+### smartmeter_vzlogger_1_0_1_8_0 an, veroeffentlicht wurde
+### smartmeter/vzlogger/Consumption_Total_OBIS_1.8.0 - kein einziger der
+### erzeugten Eingaenge konnte je einen Wert bekommen.
+###
+### Ueber die Sprachgrenze hinweg gibt es keine gemeinsame Funktion, also
+### eine gemeinsame DATEI. Faellt sie aus, wird das GESAGT und nicht auf
+### eine eingebaute Liste zurueckgefallen: eine zweite Wahrheit im
+### Rueckfall ist genau der Fehler, den die Datei abstellen soll.
+################################################################
+
+my $felderdatei = "$lbhomedir/bin/plugins/$psubfolder/sm_felder.json";
+$felderdatei = "$lbpbindir/sm_felder.json" if !-e $felderdatei && defined $lbpbindir;
+my %OBIS;
+if ( -e $felderdatei ) {
+	my $roh = "";
+	if ( open(my $f, "<", $felderdatei) ) { local $/; $roh = <$f>; close($f); }
+	my $d = eval { decode_json($roh) };
+	if ( $d && $d->{obis} ) { %OBIS = %{$d->{obis}}; }
+}
+if ( !%OBIS ) {
+	&LOG("Die Feldtabelle $felderdatei fehlt oder ist unlesbar. Ohne sie ist die Zuordnung OBIS-Kennzahl zu Feldname nicht bekannt - es wird nichts veroeffentlicht.", "ERROR");
+	print STDERR "sm_felder.json fehlt oder ist unlesbar: $felderdatei\n" if $nur_themen;
+	exit 1;
+}
+
+# Aus einer OBIS-Kennzahl den Feldnamen bilden. Medienkennung "1-0:" und
+# Vorschrift "*255" fallen weg; was die Tabelle nicht kennt, wird
+# "OBIS_<kurz>". Dieselben zwei Zeilen stehen in sm_obis_feld() der
+# PHP-Bibliothek - deshalb liegt die TABELLE in einer gemeinsamen Datei.
+sub feldname
+{
+	my ($obis) = @_;
+	my $kurz = $obis;
+	$kurz =~ s/^\d+-\d+://;
+	$kurz =~ s/\*\d+$//;
+	return $OBIS{$kurz} // "OBIS_$kurz";
+}
+
+# Die Zaehlernummer. Ohne sie waeren die MQTT-Themen und der UDP-Satz nicht
+# vertraeglich mit der klassischen Betriebsart.
+my $serial = $cfg->{serial};
+$serial = "" if !defined $serial;
+$serial =~ s/[^A-Za-z0-9_\-]//g;
+$serial = "vzlogger" if $serial eq "";
+
+################################################################
+### --themen: nur sagen, was entstuende
+################################################################
+if ( $nur_themen ) {
+	my @namen;
+	foreach my $c ( @{$cfg->{channels} || []} ) {
+		push @namen, &feldname($c);
+	}
+	# Genau die Zusaetze, die der Durchlauf unten selbst bildet.
+	push @namen, "Last_Update", "Last_UpdateUnix", "Last_UpdateLoxEpoche";
+	if ( grep { $_ eq "Total_Power_OBIS_16.7.0" } @namen ) {
+		push @namen, "Consumption_CalculatedPower_OBIS_1.99.0",
+		             "Delivery_CalculatedPower_OBIS_2.99.0";
+	}
+	my %gesehen;
+	foreach my $n ( @namen ) {
+		next if $gesehen{$n}++;
+		print "$n\n";
+	}
+	exit 0;
+}
 
 # ---------------------------------------------------------------------------
-# Nur ein Lauf gleichzeitig.
+# Nur ein Lauf gleichzeitig - eine Sperrdatei je DATENBESTAND.
 #
 # Dieses Skript steht fest im Minutentakt in cron/crontab. Es fragt vzlogger
 # ueber HTTP ab und sendet danach ueber MQTT und wahlweise UDP. Haengt eine
@@ -36,12 +131,17 @@ exit 0 if !$cfg || !$cfg->{enabled};
 # Laeufe schreiben dann dieselbe Datendatei und schicken dieselben Werte
 # doppelt an den Miniserver.
 #
+# Die Sperre heisst seit 2.3.14 daten.lock und nicht mehr
+# fetch_vzlogger.lock: bin/fetch.php sperrte fetch.lock und schrieb DIESELBEN
+# Dateien - die beiden sperrten sich also gerade nicht gegeneinander. Eine
+# Sperrdatei gehoert zum Datenbestand, nicht zum Skript.
+#
 # LOCK_NB, damit ein laufender Vorgaenger diesen Aufruf sofort beendet -
 # ohne Meldung, denn das ist der Normalfall und kein Fehler.
 # ---------------------------------------------------------------------------
 use Fcntl qw(:flock O_RDWR O_CREAT);
 system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
-my $sperrdatei = "/dev/shm/$psubfolder/fetch_vzlogger.lock";
+my $sperrdatei = "/dev/shm/$psubfolder/daten.lock";
 if ( sysopen(my $SPERRE, $sperrdatei, O_RDWR|O_CREAT, 0644) ) {
 	exit 0 if !flock($SPERRE, LOCK_EX|LOCK_NB);
 	# Der Griff bleibt bis zum Programmende offen - das Betriebssystem gibt
@@ -75,6 +175,7 @@ if ( -e $vzconf && !&vz_laeuft($vzconf) ) {
 			&LOG("vzlogger lief nicht und wurde vom Waechter gestartet ($bin).", "OK");
 		} else {
 			&LOG("vzlogger lief nicht und liess sich auch nicht starten. Einzelheiten im vzlogger-Protokoll.", "WARN");
+			&ZAEHLER_WEITER();
 			exit 0;
 		}
 	}
@@ -84,12 +185,14 @@ if ( -e $vzconf && !&vz_laeuft($vzconf) ) {
 my $raw = `curl -s -m 5 http://127.0.0.1:$httpport/ 2>/dev/null`;
 if ( !$raw ) {
 	&LOG("Could not read from vzlogger HTTP API on port $httpport. Is vzlogger running?", "WARN");
+	&ZAEHLER_WEITER();
 	exit 0;
 }
 
 my $data = eval { decode_json($raw) };
 if ( !$data || !$data->{data} ) {
 	&LOG("Invalid JSON from vzlogger HTTP API.", "WARN");
+	&ZAEHLER_WEITER();
 	exit 0;
 }
 
@@ -99,19 +202,6 @@ if ( $cfg->{uuids} ) {
 	%obis_by_uuid = reverse %{$cfg->{uuids}};
 }
 
-# Kennung des vzlogger -> Schluesselname des klassischen Lesers.
-# Damit senden beide Betriebsarten dasselbe Schema, und die virtuellen
-# Eingaenge im Miniserver bleiben beim Wechsel unveraendert.
-my %SM_NAME = (
-	"1.8.0"  => "Consumption_Total_OBIS_1.8.0",
-	"1.8.1"  => "Consumption_Tarif1_OBIS_1.8.1",
-	"1.8.2"  => "Consumption_Tarif2_OBIS_1.8.2",
-	"2.8.0"  => "Delivery_Total_OBIS_2.8.0",
-	"2.8.1"  => "Delivery_Tarif1_OBIS_2.8.1",
-	"2.8.2"  => "Delivery_Tarif2_OBIS_2.8.2",
-	"16.7.0" => "Total_Power_OBIS_16.7.0",
-);
-
 # Collect latest value per channel
 my %werte;
 foreach my $ch ( @{$data->{data}} ) {
@@ -119,27 +209,23 @@ foreach my $ch ( @{$data->{data}} ) {
 	next if !$ch->{tuples} || !@{$ch->{tuples}};
 	# Latest tuple: [ timestamp_ms, value, quality ]
 	my @sorted = sort { $b->[0] <=> $a->[0] } @{$ch->{tuples}};
-	# Medienkennung "1-0:" und Vorschrift "*255" abschneiden
-	my $kurz = $obis;
-	$kurz =~ s/^\d+-\d+://;
-	$kurz =~ s/\*\d+$//;
-	my $name = $SM_NAME{$kurz} // "OBIS_$kurz";
-	$werte{$name} = $sorted[0][1];
+	$werte{&feldname($obis)} = $sorted[0][1];
 }
 if ( !%werte ) {
 	&LOG("No readings available (yet).", "INFO");
+	&ZAEHLER_WEITER();
 	exit 0;
 }
 
-# Zaehlernummer. Ohne sie waeren die MQTT-Themen und der UDP-Satz nicht
-# vertraeglich mit der klassischen Betriebsart.
-my $serial = $cfg->{serial};
-$serial = "" if !defined $serial;
-$serial =~ s/[^A-Za-z0-9_\-]//g;
-$serial = "vzlogger" if $serial eq "";
-
-# Zeitstempel wie beim klassischen Leser: lesbar und als Loxone-Epoche
-# (Bezugspunkt 01.01.2009 00:00 Ortszeit).
+# Zeitstempel wie beim klassischen Leser: lesbar, als Unix-Sekunden und als
+# Loxone-Epoche (Bezugspunkt 01.01.2009 00:00 Ortszeit).
+#
+# Last_UpdateUnix ist seit 2.3.14 dabei und der Grund ist der Endpunkt: er
+# rechnet daraus das ALTER zur LESEZEIT. Ein Alter, das beim Schreiben
+# eingefroren wird, kann einen toten Dienst nicht von einer frischen Messung
+# unterscheiden. Geschrieben wird er nur hier, also nur nach einer
+# erfolgreichen Messung - der Zeitstempel gehoert zur Messung, nicht zum
+# Schreibvorgang.
 my @lt = localtime(time());
 my $datereadable = sprintf("%02d.%02d.%04d %02d:%02d:%02d",
 	$lt[3], $lt[4]+1, $lt[5]+1900, $lt[2], $lt[1], $lt[0]);
@@ -147,6 +233,7 @@ use Time::Local;
 my $offset = timegm(localtime(time())) - time();
 my $epoche_lox = time() - 1230768000 + $offset;
 $werte{Last_Update}          = $datereadable;
+$werte{Last_UpdateUnix}      = time();
 $werte{Last_UpdateLoxEpoche} = $epoche_lox;
 
 # Die beiden kalkulierten Leistungen kennt vzlogger nicht. Der klassische
@@ -194,12 +281,15 @@ if ( -e "$lbpconfigdir/smartmeter.cfg" ) {
 	}
 }
 $mqtttopic =~ s/^["']|["']$//g;
+$mqtttopic =~ s{^/+|/+$}{}g;
 $mqtttopic = "smartmeter" if $mqtttopic eq "";
 if ( $sendmqtt ) {
-	my $prefix = $mqtttopic;
 	my @paare = map { [ $_, $werte{$_} ] } sort keys %werte;
-	&SEND_MQTT("$prefix/$serial", \@paare);
+	&SEND_MQTT("$mqtttopic/$serial", \@paare);
 }
+
+# Das Lebenszeichen eine Stelle weiter - bei JEDEM abgeschlossenen Durchlauf.
+&ZAEHLER_WEITER();
 
 # Send via UDP to all Miniservers
 exit 0 if !$cfg->{sendudp};
@@ -238,11 +328,58 @@ sub LOG
 	my $stamp = sprintf("%04d-%02d-%02d %02d:%02d:%02d", $year, $mon, $mday, $hour, $min, $sec);
 
 	system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
-	open(my $fh, ">>", "/dev/shm/$psubfolder/vzlogger_fetch.log");
-	print $fh "$stamp <$type> $message\n";
-	close($fh);
+	my $datei = "/dev/shm/$psubfolder/vzlogger_fetch.log";
+	# Kappung nach dem Hausmuster: ab 500 kB bleiben die letzten 200 Zeilen.
+	# log/plugins und /dev/shm liegen beide auf einer Ramdisk - eine
+	# wachsende Datei frisst dort Arbeitsspeicher, nicht Plattenplatz.
+	if ( -s $datei && (-s $datei) > 512000 ) {
+		if ( open(my $r, "<", $datei) ) {
+			my @alle = <$r>;
+			close($r);
+			my @rest = @alle > 200 ? @alle[-200..-1] : @alle;
+			if ( open(my $w, ">", $datei) ) { print $w @rest; close($w); }
+		}
+	}
+	if ( open(my $fh, ">>", $datei) ) {
+		print $fh "$stamp <$type> $message\n";
+		close($fh);
+	}
 
 	return();
+}
+
+################################
+### SUB: umlaufender Zaehler
+###
+### 0..999, danach wieder 0. -1 heisst "noch nie gelaufen" und wird nur vom
+### Leser gebildet, nicht hier. Er liegt auf der Ramdisk neben den
+### Datendateien; dass er nach einem Neustart bei -1 beginnt, ist die
+### richtige Aussage.
+###
+### Warum ein Zaehler und nicht nur ein Zeitstempel: ein Raspberry Pi hat
+### keine Echtzeituhr. Nach dem Booten steht er in der Vergangenheit, und
+### sobald NTP greift, springt die Zeit.
+################################
+
+sub ZAEHLER_WEITER
+{
+	my $datei = "/dev/shm/$psubfolder/zaehler";
+	my $alt = -1;
+	if ( -e $datei && open(my $r, "<", $datei) ) {
+		my $w = <$r>;
+		close($r);
+		$w = "" if !defined $w;
+		$w =~ s/\s//g;
+		$alt = $w + 0 if $w =~ /^\d{1,3}$/;
+	}
+	my $neu = ($alt < 0) ? 0 : (($alt + 1) % 1000);
+	my $tmp = "$datei.tmp.$$";
+	if ( open(my $w, ">", $tmp) ) {
+		print $w $neu;
+		close($w);
+		rename($tmp, $datei) or unlink($tmp);
+	}
+	return $neu;
 }
 
 ################################
@@ -283,20 +420,41 @@ sub SEND_MQTT {
 	}
 
 	my $anzahl = 0;
+	my $fehl = 0;
 	foreach my $p ( @{$paare} ) {
 		my ($key, $value) = @{$p};
 		next if !defined $key || $key eq "";
-		next if !defined $value || $value eq "";
+		next if !defined $value;
 		$key =~ s/[^A-Za-z0-9_\.\-]/_/g;
-		my $msg = "publish $prefix/$key $value";
-		$sock->send($msg);
-		$anzahl++;
+		# Der Wert wird gesaeubert - das Gateway liest ZEILENWEISE und
+		# trennt Thema und Wert am Leerraum. Bis 2.3.14 hatte diese
+		# Saeuberung nur bin/fetch.php, und Last_Update ist ein Text mit
+		# Leerzeichen. Zwei Wege, die dieselben Werte tragen sollen,
+		# behandeln sie gleich.
+		$value = &SAEUBERN($value);
+		next if $value eq "";
+		if ( $sock->send("publish $prefix/$key $value") ) { $anzahl++; }
+		else { $fehl++; }
 	}
 	close($sock);
-	&LOG("MQTT: $anzahl Werte an $prefix (Gateway-Relay 127.0.0.1:$udpin)", "OK");
+	# Ein Zaehler zaehlt Zustellungen, nicht Schleifendurchlaeufe.
+	&LOG("MQTT: $anzahl Werte an $prefix"
+	   . ($fehl ? ", $fehl gescheitert" : "")
+	   . " (Gateway-Relay 127.0.0.1:$udpin)", $fehl ? "WARN" : "OK");
 
 	return;
 
+}
+
+# Gegenstueck zu smg_wert_saeubern() in bin/sm_gemein.php.
+sub SAEUBERN
+{
+	my ($v) = @_;
+	$v = "" if !defined $v;
+	$v =~ s/[\r\n\t]/ /g;
+	$v =~ s/ {2,}/ /g;
+	$v =~ s/^\s+|\s+$//g;
+	return $v;
 }
 
 ################################

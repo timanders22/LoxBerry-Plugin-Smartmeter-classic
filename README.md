@@ -95,10 +95,16 @@ Zählerfortschritt. Für Zähler mit `16.7.0` ist die Ableitung genauer, aber es
 ist nicht dieselbe Größe. Wer beide Betriebsarten vergleicht, wird kleine
 Unterschiede sehen.
 
-Im MQTT-Gateway des LoxBerry muss das Abo `<Praefix>/#` eingetragen sein —
-sonst kommt am Miniserver nichts an. Der Reiter *MQTT* zeigt das benötigte Abo,
-der Reiter *Einbindung in Loxone* die vollständigen Themen und die Namen der
-virtuellen Eingänge.
+Ob im MQTT-Gateway ein Abo einzutragen ist, hängt an dessen Fassung:
+
+- **Gateway V1** — das Abo `<Praefix>/#` muss eingetragen sein, sonst kommt am
+  Miniserver nichts an.
+- **Gateway V2** — das Gateway erkennt die Themengruppe von selbst; ein Abo ist
+  nicht einzutragen, der Kern schaltet die Knöpfe dafür sogar ab.
+
+Welche Fassung läuft, steht im Reiter *MQTT* — und dort steht auch nur der
+Satz, der auf diese Anlage zutrifft. Der Reiter *Einbindung in Loxone* zeigt
+die vollständigen Themen und die Namen der virtuellen Eingänge.
 
 UDP steht weiterhin zur Verfügung, wo es gebraucht wird.
 
@@ -115,7 +121,7 @@ stempelt dieser selbst.
 
 ## Voraussetzungen
 
-- LoxBerry ab 1.4.3
+- LoxBerry ab 3.0.0 (so steht es auch in der `plugin.cfg`)
 - optischer IR-Lesekopf am USB — die udev-Regel legt das Plugin an
 - für die vzLogger-Betriebsart ein installierbares vzlogger-Paket
 
@@ -409,6 +415,114 @@ stillschweigend lahmlegen. Das `unmask` bleibt.
 LoxBerry nicht ohnehin schützt, ist aber auch nicht schädlich und wurde
 unverändert gelassen — sie ohne Not zu entfernen wäre eine Änderung, deren
 Wirkung sich erst auf fremden Systemen zeigt.
+
+## Fassung 2.3.14 — eine Quelle je Sache
+
+### Sichern und Zurückspielen über zwei Knöpfe
+
+Im Reiter *Smartmeter (vzLogger)* stehen zwei neue Knöpfe. *Einstellungen
+sichern* lädt eine Textdatei mit allen Einstellungen **beider** Lesewege
+herunter, *Sicherung zurückspielen* liest sie wieder ein.
+
+Die Datei trägt das Zugriffstoken im Klartext. Das ist Absicht: ohne das Token
+wäre sie nach dem Zurückspielen wertlos, weil der Miniserver mit der alten
+Adresse nicht mehr durchkäme. Der Reiter sagt das auch, und die Datei warnt in
+ihrem Kopf.
+
+Zurückgespielt wird nur eine Datei, die sich **durchgängig** lesen lässt.
+Findet sich auch nur eine unverständliche Zeile, bleibt alles, wie es ist — eine
+halb eingelesene Konfiguration wäre schlimmer als gar keine, weil sie aussieht
+wie eine ganze. Nachgemessen in vier Fällen
+(`Pruefung-Smartmeter-classic-2.4.0/sicherung_pruefstand.php`, 22 von 22).
+
+### MQTT-Gateway V1 und V2
+
+Das Gateway ist seit LoxBerry 3 Bestandteil des Systems. Ab Fassung 2 erkennt
+es die Themengruppe von selbst und schaltet die Abo-Knöpfe ab; bis Fassung 1
+muss `<Praefix>/#` von Hand eingetragen werden.
+
+Der Satz dazu steht jetzt an **einer** Stelle (`sm_abo_text()`) und richtet sich
+nach der gemessenen Fassung. Lässt sie sich nicht feststellen, nennt die Seite
+beide Fälle, statt einen zu behaupten. Nachgemessen an der **gerenderten** Seite
+in allen drei Fällen (`Werkzeuge/gateway_wirkung.py`).
+
+### Ein Feldkatalog statt dreier Listen
+
+Die Feldnamen standen an drei Stellen: im Perl-Leser, in der Themen-Tabelle des
+Reiters *MQTT* und in der Loxone-Vorlage. Keine der drei stimmte mit den
+anderen überein — die Tabelle zeigte die OBIS-Kennzahl, während der Dienst unter
+dem Feldnamen veröffentlichte.
+
+Jetzt liest alles `bin/sm_felder.json`: 65 Felder und 7 OBIS-Kennzahlen. Erzeugt
+wird die Datei von `Werkzeuge/sm_felder_erzeugen.py` aus dem Quelltext des
+Lesers; ein Feld ohne Regel bricht den Lauf ab, statt still zu fehlen. Der
+Selbsttest prüft nach, dass der Dienst den Katalog wirklich liest und keine
+zweite Liste mehr führt.
+
+### Ausfallerkennung
+
+Schweigt der Zähler, behält ein virtueller Eingang in Loxone seinen letzten
+Wert — auf dem Bildschirm sieht das aus wie ein ruhiger Tag. Dagegen gibt es
+jetzt dreierlei:
+
+- `Last_UpdateUnix` wird **nur** geschrieben, wenn wirklich ein Wert gelesen
+  wurde. Ein Zeitstempel, den ein leerer Durchlauf mitschreibt, beweist nichts.
+- `ZAEHLER` zählt jede erfolgreiche Ablesung und läuft bei 999 auf 0 zurück. Er
+  ändert sich auch dann, wenn der Zählerstand stillsteht.
+- `bin/healthcheck` beantwortet den Healthcheck des LoxBerry — auch dann, wenn
+  niemand die Plugin-Seite öffnet.
+
+Das Alter wird beim **Lesen** gerechnet, nicht beim Schreiben eingefroren.
+
+### Formularschutz
+
+Jedes Formular trägt ein Merkmal, das ein Wachposten **vor** allen Handlern
+prüft. Er sitzt am Eingang und nicht in den einzelnen Handlern: einen Handler
+kann man beim Erweitern vergessen, den Eingang nicht.
+
+Abgeleitet wird das Merkmal aus einem eigenen Schlüssel `FORMKEY`, nicht aus
+dem Aktionstoken — das ist hier freiwillig und darf leer sein, und
+`hash_equals('', '')` ist wahr. Nachgemessen in drei Fällen, darunter der, ohne
+den die anderen nichts wert wären: mit richtigem Merkmal **muss** gespeichert
+werden (`Pruefung-Smartmeter-classic-2.4.0/csrf_pruefstand.php`).
+
+### Der Abfragetakt „dauerhaft“ hieß nicht, was er tat
+
+Der Eintrag versprach einen ständig mitlaufenden Leser. Die Kette dahinter ist
+drei Glieder lang und endet nach **einem** Durchlauf: die Verknüpfung in
+`cron.reboot` ruft `reboot_cron_runner.sh`, das ruft `fetch.php` genau einmal,
+und `sm_logger.pl` endet ebenfalls nach einem Durchlauf. Der Takt liefert also
+eine Ablesung je Neustart und danach keine mehr. Er heißt jetzt *nur beim
+Systemstart*.
+
+### Weitere Berichtigungen
+
+- `bin/fetch.php` war als einzige PHP-Datei durchgehend CRLF. Der Kernel suchte
+  damit einen Interpreter namens `php\r` — der Cron-Eintrag des klassischen
+  Lesers konnte nie anlaufen. Aufgefallen war es nicht, weil *Jetzt einmal
+  abfragen* `php` ausdrücklich davorsetzt.
+- Der Rückspielweg in `postinstall.sh` war tot: er erkannte die verlorene
+  Konfiguration an einer Prüfsumme, die zwei `sed`-Zeilen darüber längst
+  verändert hatten. Er steht jetzt **vor** dem `sed` und entscheidet nach
+  Inhalt.
+- `preupgrade.sh` behauptete, LoxBerry lösche den Konfigordner beim Upgrade
+  nicht. `purge_installation` läuft im Upgrade-Zweig; es überlebt dort nichts.
+- Beim Deinstallieren blieben drei Zweitschriften neben dem Konfigordner
+  liegen — mitsamt Token. Sie werden jetzt überschrieben, entfernt und
+  **nachgezählt**.
+- `CUSTOM_LOGLEVELS` stand auf `true`, ohne dass irgendwo ein Loglevel gelesen
+  wurde. Wer im Verwaltungsfenster etwas einstellte, stellte nichts ein.
+- `TOKEN` und `FORMKEY` fehlten in der mitgelieferten `smartmeter.cfg`. Die
+  Oberfläche trug sie beim ersten Aufruf nach und meldete dem Anwender einen
+  Mangel, den die Auslieferung selbst verursacht hatte.
+
+### Sprachdateien aus einer Quelle
+
+Alle vier Sprachdateien — `language_de.ini`, `language_en.ini`, `help_de.ini`,
+`help_en.ini` — erzeugt jetzt `Werkzeuge/sm_sprache_erzeugen.py` aus **einer**
+Tabelle: 440 Schlüssel und 68 Hilfetexte, jedes Paar an einer Stelle. Wer eine
+Sprachdatei von Hand ändert, zieht den Erzeuger mit; die Köpfe der erzeugten
+Dateien sagen das auch dort.
 
 ## Lizenz
 
