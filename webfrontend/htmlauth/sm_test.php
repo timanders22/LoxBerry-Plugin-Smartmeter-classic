@@ -165,7 +165,7 @@ function sm_diagnose($cfg)
 function sm_diagnose_gepuffert($cfg, $alter = 300)
 {
     $p = sm_paths();
-    $datei = $p['data'] . '/diagnose.json';
+    $datei = $p['datadir'] . '/diagnose.json';
     if (is_readable($datei) && (time() - (int) filemtime($datei)) < $alter) {
         $d = json_decode((string) @file_get_contents($datei), true);
         if (is_array($d) && isset($d['zeilen']) && is_array($d['zeilen'])) {
@@ -213,7 +213,7 @@ function sm_block($text)
 function sm_endpunkt_probe($alter = 300)
 {
     $p = sm_paths();
-    $datei = $p['data'] . '/endpunkt.json';
+    $datei = $p['datadir'] . '/endpunkt.json';
     if (is_readable($datei) && (time() - (int) filemtime($datei)) < $alter) {
         $d = json_decode((string) @file_get_contents($datei), true);
         if (is_array($d) && isset($d['ok'])) {

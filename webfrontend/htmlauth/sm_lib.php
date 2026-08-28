@@ -68,7 +68,7 @@ function sm_paths()
         'vzconf'  => $home . '/config/plugins/' . $ordner . '/vzlogger.conf',
         'legacy'  => $home . '/config/plugins/' . $ordner . '/smartmeter.cfg',
         'bin'     => $home . '/bin/plugins/' . $ordner,
-        'data'    => $home . '/data/plugins/' . $ordner,
+        'datadir'    => $home . '/data/plugins/' . $ordner,
         'log'     => $home . '/log/plugins/' . $ordner,
         'logdatei' => $home . '/log/plugins/' . $ordner . '/smartmeter.log',
         'shm'     => '/dev/shm/' . $ordner,
@@ -1058,7 +1058,7 @@ function sm_vz_running()
 function sm_cache_verwerfen()
 {
     $p = sm_paths();
-    @unlink($p['data'] . '/diagnose.json');
+    @unlink($p['datadir'] . '/diagnose.json');
 }
 
 /** Haelt sonst jemand die serielle Schnittstelle? Liefert Text oder ''. */
