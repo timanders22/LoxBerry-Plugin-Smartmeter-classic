@@ -205,9 +205,15 @@ function sm_log_ende($datei, $anzahl = 400, $block = 8192)
 /**
  * Eine Zeile ins Plugin-Protokoll.
  *
- * Mit Kappung nach dem Hausmuster (ab 500 kB bleiben die letzten 200
- * Zeilen) - log/plugins liegt auf einer Ramdisk, eine wachsende Datei
- * frisst dort Arbeitsspeicher, nicht Plattenplatz.
+ * Mit Kappung ueber smg_log_kappen() aus bin/sm_gemein.php (ab 500 kB
+ * bleiben die letzten 200 Zeilen) - log/plugins liegt auf einer Ramdisk,
+ * eine wachsende Datei frisst dort Arbeitsspeicher, nicht Plattenplatz.
+ *
+ * Nicht zu verwechseln mit sm_fetch_log() in bin/fetch.php: die schreibt
+ * das fluechtige /dev/shm/<ordner>/fetch.log DIESES einen Laufs. Bis
+ * 2.4.1 hiessen beide sm_log() bei verschiedenen Rumpfen - auf dem
+ * Geraet getrennte Baeume, im entpackten Archiv zwei Wahrheiten unter
+ * einem Namen.
  */
 function sm_log($text, $stufe = 'INFO')
 {
@@ -216,9 +222,13 @@ function sm_log($text, $stufe = 'INFO')
     if (!is_dir($p['log'])) {
         @mkdir($p['log'], 0775, true);
     }
-    if (is_file($datei) && filesize($datei) > 512000) {
-        $rest = array_slice(file($datei, FILE_IGNORE_NEW_LINES) ?: array(), -200);
-        @file_put_contents($datei, implode("\n", $rest) . "\n");
+    // Faellt der gemeinsame Vorlauf aus - bin/sm_gemein.php wird unten
+    // ueber eine Kandidatenliste gesucht -, wird nur nicht gekappt; die
+    // Zeile selbst geht trotzdem hinaus. Denselben Rueckfall nimmt
+    // sm_zaehler_lesen(), und die Selbstpruefung im Reiter Test meldet
+    // den Ausfall.
+    if (function_exists('smg_log_kappen')) {
+        smg_log_kappen($datei);
     }
     @file_put_contents($datei,
         date('Y-m-d H:i:s') . ' <' . $stufe . '> ' . $text . "\n", FILE_APPEND);

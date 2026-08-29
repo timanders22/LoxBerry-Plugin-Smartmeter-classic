@@ -115,18 +115,28 @@ if ($sm_sperre === false) {
 
 @unlink($sm_logdatei);
 
-function sm_log($text, $stufe = 'INFO')
+/**
+ * Eine Zeile ins Protokoll DIESES Laufs.
+ *
+ * Hiess bis 2.4.1 sm_log() - genau wie die Funktion in
+ * webfrontend/htmlauth/sm_lib.php, aber mit anderem Rumpf und anderem
+ * ZIEL: hier /dev/shm/<ordner>/fetch.log, das oben bei jedem Lauf geleert
+ * wird, dort das dauerhafte log/plugins/<ordner>/smartmeter.log. Auf dem
+ * Geraet liegen bin/ und webfrontend/ in getrennten Baeumen, die beiden
+ * trafen sich also nie - im entpackten Archiv aber schon, und zwei Rumpfe
+ * unter einem Namen sind zwei Wahrheiten. Deshalb ein eigener Name statt
+ * einer function_exists-Wache: die haette nur die Ladereihenfolge
+ * darueber entscheiden lassen, in welche Datei protokolliert wird.
+ *
+ * Die Kappung steht in smg_log_kappen() (bin/sm_gemein.php) - sie
+ * betrifft beide Protokolle, und wortgleich ausgeschrieben stand sie
+ * bis 2.4.1 zweimal da.
+ */
+function sm_fetch_log($text, $stufe = 'INFO')
 {
     global $sm_logdatei, $sm_laut;
     $zeile = date('Y-m-d H:i:s') . " <$stufe> $text";
-    /* Kappung nach dem Hausmuster (fer_log, FerienFeiertage): ab 500 kB
-     * bleiben die letzten 200 Zeilen stehen. Ohne sie waechst die Datei
-     * unbegrenzt - auf einem LoxBerry mit SD-Karte ist das kein
-     * Schoenheitsfehler. */
-    if (is_file($sm_logdatei) && filesize($sm_logdatei) > 512000) {
-        $rest = array_slice(file($sm_logdatei, FILE_IGNORE_NEW_LINES) ?: array(), -200);
-        @file_put_contents($sm_logdatei, implode("\n", $rest) . "\n");
-    }
+    smg_log_kappen($sm_logdatei);
     @file_put_contents($sm_logdatei, $zeile . "\n", FILE_APPEND);
     if ($sm_laut) {
         echo $zeile . "\n";
@@ -143,7 +153,7 @@ function sm_log($text, $stufe = 'INFO')
  */
 function sm_abbruch($text)
 {
-    sm_log($text, 'ERROR');
+    sm_fetch_log($text, 'ERROR');
     fwrite(STDERR, $text . "\n");
     exit(1);
 }
@@ -154,7 +164,7 @@ if (!$sm_cfg) {
 }
 
 if (smg_wert($sm_cfg, 'MAIN', 'READ', '0') !== '1') {
-    sm_log('Der Legacy-Leser ist abgeschaltet (READ=0). Nichts zu tun.', 'INFO');
+    sm_fetch_log('Der Legacy-Leser ist abgeschaltet (READ=0). Nichts zu tun.', 'INFO');
     exit(0);
 }
 
@@ -235,18 +245,18 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
     $sm_meter  = isset($sm_werte['METER']) ? $sm_werte['METER'] : '0';
 
     if ($sm_meter === '' || $sm_meter === '0') {
-        sm_log($sm_serial . ': kein Zaehlerprofil festgelegt - uebersprungen.', 'WARN');
+        sm_fetch_log($sm_serial . ': kein Zaehlerprofil festgelegt - uebersprungen.', 'WARN');
         continue;
     }
     if (!file_exists($sm_device)) {
-        sm_log($sm_serial . ': ' . $sm_device . ' gibt es nicht - Lesekopf abgezogen?', 'WARN');
+        sm_fetch_log($sm_serial . ': ' . $sm_device . ' gibt es nicht - Lesekopf abgezogen?', 'WARN');
         continue;
     }
 
     // --- den Perl-Leser aufrufen
     $sm_logger = $sm_bin . '/sm_logger.pl';
     if (!is_readable($sm_logger)) {
-        sm_log('sm_logger.pl fehlt: ' . $sm_logger, 'ERROR');
+        sm_fetch_log('sm_logger.pl fehlt: ' . $sm_logger, 'ERROR');
         continue;
     }
     $sm_befehl = escapeshellarg($sm_logger) . ' --device ' . escapeshellarg($sm_device);
@@ -269,11 +279,11 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
         $sm_befehl .= ' --verbose';
     }
 
-    sm_log($sm_serial . ': lese ueber ' . $sm_device . ' (Profil ' . $sm_meter . ')');
+    sm_fetch_log($sm_serial . ': lese ueber ' . $sm_device . ' (Profil ' . $sm_meter . ')');
     $sm_aus = array(); $sm_rc = 0;
     @exec('perl ' . $sm_befehl . ' 2>&1', $sm_aus, $sm_rc);
     if ($sm_rc !== 0) {
-        sm_log($sm_serial . ': sm_logger.pl endete mit ' . $sm_rc . ' - '
+        sm_fetch_log($sm_serial . ': sm_logger.pl endete mit ' . $sm_rc . ' - '
              . substr(implode(' ', $sm_aus), 0, 200), 'ERROR');
     }
 
@@ -284,7 +294,7 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
         : array();
 
     if (!$sm_zeilen) {
-        sm_log($sm_serial . ': keine Daten gelesen.', 'WARN');
+        sm_fetch_log($sm_serial . ': keine Daten gelesen.', 'WARN');
     } else {
         $sm_gelesen++;
     }
@@ -296,15 +306,15 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
             : $sm_serial . ': No data found';
         $sm_ms = sm_miniserver($sm_home);
         if (!$sm_ms) {
-            sm_log('UDP: kein Miniserver in general.json gefunden.', 'WARN');
+            sm_fetch_log('UDP: kein Miniserver in general.json gefunden.', 'WARN');
         }
         foreach ($sm_ms as $sm_ziel) {
             $sm_versucht++;
             if (sm_udp($sm_ziel, $sm_udpport, $sm_text)) {
-                sm_log('UDP an ' . $sm_ziel . ':' . $sm_udpport . ' gesendet.', 'OK');
+                sm_fetch_log('UDP an ' . $sm_ziel . ':' . $sm_udpport . ' gesendet.', 'OK');
             } else {
                 $sm_gescheitert++;
-                sm_log('UDP an ' . $sm_ziel . ':' . $sm_udpport . ' fehlgeschlagen.', 'WARN');
+                sm_fetch_log('UDP an ' . $sm_ziel . ':' . $sm_udpport . ' fehlgeschlagen.', 'WARN');
             }
         }
     }
@@ -313,7 +323,7 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
     if ($sm_sendmqtt) {
         $sm_udpin = sm_gateway_udpin($sm_home);
         if (!$sm_udpin) {
-            sm_log('MQTT: Kein UDP-In-Port des MQTT Gateways gefunden - uebersprungen.', 'WARN');
+            sm_fetch_log('MQTT: Kein UDP-In-Port des MQTT Gateways gefunden - uebersprungen.', 'WARN');
         } else {
             $sm_anzahl = 0;
             $sm_fehl = 0;
@@ -342,7 +352,7 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
             $sm_gescheitert += $sm_fehl;
             // Ein Zaehler zaehlt Zustellungen, nicht Schleifendurchlaeufe -
             // und die Schlussmeldung nennt beides getrennt.
-            sm_log('MQTT: ' . $sm_anzahl . ' Werte an ' . $sm_topic . '/' . $sm_serial
+            sm_fetch_log('MQTT: ' . $sm_anzahl . ' Werte an ' . $sm_topic . '/' . $sm_serial
                  . ($sm_fehl ? ', ' . $sm_fehl . ' gescheitert' : '')
                  . ' (Gateway-Relais 127.0.0.1:' . $sm_udpin . ')',
                  $sm_fehl ? 'WARN' : 'OK');
@@ -357,7 +367,7 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
  * zwei verschiedene Groessen. */
 $sm_stand = smg_zaehler_weiter($sm_shm . '/zaehler');
 
-sm_log('Durchlauf beendet, ' . $sm_gelesen . ' Lesekopf/Lesekoepfe mit Daten, '
+sm_fetch_log('Durchlauf beendet, ' . $sm_gelesen . ' Lesekopf/Lesekoepfe mit Daten, '
      . 'Zaehler ' . $sm_stand
      . ($sm_gescheitert ? ', ' . $sm_gescheitert . ' von ' . $sm_versucht . ' Zustellungen gescheitert' : ''),
      $sm_gescheitert ? 'WARN' : 'OK');

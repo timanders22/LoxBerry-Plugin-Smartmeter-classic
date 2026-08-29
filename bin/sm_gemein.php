@@ -173,4 +173,42 @@ function smg_zaehler_lesen($datei)
     return preg_match('/^[0-9]{1,3}$/', $w) ? (int) $w : -1;
 }
 
+/**
+ * Eine Protokolldatei kappen: ab $grenze Bytes bleiben die letzten
+ * $behalten Zeilen stehen.
+ *
+ * Steht hier, weil es ZWEI Verbraucher gibt, die in getrennten Baeumen
+ * liegen: sm_fetch_log() im Abholer (bin/fetch.php, Ziel /dev/shm) und
+ * sm_log() in der Oberflaeche (webfrontend/htmlauth/sm_lib.php, Ziel
+ * log/plugins). Bis 2.4.1 stand die Kappung in beiden Rumpfen wortgleich
+ * ausgeschrieben - dieselbe Bauart, aus der Widersprueche entstehen.
+ *
+ * Beide Ziele liegen auf einer Ramdisk (log/plugins ist auf dem LoxBerry
+ * ein tmpfs): eine wachsende Datei frisst dort Arbeitsspeicher, nicht
+ * Plattenplatz.
+ *
+ * Rueckgabe: true, wenn wirklich gekappt wurde. Liefert filesize() ein
+ * false - Datei verschwand zwischen is_file() und filesize() -, faellt
+ * der Vergleich auf "nicht kappen", und die naechste Zeile wird trotzdem
+ * geschrieben. Nicht kappen ist der harmlosere der beiden Ausgaenge.
+ */
+function smg_log_kappen($datei, $grenze = 512000, $behalten = 200)
+{
+    /* PHP merkt sich die Antworten von stat(). Ohne diese Zeile sieht
+     * filesize() innerhalb EINES Prozesses die erste Groesse und danach
+     * nie wieder eine neue - gemessen am 29.08.2026: unter PHP 7.4.33
+     * wuchs eine Datei im selben Prozess auf 1 220 000 Byte, ohne je
+     * gekappt zu werden; unter 8.4.24 nicht. Beide Aufrufer sind heute
+     * kurzlebig, ein frischer Prozess kappt also richtig - aber die
+     * Funktion darf nicht davon abhaengen, wer sie wie oft ruft.
+     * Der zweite Parameter beschraenkt das Leeren auf DIESE Datei. */
+    clearstatcache(true, $datei);
+    if (!is_file($datei) || filesize($datei) <= $grenze) {
+        return false;
+    }
+    $rest = array_slice(file($datei, FILE_IGNORE_NEW_LINES) ?: array(), -$behalten);
+    @file_put_contents($datei, implode("\n", $rest) . "\n");
+    return true;
+}
+
 }

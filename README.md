@@ -524,6 +524,79 @@ Tabelle: 440 Schlüssel und 68 Hilfetexte, jedes Paar an einer Stelle. Wer eine
 Sprachdatei von Hand ändert, zieht den Erzeuger mit; die Köpfe der erzeugten
 Dateien sagen das auch dort.
 
+## Fassung 2.4.2 — zwei Wahrheiten unter einem Namen
+
+`sm_log()` war **zweimal definiert**, beide Male ohne `function_exists`-Wache:
+in `bin/fetch.php` und in `webfrontend/htmlauth/sm_lib.php`. Gefunden hat es
+`Werkzeuge/php_bilanz.py`.
+
+Der Reflex wäre die Wache nach dem Hausmuster gewesen — so hält es Raumklima
+mit `rk_e`, so hält es Kodi NG mit `ko_e`. Hier wäre sie **falsch** gewesen,
+denn die beiden Rümpfe waren nicht gleich. Sie schrieben in **verschiedene
+Dateien**:
+
+| | `bin/fetch.php` | `webfrontend/htmlauth/sm_lib.php` |
+|---|---|---|
+| Ziel | `/dev/shm/<ordner>/fetch.log` | `<home>/log/plugins/<ordner>/smartmeter.log` |
+| Lebensdauer | wird bei jedem Lauf geleert | dauerhaft |
+| Verzeichnis anlegen | nein | ja |
+| Bildschirmausgabe | ja bei `--verbose` | nein |
+
+Auf dem installierten LoxBerry liegen `bin/` und `webfrontend/htmlauth/` in
+getrennten Bäumen; die beiden trafen sich also nie, und es gab kein
+`Cannot redeclare`. Im entpackten Archiv liegen sie zusammen — und dort sind
+es zwei Wahrheiten unter einem Namen. Eine Wache hätte nicht die Wahrheit
+hergestellt, sondern die **Ladereihenfolge** darüber entscheiden lassen, in
+welche Datei protokolliert wird. Das ist genau die Bauart, aus der stille
+Widersprüche entstehen.
+
+Zwei Aufgaben, zwei Namen: die Funktion in `bin/fetch.php` heißt jetzt
+**`sm_fetch_log()`** (15 Aufrufstellen mitgezogen), `sm_log()` bleibt der
+Oberfläche.
+
+### Die Kappung stand zweimal da
+
+In beiden Rümpfen stand die Kappung — ab 500 kB bleiben die letzten 200
+Zeilen — **wortgleich ausgeschrieben**. Beide Ziele liegen auf einer Ramdisk,
+beide brauchen sie, und eine Regel mit zwei Verbrauchern steht in EINER
+Funktion. Sie heißt jetzt `smg_log_kappen()` und liegt in `bin/sm_gemein.php`
+— der Datei, die schon heute aus allen drei Bäumen erreichbar ist.
+
+`sm_log()` ruft sie über `function_exists()` auf, denselben Rückfall nimmt
+`sm_zaehler_lesen()`: fällt der gemeinsame Vorlauf aus, wird nur nicht
+gekappt — die Zeile selbst geht trotzdem hinaus, und die Selbstprüfung im
+Reiter Test meldet den Ausfall. `bin/fetch.php` braucht den Rückfall nicht:
+es bricht schon vorher ab, wenn `sm_gemein.php` fehlt.
+
+Gemessen unter PHP 7.4.33 und PHP 8.4.24, vier Fälle je Fassung: unter der
+Grenze wird nicht gekappt; über der Grenze bleiben genau die **letzten** 200
+Zeilen stehen (aus 12 000 Zeilen / 732 000 Byte wurden 11 801 bis 12 000);
+eine fehlende Datei wird nicht angelegt; eigene Werte für Grenze und
+Zeilenzahl wirken.
+
+### Der Stat-Zwischenspeicher
+
+Beim Nachmessen fiel ein zweiter, älterer Fehler auf. PHP merkt sich die
+Antworten von `stat()`. Innerhalb **eines** Prozesses sah `filesize()`
+deshalb die erste Größe und danach nie wieder eine neue — die Kappung fiel
+still aus:
+
+| 20 000 Zeilen im selben Prozess | ohne `clearstatcache` | mit |
+|---|---|---|
+| PHP 7.4.33 | 1 220 000 Byte, **nicht gekappt** | 220 332 Byte, gekappt |
+| PHP 8.4.24 | 220 332 Byte, gekappt | 220 332 Byte, gekappt |
+
+Der Rumpf bis 2.4.1 verhielt sich in derselben Messung genauso — es ist
+**kein Rückschritt**, sondern ein Fehler, der schon immer dastand. Folgen
+hatte er bisher keine: beide Aufrufer sind kurzlebig, und ein **frischer**
+Prozess kappt richtig (unter 7.4 gegengeprüft). Eine Funktion darf aber
+nicht davon abhängen, wer sie wie oft ruft. `clearstatcache(true, $datei)`
+steht jetzt als erste Zeile in `smg_log_kappen()` — der zweite Parameter
+beschränkt das Leeren auf diese eine Datei.
+
+Dass das eine Zeile an einer Stelle ist und nicht zwei an zweien, ist der
+eigentliche Gewinn der Zusammenlegung oben.
+
 ## Lizenz
 
 Apache License 2.0 — wie das Original. Siehe [`LICENSE`](LICENSE) und
