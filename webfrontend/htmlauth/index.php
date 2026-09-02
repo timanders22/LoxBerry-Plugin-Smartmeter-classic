@@ -77,8 +77,16 @@ foreach ($sm_reiter as $sm_i) { $sm_reiter_ids[] = substr($sm_i, 4); }
 
 // Der Reiter kommt entweder aus einem abgesendeten Formular (activetab) oder
 // als Adresse - die Legacy-Seite verlinkt so hierher.
-$sm_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
-    : (isset($_GET['tab']) ? 'tab-' . (string) $_GET['tab'] : '');
+/* is_string vor der Wandlung. Ohne sie meldet "?tab[]=x" eine
+ * PHP-Warnung ("Array to string conversion"), und activetab ist auch
+ * dann erreichbar, wenn der Wachposten durchgefallen ist - er schreibt
+ * genau dieses Feld absichtlich zurueck. */
+$sm_wunsch = '';
+if (isset($_POST['activetab']) && is_string($_POST['activetab'])) {
+    $sm_wunsch = $_POST['activetab'];
+} elseif (isset($_GET['tab']) && is_string($_GET['tab'])) {
+    $sm_wunsch = 'tab-' . $_GET['tab'];
+}
 $sm_tab = in_array($sm_wunsch, $sm_reiter, true) ? $sm_wunsch : $sm_reiter[0];
 
 $sm_cfg    = sm_vz_read();
@@ -88,8 +96,9 @@ $sm_legacy = sm_legacy_read();
  * Downloads - jeder in einem eigenen Formular, damit er nicht am
  * Speichern haengt. Sie enden mit exit.
  * ---------------------------------------------------------------- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
-    $sm_was = (string) $_POST['vorlage'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])
+    && is_string($_POST['vorlage'])) {
+    $sm_was = $_POST['vorlage'];
     list($sm_vname, $sm_vinhalt) = ($sm_was === 'legacy') ? sm_vorlage_legacy() : sm_vorlage();
     if ($sm_vname === '') {
         $sm_fehler[] = sm_t('LOX.VORLAGE_LEER');
@@ -164,7 +173,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['laden'])) {
                 }
                 list($sm_cok, $sm_ctext) = sm_cron_setzen($sm_legacy['READ'] === '1',
                                                           $sm_legacy['CRON']);
-                $sm_meldung = sm_t('SICH.UEBERNOMMEN') . ' ' . $sm_was . ' ' . $sm_ctext;
+                /* $sm_cok wurde bis 2.4.2 nicht angesehen: der Fehlertext
+                 * von sm_cron_setzen() landete unveraendert in der GRUENEN
+                 * Kachel. Der Zwilling im Handler lg_speichern macht es
+                 * richtig - zwei Aufrufstellen derselben Funktion, zwei
+                 * Behandlungen. */
+                $sm_meldung = sm_t('SICH.UEBERNOMMEN') . ' ' . $sm_was;
+                if ($sm_cok) {
+                    $sm_meldung .= ' ' . $sm_ctext;
+                } else {
+                    $sm_fehler[] = $sm_ctext;
+                }
             }
         }
     }
@@ -297,8 +316,8 @@ if (isset($_POST['mq_speichern'])) {
     $sm_tab = 'tab-mqtt';
 }
 
-if (isset($_POST['test'])) {
-    list($sm_test_titel, $sm_test_text) = sm_test_ausfuehren((string) $_POST['test'], $sm_cfg);
+if (isset($_POST['test']) && is_string($_POST['test'])) {
+    list($sm_test_titel, $sm_test_text) = sm_test_ausfuehren($_POST['test'], $sm_cfg);
     $sm_tab = 'tab-test';
 }
 
@@ -359,7 +378,14 @@ if (isset($_POST['lg_speichern'])) {
             if ($cron_ok) {
                 $sm_meldung = sm_t('MELD.GESPEICHERT') . ' ' . $cron_text;
             } else {
-                $sm_fehler[] = $cron_text;
+                /* Die Konfiguration IST geschrieben - sm_cfg_set() lief
+                 * weiter oben. Nur der Cron-Eintrag fehlt. Ohne diesen
+                 * Zusatz stand der Fehlertext unter der Ueberschrift
+                 * "Nicht gespeichert:", und das war die falsche Aussage:
+                 * der Takt steht in der Datei, nur eingerichtet ist er
+                 * nicht. Die Zeile "Cron-Eintrag" im Reiter Test zeigt
+                 * denselben Widerspruch. */
+                $sm_fehler[] = sm_t('CRON.NUR_EINTRAG') . ' ' . $cron_text;
             }
         }
     }
@@ -815,7 +841,16 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
   <select data-role="none" class="sm-auswahl" id="lg_cron" name="lg_cron">
 <?php foreach (sm_takte() as $wert => $t) { ?>
     <option value="<?php echo $wert; ?>"<?php
-      echo $sm_lcfg_cron === $wert ? ' selected' : ''; ?>><?php echo $t[1]; ?></option>
+      /* (string) auf BEIDE Seiten. PHP wandelt einen Feldschluessel, der wie
+       * eine Ganzzahl aussieht, beim Anlegen des Feldes selbst in eine
+       * Ganzzahl um: aus '5' => ... wird 5 => ... . Der Wert aus der
+       * Konfiguration ist dagegen eine Zeichenkette, und '5' === 5 ist
+       * falsch. Ohne die Wandlung stand an KEINEM Eintrag ein selected -
+       * das Auswahlfeld zeigte immer den ersten ("nur beim Systemstart"),
+       * und ein unveraendertes Absenden des Formulars schrieb genau den in
+       * die Konfiguration. Gemessen am 02.09.2026 in 7.4.33 und 8.4.24:
+       * CRON=30 vorher, CRON=M nachher. */
+      echo (string) $sm_lcfg_cron === (string) $wert ? ' selected' : ''; ?>><?php echo $t[1]; ?></option>
 <?php } ?>
   </select>
   <p class="sm-small"><?php echo sm_t('LG.HINT_TAKT'); ?></p>
@@ -851,9 +886,12 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
   <label for="<?php echo sm_e($sm_s); ?>_meter"><?php echo sm_t('LG.LABEL_PROFIL'); ?></label>
   <select data-role="none" class="sm-auswahl" id="<?php echo sm_e($sm_s); ?>_meter" name="lg_<?php echo sm_e($sm_s); ?>_meter">
 <?php $sm_akt = isset($sm_k['METER']) ? $sm_k['METER'] : '0';
+      /* Wie beim Abfragetakt: der Schluessel '0' ist im Feld eine Ganzzahl,
+       * der Wert aus der Konfiguration eine Zeichenkette. Hier fiel es
+       * bisher nicht auf, weil '0' zufaellig der erste Eintrag ist. */
       foreach (sm_profile() as $sm_pk => $sm_pn) { ?>
     <option value="<?php echo sm_e($sm_pk); ?>"<?php
-      echo $sm_akt === $sm_pk ? ' selected' : ''; ?>><?php echo $sm_pn; ?></option>
+      echo (string) $sm_akt === (string) $sm_pk ? ' selected' : ''; ?>><?php echo $sm_pn; ?></option>
 <?php } ?>
   </select>
   <p class="sm-small"><?php echo sm_t('ALLG.GERAET'); ?>: <span class="sm-mono"><?php
@@ -999,7 +1037,16 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
  * Namen stimmte. */
 foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
     $sm_md = sm_feld($sm_feld);
-    $sm_eh = ($sm_md && $sm_md['einheit'] !== '') ? $sm_md['einheit'] : '&ndash;';
+    /* Die Einheit kommt aus sm_einheit_fuer() - derselben Funktion, aus
+     * der auch die Loxone-Vorlage schoepft, und mit demselben Weg 'vz'.
+     * Diese Tabelle zeigt die Themen des vzLOGGER-Weges; bis 2.4.3 nahm
+     * sie 'einheit', also die Einheit des KLASSISCHEN Weges, und stand
+     * damit im Widerspruch zu dem, was der Dienst liefert.
+     *
+     * Maskiert wird die Einheit; nur der Gedankenstrich fuer "keine
+     * Einheit" ist Auszeichnung und geht roh hinaus. */
+    list($sm_eh_roh, , ) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
+    $sm_eh = ($sm_eh_roh !== '') ? sm_e($sm_eh_roh) : '&ndash;';
     $sm_bd = $sm_md ? sm_t($sm_md['bed']) : $sm_feld;
     ?>
 <tr><td class="sm-mono"><?php echo sm_e(sm_thema($sm_legacy['MQTTTOPIC'], $sm_cfg['serial'], $sm_feld)); ?></td>
@@ -1016,6 +1063,16 @@ foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
 <div class="sm-pane<?php echo $sm_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 
 <h2><?php echo sm_t('LOX.H_TITEL'); ?></h2>
+
+<!-- Der Bruch aus 2.5.0. Er steht GANZ OBEN und nicht in einer Fussnote:
+     wer den Reiter aufschlaegt, hat entweder schon Eingaenge angelegt -
+     dann betrifft es ihn - oder nicht, dann kostet ihn der Kasten drei
+     Zeilen. Umgekehrt faende ihn niemand. -->
+<div class="sm-alert sm-warn">
+<?php printf(sm_t('LOX.BRUCH_250'),
+             '<span class="sm-mono">Breaker_State_Electricity_96.1.4</span>',
+             '<span class="sm-mono">Breaker_State_Electricity_96.3.10</span>'); ?>
+</div>
 
 <div class="sm-step">
 <b><?php echo sm_t('LOX.S1_TITEL'); ?></b><br><br>
@@ -1037,8 +1094,12 @@ foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
 <?php foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
     $sm_md = sm_feld($sm_feld);
     if ($sm_md && $sm_md['typ'] === 'text') { continue; }
-    $sm_eh = ($sm_md && $sm_md['einheit'] !== '')
-        ? '&lt;v.' . (int) $sm_md['nk'] . '&gt;&nbsp;' . sm_e($sm_md['einheit']) : '&ndash;';
+    /* Dieselbe Quelle wie die Vorlage, die der Knopf darunter erzeugt.
+     * Die Tabelle erklaert, WAS importiert wird - sie muss deshalb genau
+     * das zeigen, was in der Datei steht. */
+    list($sm_eh_roh, , ) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
+    $sm_eh = ($sm_eh_roh !== '')
+        ? '&lt;v.' . (int) $sm_md['nk'] . '&gt;&nbsp;' . sm_e($sm_eh_roh) : '&ndash;';
     $sm_bd = $sm_md ? sm_t($sm_md['bed']) : $sm_feld; ?>
 <tr><td class="sm-mono"><?php echo sm_e(sm_ve_name($sm_legacy['MQTTTOPIC'], $sm_cfg['serial'], $sm_feld)); ?></td>
     <td><?php echo $sm_eh; ?></td><td><?php echo sm_e($sm_bd); ?></td></tr>
@@ -1093,19 +1154,37 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?php echo sm_t('LOX.SP_BAUSTEIN'); ?></th><th><?php echo sm_t('LOX.SP_NAME'); ?></th><th><?php echo sm_t('LOX.SP_PARAMETER'); ?></th><th><?php echo sm_t('LOX.SP_EINGAENGE'); ?></th></tr>
-<tr><td>1</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Bezug</td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>MQTT <span class="sm-mono">Consumption_Total_OBIS_1.8.0</span></td></tr>
-<tr><td>2</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Einspeisung</td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>MQTT <span class="sm-mono">Delivery_Total_OBIS_2.8.0</span></td></tr>
-<tr><td>3</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Leistung</td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kW</span></td><td>MQTT <span class="sm-mono">Total_Power_OBIS_16.7.0</span></td></tr>
-<tr><td>4</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td>Strom_Zaehlwerk</td><td><?php echo sm_t('LOX.P_ZAEHLER'); ?></td><td>MQTT <span class="sm-mono">ZAEHLER</span></td></tr>
-<tr><td>5</td><td><?php echo sm_t('BAUSTEIN.ZAEHLER'); ?></td><td>Verbrauch_Tag</td><td><?php echo sm_t('LOX.P_MITTERNACHT'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #1</td></tr>
-<tr><td>6</td><td><?php echo sm_t('BAUSTEIN.STATISTIK'); ?></td><td>Strom_Verlauf</td><td><?php echo sm_t('LOX.P_ANALOG'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
-<tr><td>7</td><td><?php echo sm_t('BAUSTEIN.VERGLEICHER'); ?></td><td>Einspeisung_aktiv</td><td><?php echo sm_t('LOX.P_SCHWELLE0'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
-<tr><td>8</td><td><?php echo sm_t('BAUSTEIN.ANALOGSPEICHER'); ?></td><td>Zaehlwerk_Vorwert</td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #4</td></tr>
-<tr><td>9</td><td><?php echo sm_t('BAUSTEIN.FORMEL'); ?></td><td>Zaehlwerk_Aenderung</td><td><span class="sm-mono">ABS(I1-I2)</span></td><td>I1 = #4, I2 = #8</td></tr>
-<tr><td>10</td><td><?php echo sm_t('BAUSTEIN.EVZ'); ?></td><td>Zaehler_schweigt</td><td><?php echo sm_t('LOX.P_VERZOEGERUNG'); ?> <b><?php echo (int) max(600, sm_alter_grenze() * 2); ?></b> s</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #9 = 0</td></tr>
-<tr><td>11</td><td><?php echo sm_t('BAUSTEIN.ODER'); ?></td><td>Strom_Meldungen</td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGAENGE'); ?> &larr; #10 &hellip;</td></tr>
-<tr><td>12</td><td><?php echo sm_t('BAUSTEIN.BENACHRICHTIGUNG'); ?></td><td><?php echo sm_t('LOX.N_ZAEHLER_PRUEFEN'); ?></td><td><?php echo sm_t('LOX.P_TEXT_FREI'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #11</td></tr>
-<tr><td>13 <i>(<?php echo sm_t('ALLG.OPTIONAL'); ?>)</i></td><td><?php echo sm_t('BAUSTEIN.STATUS'); ?></td><td>Strom_aktuell</td><td><?php echo sm_t('LOX.P_STATUSTEXT'); ?></td><td>v1 = #3, v2 = #1</td></tr>
+<?php
+/* Die drei Feldnamen der Zeilen 1 bis 3 kommen aus sm_obis_feld() - also
+ * aus bin/sm_felder.json, derselben Datei, aus der auch die Tabelle in
+ * Schritt 3 und der Dienst schoepfen. Bis 2.4.2 standen sie hier als
+ * Literale und wichen bei jedem anderen Kanalsatz von der Tabelle
+ * darueber ab, auf derselben Seite.
+ *
+ * Dazu die Gegenprobe, ob der Kanal ueberhaupt eingestellt ist: ein
+ * Tarifzaehler ohne 16.7.0 bekommt sonst eine Zeile zum Nachbauen, die
+ * nie einen Wert traegt. */
+$sm_bl = sm_vz_felder($sm_cfg);
+?>
+<tr><td>1</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_BEZUG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td><?php echo sm_quelle_mqtt('1-0:1.8.0', $sm_bl); ?></td></tr>
+<tr><td>2</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td><?php echo sm_quelle_mqtt('1-0:2.8.0', $sm_bl); ?></td></tr>
+<tr><td>3</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_LEISTUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kW</span></td><td><?php echo sm_quelle_mqtt('1-0:16.7.0', $sm_bl); ?></td></tr>
+<!-- ZAEHLER ist KEIN MQTT-Thema. Er steht ausschliesslich in der
+     Schlusszeile des Endpunkts (Schritt 8); bis 2.4.2 stand hier "MQTT
+     ZAEHLER", und weder der Dienst noch die Vorlage kennen ein solches
+     Thema. Baustein #4 blieb damit ohne Wert - und mit ihm die ganze
+     Kette #8 bis #12, also genau die Ausfallerkennung, fuer die dieser
+     Schritt da ist. -->
+<tr><td>4</td><td><?php echo sm_t('BAUSTEIN.VE_HTTP'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLWERK')); ?></td><td><?php echo sm_t('LOX.P_ZAEHLER'); ?></td><td><?php echo sm_t('LOX.Q_ENDPUNKT'); ?></td></tr>
+<tr><td>5</td><td><?php echo sm_t('BAUSTEIN.ZAEHLER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERBRAUCH_TAG')); ?></td><td><?php echo sm_t('LOX.P_MITTERNACHT'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #1</td></tr>
+<tr><td>6</td><td><?php echo sm_t('BAUSTEIN.STATISTIK'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERLAUF')); ?></td><td><?php echo sm_t('LOX.P_ANALOG'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
+<tr><td>7</td><td><?php echo sm_t('BAUSTEIN.VERGLEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG_AKTIV')); ?></td><td><?php echo sm_t('LOX.P_SCHWELLE0'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
+<tr><td>8</td><td><?php echo sm_t('BAUSTEIN.ANALOGSPEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VORWERT')); ?></td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #4</td></tr>
+<tr><td>9</td><td><?php echo sm_t('BAUSTEIN.FORMEL'); ?></td><td><?php echo sm_e(sm_t('LOX.N_AENDERUNG')); ?></td><td><span class="sm-mono">ABS(I1-I2)</span></td><td>I1 = #4, I2 = #8</td></tr>
+<tr><td>10</td><td><?php echo sm_t('BAUSTEIN.EVZ'); ?></td><td><?php echo sm_e(sm_t('LOX.N_SCHWEIGT')); ?></td><td><?php echo sm_t('LOX.P_VERZOEGERUNG'); ?> <b><?php echo (int) max(600, sm_alter_grenze() * 2); ?></b> s</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #9 = 0</td></tr>
+<tr><td>11</td><td><?php echo sm_t('BAUSTEIN.ODER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_MELDUNGEN')); ?></td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGAENGE'); ?> &larr; #10 &hellip;</td></tr>
+<tr><td>12</td><td><?php echo sm_t('BAUSTEIN.BENACHRICHTIGUNG'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLER_PRUEFEN')); ?></td><td><?php echo sm_t('LOX.P_TEXT_FREI'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #11</td></tr>
+<tr><td>13 <i>(<?php echo sm_t('ALLG.OPTIONAL'); ?>)</i></td><td><?php echo sm_t('BAUSTEIN.STATUS'); ?></td><td><?php echo sm_e(sm_t('LOX.N_AKTUELL')); ?></td><td><?php echo sm_t('LOX.P_STATUSTEXT'); ?></td><td>v1 = #3, v2 = #1</td></tr>
 </table>
 </div>
 <br>
@@ -1127,8 +1206,19 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 <pre class="sm-pre"><?php echo sm_e($sm_endpunkt); ?></pre>
 <p class="sm-small"><?php echo sm_t('LOX.S8_SELFTEST'); ?></p>
 <pre class="sm-pre"><?php echo sm_e($sm_endpunkt_selftest); ?></pre>
-<p class="sm-small"><?php printf(sm_t('LOX.S8_ZEILE'),
-  '<span class="sm-mono">SMARTMETER;OK=1;ALTER=42;ZAEHLER=137;KOEPFE=1</span>'); ?></p>
+<?php
+/* Die Felder stehen in derselben Reihenfolge wie in
+ * webfrontend/html/index.php. GRENZE fehlte hier bis 2.4.2 - der
+ * Endpunkt sendet es, das Beispiel zum Abschreiben nannte es nicht.
+ *
+ * Der Kommentar steht VOR dem Aufruf, nicht darin: Werkzeuge/
+ * sprachplatzhalter_pruefen.py zaehlt die Argumente an den Kommata, und
+ * ein Komma im Kommentar wird dort zu einem zweiten Argument. */
+$sm_zustandszeile = '<span class="sm-mono">'
+                  . 'SMARTMETER;OK=1;ALTER=42;ZAEHLER=137;KOEPFE=1;GRENZE=300'
+                  . '</span>';
+?>
+<p class="sm-small"><?php printf(sm_t('LOX.S8_ZEILE'), $sm_zustandszeile); ?></p>
 <?php if ($sm_token === '') { ?>
 <div class="sm-alert sm-warn"><?php echo sm_t('LOX.TOKEN_OFFEN'); ?></div>
 <div class="sm-knopfreihe">
@@ -1198,6 +1288,7 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 <div class="sm-knopfreihe">
 <?php foreach (array('umgebung' => sm_t('TEST.K_UMGEBUNG'),
                      'http'     => sm_t('TEST.K_HTTP'),
+                     'roh'      => sm_t('TEST.K_ROH'),
                      'legacy'   => sm_t('TEST.K_LEGACY'),
                      'mitschnitt' => sm_t('TEST.K_MITSCHNITT')) as $wert => $text) { ?>
   <form method="post" action="index.php">

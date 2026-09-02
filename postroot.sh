@@ -57,7 +57,14 @@ fi
 chmod +x "$PKG" "$CHECK" 2>/dev/null
 
 if [ ! -x "$PKG" ]; then
-	echo "<ERROR> Paket-Helfer fehlt: $PKG"
+	# <WARNING>, nicht <ERROR>: der Block unmittelbar darunter behandelt
+	# denselben Fall - vzlogger ist nicht einzurichten - bewusst als
+	# Warnung und macht weiter, weil die Legacy-Betriebsart kein
+	# vzlogger braucht. Ein <ERROR> mit exit 0 daneben war ein
+	# Widerspruch in derselben Datei.
+	echo "<WARNING> Paket-Helfer fehlt: $PKG"
+	echo "<WARNING> vzlogger wird nicht eingerichtet. Die Betriebsart"
+	echo "<WARNING> Legacy (Zaehlerprofile) laeuft davon unberuehrt."
 	exit 0
 fi
 

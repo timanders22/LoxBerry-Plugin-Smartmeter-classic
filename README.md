@@ -141,9 +141,14 @@ in der gewählten Sprache, greift der englische; fehlt auch der, erscheint der
 Schlüsselname selbst — Absicht, denn eine leere Seite verschweigt den Fehler,
 ein sichtbares `VZ.LABEL_DEVICE` nicht.
 
-Nicht übersetzt sind die 41 Zählerprofile: das sind Gerätebezeichnungen
-(*Iskra MT681*, *Landis & Gyr E220*) und in jeder Sprache dieselben. Von den
-45 Einträgen der Liste sind es die vier allgemeinen, die übersetzt werden.
+Nicht übersetzt sind die 39 Gerätebezeichnungen (*Iskra MT681*, *Landis &
+Gyr E220*) — sie sind in jeder Sprache dieselben. Die Auswahlliste hat 43
+Einträge; übersetzt werden die vier allgemeinen (*noch nicht festgelegt*,
+*von Hand einstellen*, *Allgemeines D0*, *Allgemeines SML*).
+`bin/sm_logger.pl` kennt 41 Protokolle — das sind die 39 Gerätemodelle plus
+`genericd0` und `genericsml`. Die Zahlen 41 und 45 standen hier bis 2.4.2
+und waren beide falsch; nachgezählt am 02.09.2026 an `sm_profile()` und an
+den `$protocol eq`-Zweigen des Lesers.
 
 Zwei Dinge fielen beim Umbau nebenbei an:
 
@@ -453,7 +458,7 @@ Reiters *MQTT* und in der Loxone-Vorlage. Keine der drei stimmte mit den
 anderen überein — die Tabelle zeigte die OBIS-Kennzahl, während der Dienst unter
 dem Feldnamen veröffentlichte.
 
-Jetzt liest alles `bin/sm_felder.json`: 65 Felder und 7 OBIS-Kennzahlen. Erzeugt
+Jetzt liest alles `bin/sm_felder.json`: 66 Felder und 7 OBIS-Kennzahlen. Erzeugt
 wird die Datei von `Werkzeuge/sm_felder_erzeugen.py` aus dem Quelltext des
 Lesers; ein Feld ohne Regel bricht den Lauf ab, statt still zu fehlen. Der
 Selbsttest prüft nach, dass der Dienst den Katalog wirklich liest und keine
@@ -520,7 +525,7 @@ Systemstart*.
 
 Alle vier Sprachdateien — `language_de.ini`, `language_en.ini`, `help_de.ini`,
 `help_en.ini` — erzeugt jetzt `Werkzeuge/sm_sprache_erzeugen.py` aus **einer**
-Tabelle: 440 Schlüssel und 68 Hilfetexte, jedes Paar an einer Stelle. Wer eine
+Tabelle: 457 Schlüssel und 68 Hilfetexte, jedes Paar an einer Stelle. Wer eine
 Sprachdatei von Hand ändert, zieht den Erzeuger mit; die Köpfe der erzeugten
 Dateien sagen das auch dort.
 
@@ -596,6 +601,259 @@ beschränkt das Leeren auf diese eine Datei.
 
 Dass das eine Zeile an einer Stelle ist und nicht zwei an zweien, ist der
 eigentliche Gewinn der Zusammenlegung oben.
+
+## Fassung 2.4.3 — was der Vergleich nicht verglich
+
+Eine Durchsicht Zeile für Zeile, gemessen unter PHP 7.4.33 **und** 8.4.24.
+Nichts kommt hinzu: keine neuen Themen, keine neuen
+Konfigurationsschlüssel, keine geänderte Loxone-Vorlage.
+
+### Der Abfragetakt stellte sich bei jedem Speichern auf „nur beim Systemstart"
+
+Der schwerste Befund. `sm_takte()` liefert ein Feld mit den Schlüsseln
+`'M', '1', '3', '5', …`. PHP wandelt einen Feldschlüssel, der wie eine
+Ganzzahl aussieht, beim Anlegen selbst in eine Ganzzahl um — aus `'5' =>`
+wird `5 =>`. Der Wert aus der Konfiguration ist dagegen eine Zeichenkette,
+und `'5' === 5` ist falsch. Der Vergleich im Auswahlfeld traf damit **an
+keinem einzigen Eintrag** zu.
+
+Was daraus folgte, ist am nachgebauten LoxBerry gemessen, in beiden
+PHP-Fassungen:
+
+| | gemessen |
+|---|---|
+| `CRON=30` in der Konfiguration | im `<select>` steht **kein** `selected` |
+| der Browser sendet deshalb | `lg_cron=M` (den ersten Eintrag) |
+| nach einem unveränderten Absenden | `CRON=M` |
+
+Wer im Reiter *Legacy* nur einen Lesekopfnamen änderte oder ein Häkchen
+setzte, verlor den Takt — und bekam danach einen Zählerstand je Neustart
+des LoxBerry statt alle fünf Minuten. In Loxone behält der virtuelle
+Eingang seinen letzten Wert; es sah aus wie ein ruhiger Tag. Genau davor
+warnt der Kommentar über `sm_takte()` selbst.
+
+Dieselbe Klasse steckte im Auswahlfeld für das Zählerprofil (Schlüssel
+`'0'`). Dort fiel sie nicht auf, weil `0` zufällig der erste Eintrag ist.
+Beide Stellen vergleichen jetzt `(string)` gegen `(string)`.
+
+### Der SML-Zerleger starb unter PHP 8 mitten im Telegramm
+
+`bin/php_sml_parser.class.php` fragte das Fortsetzungsbit eines
+TL-Feldes mit `$TYPE[0] & 0x8` ab — einem Vergleich auf dem **Zeichen**.
+`'8'` und `'9'` sind numerische Zeichenketten und gingen durch, `'A'` bis
+`'F'` nicht:
+
+| | hohes Nibble A–F |
+|---|---|
+| PHP 7.4.33 | `Warning: A non-numeric value encountered`, Ergebnis 0 — die Schleife lief **gar nicht**, die Länge blieb falsch |
+| PHP 8.4.24 | `TypeError: Unsupported operand types: string & int` — Abbruch |
+
+Betroffen ist genau die lange Liste, für die das Bit da ist. Elf Zeilen
+tiefer steht dieselbe Prüfung in derselben Datei richtig
+(`hexdec($TYPE_LEN[0]) & 0x8`), mit dem Kommentar „manche DTZ41 vom
+Bayernwerk schicken 20 OBIS-Kennzahlen". Zwei Schreibweisen einer Prüfung,
+eine davon falsch.
+
+Dazu aus derselben Datei:
+
+* **Skalierungsfaktor 0.** `if($result['scaler'])` ließ eine 0 stehen,
+  statt sie zu 10⁰ = 1 zu machen. `bin/sml_parser.php` multipliziert im
+  Wh-Zweig damit — der Zählerstand wurde 0 und ging ungeprüft nach Loxone.
+  Der W-Zweig derselben Datei fängt `scaler == 0` ausdrücklich ab.
+* **Der CRC-Vergleich** stand auf `==`. `"0E12" == "0E34"` ist wahr, in
+  beiden PHP-Fassungen. Der Befund wird heute nirgends ausgewertet, der
+  Vergleich war also latent — jetzt steht `===` da.
+* `readSmlTime()` gab im `default`-Zweig eine nie gesetzte Variable zurück.
+* `parse_sml_string()` und `parse_sml_file()` warfen bei jedem Aufruf einen
+  `ArgumentCountError`; sie reichen `$crc` jetzt durch.
+
+### Baustein #4 der Loxone-Anleitung konnte nie einen Wert bekommen
+
+Die Bausteinliste im Reiter *Einbindung in Loxone* nannte als Quelle für
+`Strom_Zaehlwerk` ein MQTT-Thema `ZAEHLER`. Ein solches Thema gibt es
+nicht: `ZAEHLER` steht ausschließlich in der Schlusszeile des Endpunkts.
+Damit blieb #4 ohne Wert — und mit ihm die ganze daran hängende Kette #8
+bis #12, also genau die Ausfallerkennung, für die der Schritt da ist.
+Zeile 4 verweist jetzt auf den Endpunkt aus Schritt 8.
+
+Im selben Zug: die Feldnamen der Zeilen 1 bis 3 standen als Literale da,
+während die Tabelle darüber sie aus `bin/sm_felder.json` erzeugt — bei
+einem anderen Kanalsatz wichen zwei Tabellen auf derselben Seite
+voneinander ab. Sie kommen jetzt aus derselben Quelle, und ein Kanal, der
+gar nicht eingestellt ist, wird als solcher gekennzeichnet. Die
+Namensvorschläge der Bausteine stehen jetzt vollständig in den
+Sprachdateien; bis 2.4.2 war einer von dreizehn übersetzt.
+
+### Zurückspielen einer Sicherung
+
+* Ein Lesekopf, dessen Gerät hier fehlt, wurde **unsichtbar**: der Pfad
+  wurde entfernt, und `sm_koepfe()` überspringt jeden Abschnitt ohne
+  `DEVICE`. Auf einer frischen Anlage — also genau dem Zweck der Datei —
+  war der Kopf danach nicht zu sehen und nicht zu bearbeiten, während die
+  Meldung sagte, die Einstellung sei übernommen. Der Pfad bleibt jetzt
+  stehen; dass das Gerät fehlt, sagt `ANGESTECKT`.
+* Die Datei wurde **schwächer geprüft als das Formular**, obwohl der
+  Kommentar „dieselben Grenzen" versprach: Zählernummer, Kanäle und die
+  Schalter gingen ungeprüft durch, und die Regel „nur ein Leser" fehlte im
+  dritten Handler. Alles nachgezogen.
+* Ein gescheiterter Cron-Eintrag landete in der **grünen** Kachel.
+* `vzlogger.conf` wurde nicht nachgezogen, wenn eine fremde Schreibung
+  scheiterte — `vzlogger.json` und `vzlogger.conf` liefen still
+  auseinander.
+
+### Selbstprüfungen, die beruhigten
+
+* Der gepufferte Endpunkt-Befund (`endpunkt.json`) wurde **nie** verworfen.
+  Nach *Token entfernen* — der Endpunkt steht damit jedem Gerät im Netz
+  offen — zeigte die Zeile bis zu 300 s weiter den alten Haken.
+* Die Zeile „offener Reiter" prüfte die Leiste nur auf „mindestens einer"
+  und meldete dann eine Zahl, die sie gar nicht erhoben hatte. Nachgestellt:
+  fünf von sechs Reitern zerstört, die Zeile trug trotzdem einen Haken.
+* Die Zeile „INI-Muster" beschrieb eine Anführungszeichen-Prüfung, die
+  nicht stattfindet, und zählte Dateien statt Zeilen.
+* Die UTF-8-Prüfung der Loxone-Vorlage stand hinter `simplexml_load_string()`
+  und konnte deshalb nie greifen.
+* Das Zugriffstoken stand im Klartext in der Prüfzeile **und** in
+  `endpunkt.json`, zwei Blöcke über der Stelle, die es bewusst maskiert.
+
+### Der klassische Leser (`bin/sm_logger.pl`)
+
+* `CALCULATE_POWER`: der Wächter „kein Messwert vorhanden" stand **hinter**
+  `sprintf("%.3f", …)` — und `"0.000"` ist in Perl wahr. Die Warnung ist nie
+  erschienen. Dazu eine mögliche **Division durch Null**, wenn zwei Läufe in
+  dieselbe Sekunde fallen; das ist in Perl ein tödlicher Laufzeitfehler.
+* Bezug und Lieferung teilten sich undeklarierte Paketvariablen. Ist
+  `<serial>.lastdel` leer — und das Programm legt sie selbst leer an, ein
+  Haushalt ohne Einspeisung füllt sie nie —, rechnete der Lieferungs-Zweig
+  bei **jedem** Lauf mit dem Zählerstand und dem Zeitstempel des Bezugs. Die
+  Variablen sind jetzt lexikalisch.
+* Der Zähler der gemessenen Werte stieg auch dann, wenn `print` scheiterte.
+  Genau dieser Zähler entscheidet, ob `Last_UpdateUnix` geschrieben wird —
+  der Zeitstempel, aus dem Endpunkt und Healthcheck das Alter ableiten.
+* `close()` wurde vor dem `rename()` nicht beurteilt; auf einer Ramdisk
+  meldet erst `close` einen Schreibfehler.
+* Der Rückgabewert von `sml_parser.php` wurde nie angesehen, der
+  Zeitgrenzabbruch (`$@`) nie ausgewertet, und der Geräte-Pfad wurde
+  unverankert geprüft.
+
+### Weiteres
+
+* `webfrontend/html/index.php`: der zweite Bibliothekspfad lag eine Ebene
+  zu tief (`dirname` dreimal statt viermal) und traf nie.
+* `sm_e()` lieferte bei einem einzigen ungültigen Byte einen **Leerstring**
+  statt des Textes — getroffen hat das den Mitschnitt, also ausgerechnet
+  das Werkzeug für die Fehlersuche. Jetzt mit `ENT_SUBSTITUTE`.
+* `sm_log_ende()` zeigte als älteste Zeile ein Bruchstück.
+* `uninstall`: `rm -rf "/dev/shm/$3"` ohne Prüfung auf ein leeres `$3`.
+* `bin/vzlogger_pkg.sh`: ein Abbruch zwischen `block_` und
+  `unblock_service_start` konnte `policy-rc.d` dauerhaft zerstören —
+  danach startete auf dem Rechner kein Paket mehr seine Dienste. Jetzt mit
+  `trap`.
+* `preupgrade.sh`/`postupgrade.sh`: eine gescheiterte Sicherung wurde als
+  geglückte Rückspielung gemeldet; eine gescheiterte Rückspielung war
+  stumm.
+* `dpkg/apt` verlangte `libstring-escape-perl` — `String::Escape` kommt in
+  keiner Datei des Plugins vor.
+* `daemon/daemon` und `postroot.sh` schreiben dieselbe udev-Regel mit zwei
+  verschiedenen Kopfzeilen.
+
+### Was ausdrücklich NICHT gemessen ist
+
+Kein Zähler, kein Lesekopf, kein laufendes `vzlogger`, kein Broker, kein
+Miniserver. Damit ungeprüft: das Verhalten von `Device::SerialPort`, echte
+D0- und SML-Telegramme (und damit die tatsächliche Reichweite der
+Zerleger-Befunde), die 41 Zählerprofile, der Suchlauf über die vier
+allgemeinen Lesewege und das MQTT-Gateway in Fassung 2. Die Berichtigungen
+am Zerleger sind an den Ausdrücken gemessen, nicht an einem Telegramm.
+
+## Fassung 2.5.0 — die Einheit wird gemessen, nicht angenommen
+
+Diese Fassung enthält alles aus 2.4.3 (siehe oben) und dazu drei
+Änderungen, die eine neue Nebennummer verlangen: ein Feldname ändert sich,
+und die Loxone-Vorlage sieht anders aus.
+
+### Der Schaltzustand trug die falsche OBIS-Kennzahl im Namen
+
+`Breaker_State_Electricity_96.1.4` wird aus **96.3.10** gelesen — die
+Kennzahl im Namen stimmte nicht. Schlimmer: 96.1.4 gehört im selben
+Katalog schon `Version_Information_96.1.4`. Zwei verschiedene Größen unter
+einer Kennzahl, und in einer Feldliste sieht das aus wie ein Tippfehler,
+den man „gleich mal aufräumt".
+
+| | bis 2.4.3 | ab 2.5.0 |
+|---|---|---|
+| Feldname | `Breaker_State_Electricity_96.1.4` | `Breaker_State_Electricity_96.3.10` |
+| gelesen aus | 96.3.10 | 96.3.10 |
+
+**Das ist ein Bruch.** Der Feldname ist zugleich der Name des virtuellen
+Eingangs in Loxone. Wer diesen Wert verwendet, benennt den Eingang einmal
+um oder lädt die Vorlage neu — alle übrigen Eingänge bleiben unberührt.
+Betroffen sind nur Zähler, die 96.3.10 überhaupt senden. Der Hinweis steht
+mit beiden Namen oben im Reiter *Einbindung in Loxone*, nicht in einer
+Fußnote.
+
+### Die vzLogger-Vorlage trug die Einheiten des klassischen Lesers
+
+`bin/sm_felder.json` führt je Feld zwei Einheiten und sagt im eigenen Kopf,
+warum:
+
+* `einheit` — „gilt für den **klassischen** Weg; `bin/sml_parser.php`
+  rechnet Wh auf kWh und W auf kW um"
+* `einheit_vz` — „**LEER** und das mit Absicht: vzlogger rechnet nicht um,
+  es reicht den Wert des Zählers durch."
+
+Die Vorlage nahm bis 2.4.3 für **beide** Wege `einheit`. Auf dem
+vzLogger-Weg stand damit `<v.3> kWh` an einem Eingang, der möglicherweise
+rohe Wh bekommt — und `MaxVal="1000000"` kappte einen Zählerstand in Wh
+schon nach 1000 kWh. Ein Eingang, der bei einem Messwert stehenbleibt,
+sieht in der Visualisierung aus wie ein ruhiger Zähler.
+
+Ab 2.5.0 entscheidet **eine** Funktion, `sm_einheit_fuer($feld, $weg)`, und
+aus ihr schöpfen alle drei Stellen: die Themen-Tabelle im Reiter *MQTT*,
+die Tabelle in Schritt 3 und die erzeugte Vorlage. Solange `einheit_vz`
+leer ist, heißt das auf dem vzLogger-Weg:
+
+* **keine Einheit** am virtuellen Eingang — lieber eine nackte Zahl als
+  eine falsche Beschriftung, die niemand nachprüft,
+* **weite Grenzen** (±10⁹) statt der Grenzen, die für die umgerechnete
+  Einheit gelten.
+
+Der klassische Weg bleibt unverändert: dort wird umgerechnet, dort sind die
+Einheiten belegt.
+
+### Und der Knopf, mit dem sich die Einheit belegen lässt
+
+Ohne Zähler war nicht zu entscheiden, welche Einheit vzlogger durchreicht —
+also stand sie nicht da. Damit das nicht so bleibt, gibt es jetzt
+
+    bin/fetch_vzlogger.pl --roh
+
+und dafür den Knopf **vzLogger-Rohwerte** im Reiter *Test*. Er ruft
+denselben Code, der die Werte später veröffentlicht, und zeigt je Kanal
+UUID, OBIS-Kennzahl, Feldname und den **rohen** Wert. Er **liest nur**:
+keine Datendatei, kein MQTT, kein UDP, und der Umlaufzähler bleibt stehen —
+ein Messstück, das den Messgegenstand verändert, misst sich selbst.
+
+Die letzte Spalte ist ein **Hinweis aus dem Zahlenwert**, keine Messung: ein
+Zählerstand um 12 345 ist eher kWh, einer um 12 345 678 eher Wh. Maßgeblich
+ist das Datenblatt des Zählers. Wer die Einheit belegt hat, trägt sie als
+`einheit_vz` in `Werkzeuge/sm_felder_erzeugen.py` ein und lässt den Erzeuger
+laufen — dann steht sie in der Vorlage, und mit ihr wieder die passenden
+Grenzen.
+
+Nachgemessen ist der Zweig gegen eine **Attrappe** der
+vzlogger-Schnittstelle (`Pruefung-Smartmeter-classic-2.4.0/roh_pruefstand.php`,
+17 von 17, beide PHP-Fassungen): die Zuordnung der Kanäle, der jüngste Wert
+statt des ersten, ein Kanal ohne Werte, ein fremder Kanal, die Gegenprobe
+ohne Antwort — und vor allem, dass nichts geschrieben wird.
+
+### Was ausdrücklich NICHT gemessen ist
+
+Weiterhin kein Zähler, kein Lesekopf, kein laufendes vzlogger, kein Broker,
+kein Miniserver. Die Attrappe der vzlogger-Schnittstelle ist aus
+`bin/fetch_vzlogger.pl` abgelesen, nicht aus vzlogger. Und `einheit_vz` ist
+nach wie vor leer — das ist der Zustand, den diese Fassung messbar macht,
+nicht der, den sie behebt.
 
 ## Lizenz
 

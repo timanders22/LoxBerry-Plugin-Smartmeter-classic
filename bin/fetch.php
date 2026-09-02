@@ -226,9 +226,12 @@ function sm_udp($ziel, $port, $text)
     if (!$s) {
         return false;
     }
-    @fwrite($s, $text);
+    /* Den Rueckgabewert ansehen. Bis 2.4.2 lieferte sm_udp() bedingungslos
+     * true, sobald der Socket stand - eine abgewiesene oder gekuerzte
+     * Schreibung erschien danach als "UDP an ... gesendet." auf Stufe OK. */
+    $n = @fwrite($s, $text);
     @fclose($s);
-    return true;
+    return $n === strlen($text);
 }
 
 // ------------------------------------------------------- Hauptdurchlauf

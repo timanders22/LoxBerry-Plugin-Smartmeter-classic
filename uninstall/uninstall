@@ -119,6 +119,9 @@ fi
 # Der Zwischenspeicher auf der Ramdisk verschwindet beim naechsten Neustart
 # ohnehin - hier steht er trotzdem, damit eine Neuinstallation am selben Tag
 # nicht auf alten Zaehlerwerten aufsetzt.
-rm -rf "/dev/shm/$ARGV3" 2>/dev/null
+# Erst pruefen, dann loeschen: ein leeres $3 traefe /dev/shm SELBST.
+if [ -n "$ARGV3" ]; then
+	rm -rf "/dev/shm/$ARGV3" 2>/dev/null
+fi
 
 exit 0

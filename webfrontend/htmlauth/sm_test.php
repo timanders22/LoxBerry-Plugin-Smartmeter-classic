@@ -173,7 +173,11 @@ function sm_diagnose_gepuffert($cfg, $alter = 300)
         }
     }
     $zeilen = sm_diagnose($cfg);
-    sm_json_schreiben($datei, array('zeilen' => $zeilen));
+    if (!sm_json_schreiben($datei, array('zeilen' => $zeilen), 0640)) {
+        sm_log_wenn_neu('diagnosepuffer',
+            'Der Puffer ' . $datei . ' liess sich nicht schreiben - die '
+            . 'Diagnose laeuft bei jedem Seitenaufbau neu.', 'WARN');
+    }
     return array($zeilen, 0);
 }
 
@@ -227,9 +231,23 @@ function sm_endpunkt_probe($alter = 300)
     // gilt fuer einen Verweis, den ein Mensch im Browser anklickt.
     $url = 'http://127.0.0.1/plugins/' . $p['plugin'] . '/index.php?selftest=1'
          . ($token !== '' ? '&token=' . rawurlencode($token) : '');
-    $erg = array(2, sprintf(sm_t('PRUEF.EP_NICHT_MESSBAR'), $url));
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
+    /* Die ANZEIGE traegt das Token nicht. Bis 2.4.2 setzten
+     * EP_NICHT_MESSBAR und EP_KEINE_ANTWORT die vollstaendige Adresse
+     * ein - sie steht danach in der Pruefzeile auf dem Bildschirm und in
+     * data/plugins/<ordner>/endpunkt.json. Zwei Bloecke tiefer maskiert
+     * derselbe Reiter das Token mit der Begruendung, es gehoere nicht in
+     * eine Anzeige, die jemand abfotografiert. Und der Fall ist nicht
+     * selten: ein Webserver, der gerade diese Seite baut, kann sich unter
+     * Umstaenden nicht selbst aufrufen. */
+    $zeig = 'http://127.0.0.1/plugins/' . $p['plugin'] . '/index.php?selftest=1'
+          . ($token !== '' ? '&token=…' : '');
+    $erg = array(2, sprintf(sm_t('PRUEF.EP_NICHT_MESSBAR'), $zeig));
+    /* Geprueft wird der GRIFF, nicht nur die Bibliothek: curl_init()
+     * liefert bei einer ungueltigen Adresse false, und curl_setopt(false,
+     * ...) ist unter PHP 8 ein TypeError - also ein weisser Bildschirm
+     * im Reiter Test statt einer Pruefzeile. */
+    $ch = function_exists('curl_init') ? curl_init($url) : false;
+    if ($ch !== false) {
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
         curl_setopt($ch, CURLOPT_TIMEOUT, 3);
@@ -240,7 +258,7 @@ function sm_endpunkt_probe($alter = 300)
         if ($antwort === false || $code === 0) {
             // Ein Webserver, der gerade diese Seite baut, kann sich unter
             // Umstaenden nicht selbst aufrufen. Das ist kein Kreuz.
-            $erg = array(2, sprintf(sm_t('PRUEF.EP_KEINE_ANTWORT'), $url));
+            $erg = array(2, sprintf(sm_t('PRUEF.EP_KEINE_ANTWORT'), $zeig));
         } elseif ($code === 200 && strpos((string) $antwort, 'SELFTEST;OK=1') !== false) {
             $erg = array(1, sprintf(sm_t('PRUEF.EP_OK'), $code));
         } else {
@@ -248,7 +266,19 @@ function sm_endpunkt_probe($alter = 300)
                 substr(trim(preg_replace('/\s+/', ' ', (string) $antwort)), 0, 80)));
         }
     }
-    sm_json_schreiben($datei, array('ok' => $erg[0], 'text' => $erg[1]));
+    /* 0640 wie smartmeter.cfg: die Datei liegt im Datenverzeichnis und
+     * traegt einen Pruefbefund, der Adressen nennt.
+     *
+     * Und den Rueckgabewert ansehen: sm_json_schreiben() liefert false,
+     * wenn json_encode() an ungueltigem UTF-8 scheitert - und in $erg[1]
+     * stehen Befehlsausgaben. Ohne Puffer laeuft die Diagnose bei JEDEM
+     * Seitenaufbau erneut, mit rund zwanzig Prozessstarts und einem curl
+     * mit Zeitgrenze; genau das soll der Puffer vermeiden. */
+    if (!sm_json_schreiben($datei, array('ok' => $erg[0], 'text' => $erg[1]), 0640)) {
+        sm_log_wenn_neu('endpunktpuffer',
+            'Der Puffer ' . $datei . ' liess sich nicht schreiben - die '
+            . 'Endpunktprobe laeuft bei jedem Seitenaufbau neu.', 'WARN');
+    }
     return $erg;
 }
 
@@ -303,8 +333,13 @@ function sm_smactive_probe(array $ids, $datei)
     $anzahl = count($ids);
     $leiste   = preg_match_all('/class="sm-tab<\?php echo \$sm_tab ===/', $s);
     $bereiche = preg_match_all('/class="sm-pane<\?php echo \$sm_tab ===/', $s);
-    if ($anzahl > 0 && $leiste >= 1 && $bereiche >= $anzahl) {
-        return array(1, sprintf(sm_t('PRUEF.SMACTIVE_OK'), $anzahl, $bereiche));
+    /* $leiste >= $anzahl, nicht >= 1. Mit der alten Schwelle durften
+     * fuenf von sechs Reitern den serverseitigen Ausdruck verloren haben
+     * und die Zeile trug trotzdem einen Haken. Und gemeldet wird jetzt
+     * die GEMESSENE Zahl $leiste statt $anzahl - die Laenge der
+     * Reiterliste ist keine Messung der Leiste. */
+    if ($anzahl > 0 && $leiste >= $anzahl && $bereiche >= $anzahl) {
+        return array(1, sprintf(sm_t('PRUEF.SMACTIVE_OK'), $leiste, $bereiche));
     }
     return array(0, sprintf(sm_t('PRUEF.SMACTIVE_FEHLT'), $leiste, $bereiche, $anzahl));
 }
@@ -427,6 +462,7 @@ function sm_ini_muster_probe()
         $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
     }
     $gesehen = 0;
+    $zeilen = 0;
     $funde = array();
     foreach (array('language_de.ini', 'language_en.ini') as $n) {
         $f = $pfad . '/' . $n;
@@ -438,7 +474,11 @@ function sm_ini_muster_probe()
             // Der Backslash wird nicht als Literal geschrieben - ein
             // Erklaertext, der die gesuchte Form enthaelt, waere selbst ein
             // Fund. chr(92) ist der Rueckwaertsschraegstrich.
-            if (strpos($z, chr(92) . 'i') !== false && strpos($z, '=') !== false) {
+            if (strpos($z, '=') === false) {
+                continue;
+            }
+            $zeilen++;
+            if (strpos($z, chr(92) . 'i') !== false) {
                 $funde[] = $n . ':' . ($nr + 1);
             }
         }
@@ -450,7 +490,13 @@ function sm_ini_muster_probe()
         return array(0, sprintf(sm_t('PRUEF.INI_MUSTER'),
             count($funde), implode(', ', array_slice($funde, 0, 4))));
     }
-    return array(1, sprintf(sm_t('PRUEF.INI_OK'), $gesehen));
+    /* $zeilen, nicht $gesehen. Bis 2.4.2 stand hier die Zahl der
+     * gelesenen DATEIEN (also 2) an einer Stelle, an der der Text von
+     * geprueften Zeilen sprach - und der Text sprach ausserdem von einer
+     * Anfuehrungszeichen-Pruefung, die diese Funktion gar nicht macht.
+     * Beides ist berichtigt: die Texte nennen jetzt den Suchtext, den
+     * hier wirklich gesucht wird. */
+    return array(1, sprintf(sm_t('PRUEF.INI_OK'), $zeilen, $gesehen));
 }
 
 /** Sind die erzeugbaren Vorlagen wohlgeformt? */
@@ -468,6 +514,17 @@ function sm_vorlagen_probe()
             continue;
         }
         $geprueft++;
+        /* Die Kodierung ZUERST. Danach kann sie nicht mehr gemessen
+         * werden: die XML-Erklaerung steht fest auf utf-8, libxml prueft
+         * die Kodierung des ganzen Dokuments, und jeder Fall, den die
+         * UTF-8-Zeile fangen soll, fuehrt schon eine Zeile vorher zum
+         * continue. Bis 2.4.2 stand sie danach und hat nie etwas
+         * gefunden - eine Pruefzeile, die nichts findet, sieht in der
+         * Durchsicht wie Sorgfalt aus. */
+        if (!preg_match('//u', $xml)) {
+            $kaputt[] = $name . ' (UTF-8)';
+            continue;
+        }
         $vorher = libxml_use_internal_errors(true);
         $sx = simplexml_load_string($xml);
         libxml_clear_errors();
@@ -475,9 +532,6 @@ function sm_vorlagen_probe()
         if ($sx === false) {
             $kaputt[] = $name;
             continue;
-        }
-        if (!preg_match('//u', $xml)) {
-            $kaputt[] = $name . ' (UTF-8)';
         }
         // Der Kommentar eines Befehls wird in Loxone Config zum
         // ANZEIGENAMEN. Was ueber vierzig Zeichen liegt, ist ein Satz und
@@ -693,6 +747,30 @@ function sm_test_ausfuehren($was, $cfg)
             return array(sm_t('TEST.K_HTTP'),
                 sm_block(trim($roh) !== '' ? $roh
                     : sprintf(sm_t('TEST.HTTP_STUMM'), $port)));
+
+        /* Die Rohwerte der vzlogger-Schnittstelle.
+         *
+         * Er ruft bin/fetch_vzlogger.pl --roh auf, also DENSELBEN Code,
+         * der die Werte spaeter veroeffentlicht - eine zweite Abfrage
+         * hier waere eine zweite Wahrheit. Der Schalter liest nur: keine
+         * Datendatei, kein MQTT, kein UDP, kein Umlaufzaehler.
+         *
+         * Wofuer: einheit_vz in bin/sm_felder.json ist leer, weil ohne
+         * Zaehler nicht zu entscheiden war, welche Einheit vzlogger
+         * durchreicht. Solange sie leer ist, traegt die Loxone-Vorlage
+         * auf dem vzLogger-Weg gar keine Einheit. Hier steht der Wert,
+         * aus dem sie sich ablesen laesst. */
+        case 'roh':
+            $skript = $p['bin'] . '/fetch_vzlogger.pl';
+            if (!is_readable($skript)) {
+                return array(sm_t('TEST.K_ROH'),
+                    sm_block(sprintf(sm_t('LG.FETCH_FEHLT'), $skript)));
+            }
+            list($rc, $roh) = sm_sh('perl ' . escapeshellarg($skript) . ' --roh 2>&1');
+            if (trim($roh) === '') {
+                $roh = sprintf(sm_t('TEST.ROH_STUMM'), (int) $rc);
+            }
+            return array(sm_t('TEST.K_ROH'), sm_block($roh));
 
         case 'umgebung':
             $z = array();

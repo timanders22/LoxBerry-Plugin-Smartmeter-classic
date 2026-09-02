@@ -178,7 +178,18 @@ class SML_PARSER {
         $TYPE = $TYPE_LEN[0].'x';     # only high-nibble
 		$this->debug('Type: ('.$TYPE.')');
         $LEN  = hexdec($TYPE_LEN[1]); # only low-nibble
-        while($TYPE[0] &0x8) {  # Multi-Byte TypeLen-Field
+        # hexdec() um das Zeichen herum - genau so, wie es Zeile 411
+        # derselben Datei fuer dieselbe Pruefung schon macht. $TYPE[0] ist
+        # ein einzelnes Hex-ZEICHEN; '8' und '9' sind numerische
+        # Zeichenketten und gingen durch, 'A' bis 'F' nicht. Gemessen am
+        # 02.09.2026: PHP 7.4 warnt ("A non-numeric value encountered")
+        # und liefert 0 - die Schleife lief also bei jedem langen
+        # TL-Feld GAR NICHT und die Laenge blieb falsch; PHP 8.4 wirft
+        # "Unsupported operand types: string & int" und bricht mitten im
+        # Telegramm ab. Betroffen ist jedes TL-Byte mit hohem Nibble A-F,
+        # also die langen Listen, die der Kommentar bei Zeile 411 selbst
+        # nennt ("manche DTZ41 vom Bayernwerk schicken 20 OBIS-Kennzahlen").
+        while(hexdec($TYPE[0]) & 0x8) {  # Multi-Byte TypeLen-Field
             $LEN = $LEN * 0x10;
             $TYPE_LEN = $this->read(1);
             $TYPE = $TYPE_LEN[0].'x';     # only high-nibble
@@ -324,6 +335,10 @@ class SML_PARSER {
 		return $val;
     }
 	private function readSmlTime() {
+		# Vorbelegen: der default-Zweig weiter unten setzt $sml_time
+		# nicht, und debug() ist stillgelegt - herausgekommen waeren
+		# eine Warnung 'Undefined variable' und null als Zeitstempel.
+		$sml_time = null;
         $TYPE_LEN = $this->read(1);
 	    if($TYPE_LEN=='01') return; # SML Time optional
 	
@@ -395,7 +410,13 @@ class SML_PARSER {
 		if ($result['unit'] == "2C") $result['unit']='Hz';
 		if ($result['unit'] == "08") $result['unit']='Grad';
         
-        if($result['scaler']) $result['scaler'] = pow(10,$result['scaler']);
+        # OHNE Waechter. Ein Skalierungsfaktor 0 ist die Zehnerpotenz
+        # 10^0 = 1 und nicht "kein Faktor"; mit dem alten "if" blieb
+        # scaler auf 0 stehen, und bin/sml_parser.php multipliziert im
+        # Wh-Zweig damit - der Zaehlerstand wurde 0 und ging ungeprueft
+        # nach Loxone. Der W-Zweig derselben Datei faengt scaler == 0
+        # ausdruecklich ab; zwei Meinungen in einer Datei.
+        $result['scaler'] = pow(10, (int) $result['scaler']);
         return $result;
     }
     private function readValList() {
@@ -512,7 +533,12 @@ class SML_PARSER {
         $result['crc16']         = $this->readUnsigned();
 		$this->debug('crc16 ('.$result['crc16'].')');
         $this->match('00');       # endOfSmlMsg = 00
-        $result['crcMsgCheck'] = ($result['crc_calc'] == $result['crc16']);
+        # === statt ==. "0E12" == "0E34" ist WAHR (beide werden als
+        # Exponentialzahl 0 gelesen) - gemessen in 7.4.33 und 8.4.24.
+        # Der Befund wird heute nirgends ausgewertet, der Vergleich ist
+        # also latent; ein Vergleich, der nicht vergleicht, bleibt
+        # trotzdem einer.
+        $result['crcMsgCheck'] = ($result['crc_calc'] === $result['crc16']);
         $this->debug('EXIT parse_sml_message. CRC='.(($result['crcMsgCheck'])?'OK':'FAIL'),false);
         $this->debug('--------------------------------',false);
         return $result;
@@ -565,16 +591,22 @@ class SML_PARSER {
             $crc16 = $this->read(2);
             $this->debug('crc16 ('.$crc16.')');
             $this->files[] = array(
-                'crcFileCheck'=>($crc_calc == $crc16),
+                'crcFileCheck'=>($crc_calc === $crc16),   # === , siehe crcMsgCheck
                 'messages'=>$messages
             );
         }
     }
-    public function parse_sml_string($string) {
-        return $this->parse_sml_hexdata(bin2hex($string));
+    # $crc durchreichen - parse_sml_hexdata() verlangt zwei Argumente.
+    # Bis 2.4.2 warfen beide Methoden einen ArgumentCountError ("Too few
+    # arguments ... exactly 2 expected", gemessen in 7.4.33 und 8.4.24),
+    # dem ersten fehlte ausserdem das strtoupper, gegen das die Klasse
+    # intern vergleicht, und der zweite gab nichts zurueck. Gerufen wird
+    # im Plugin heute keine von beiden.
+    public function parse_sml_string($string, $crc) {
+        return $this->parse_sml_hexdata(strtoupper(bin2hex($string)), $crc);
     }
-    public function parse_sml_file($filename) {
-        $this->parse_sml_hexdata(strtoupper(bin2hex(file_get_contents($filename))));
+    public function parse_sml_file($filename, $crc) {
+        return $this->parse_sml_hexdata(strtoupper(bin2hex(file_get_contents($filename))), $crc);
     }
     public function get_first_values() {
         foreach($this->files as $file) {

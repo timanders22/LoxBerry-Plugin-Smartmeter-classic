@@ -85,7 +85,10 @@ if ( !$device && !$parse ) {
 	print "Please use --device to specify TTY device. Use --help to get help.\n";
 	exit;
 }
-if ( $device !~ /\/dev\/serial\/smartmeter/ && !$parse ) {
+# Verankert. Die Meldung darunter sagt "Only devices from
+# /dev/serial/smartmeter/*" - geprueft wurde bis 2.4.2 aber nur, ob die
+# Zeichenfolge irgendwo vorkommt.
+if ( $device !~ m{^/dev/serial/smartmeter/[^/]+$} && !$parse ) {
 	print "Only devices from /dev/serial/smartmeter/* are supported.\n";
 	exit;
 }
@@ -1249,8 +1252,12 @@ sub DATA_WERT
 {
 	my ($name, $wert) = @_;
 	return 0 if !defined $wert || $wert eq "";
-	print F "$serial:$name:$wert" . "\n";
-	$sm_gemessen++;
+	# Nur zaehlen, was WIRKLICH in der Datei steht. Genau dieser Zaehler
+	# entscheidet weiter unten, ob Last_UpdateUnix geschrieben wird - der
+	# Zeitstempel, aus dem Endpunkt und Healthcheck das Alter der Messung
+	# ableiten. Ein Zeitstempel ohne Messung dahinter ist die stille
+	# Falschaussage in Reinform; der Kommentar dort sagt das selbst.
+	$sm_gemessen++ if print F "$serial:$name:$wert" . "\n";
 	return 1;
 }
 
@@ -1278,7 +1285,16 @@ sub DATA_SCHLIESSEN
 		&LOG("Kein einziger Messwert in diesem Durchlauf - Last_UpdateUnix wird NICHT geschrieben.", "WARN");
 	}
 
-	close (F);
+	# close ZUERST beurteilen. Auf einer Ramdisk meldet erst close den
+	# Schreibfehler, den die gepufferten print-Aufrufe verschluckt haben.
+	# Wird er uebergangen, ersetzt eine ABGESCHNITTENE Datei die zuvor
+	# gute - und das temp+rename-Verfahren, dessen Begruendung fuenfzehn
+	# Zeilen weiter oben steht, verliert seinen Zweck.
+	if (!close (F)) {
+		&LOG ("Die Datendatei liess sich nicht schliessen - der Durchlauf wird verworfen.", "ERROR");
+		unlink($sm_datentmp);
+		return 0;
+	}
 	if (!rename($sm_datentmp, $sm_datendatei)) {
 		&LOG ("Datendatei liess sich nicht umbenennen: $sm_datentmp", "ERROR");
 		unlink($sm_datentmp);
@@ -1357,6 +1373,13 @@ sub READ_SERIAL
 		}
 	};
 	alarm(0);
+	# $@ ansehen. Ohne diese Zeile ist ein erreichter Zeitgrenzabbruch von
+	# einem sauber beendeten Lesevorgang nicht zu unterscheiden, und ein
+	# echter Laufzeitfehler in der Schleife wird verschluckt. Die beiden
+	# anderen Notbremsen protokollieren; dieser Ausgang tat es nicht.
+	if ( $@ ) {
+		&LOG ("Read timeout ($timeout s) reached or read error: $@", "WARNING");
+	}
 
 	if ($verbose){
 		print "\n";
@@ -1399,7 +1422,19 @@ sub PARSE_DUMP
 	if ($proto eq "SML") {
 		&LOG ("Parse /dev/shm/$psubfolder/$serial\.dump as SML-Protocol.", "INFO");
 		our $dumpbuffer = `php $home/bin/plugins/$psubfolder/sml_parser.php /dev/shm/$psubfolder/$serial\.dump $crc`;
-		print "Buffer: $dumpbuffer\n";
+	# Den Rueckgabewert ansehen. sml_parser.php endet in zwei Faellen mit
+	# 1, und ein Fehler im Zerleger laesst $dumpbuffer leer oder halb -
+	# der Leser rechnete bis 2.4.2 weiter und schrieb eine Datendatei
+	# ohne Werte, ohne dass der Fehler irgendwo stand.
+	my $sm_rc = $? >> 8;
+	if ( $sm_rc != 0 ) {
+		&LOG ("sml_parser.php endete mit Rueckgabewert $sm_rc - die Werte dieses Durchlaufs sind unbrauchbar.", "ERROR");
+		return;
+	}
+		# Wie jede andere Ausgabe dieser Datei gewaechtert. Ohne den Waechter
+# wandert bei JEDEM Cron-Lauf der komplette Parser-Ausstoss auf die
+# Standardausgabe, die bin/fetch.php mit 2>&1 einsammelt.
+print "Buffer: $dumpbuffer\n" if $verbose;
 	} else {
 		&LOG ("Parse /dev/shm/$psubfolder/$serial\.dump as D0-Protocol.", "INFO");
 		open(F,"</dev/shm/$psubfolder/$serial\.dump");
@@ -1409,7 +1444,7 @@ sub PARSE_DUMP
 
 	if ( $type eq "HEAT" ) {
 		### Energy consumption: Readings for Siemens UH50 / Landis+Gyr ULTRAHEAT T550
-		($readingconsT0) = $dumpbuffer =~ /[\n|\r|:|\)]*6\.8[\.0]*[\*255|\*00]*\(([\d\.]+)/;
+		($readingconsT0) = $dumpbuffer =~ /[\n|\r|:|\)]6\.8[\.0]*[\*255|\*00]*\(([\d\.]+)/;
 		($readingconsT1) = $dumpbuffer =~ /[\n|\r|:|\)]6\.8\.1[\*255|\*00]*\(([\d\.]+)/;
 		($readingconsT2) = $dumpbuffer =~ /[\n|\r|:|\)]6\.8\.2[\*255|\*00]*\(([\d\.]+)/;
 		($readingconsT3) = $dumpbuffer =~ /[\n|\r|:|\)]6\.8\.3[\*255|\*00]*\(([\d\.]+)/;
@@ -1638,7 +1673,17 @@ sub PARSE_DUMP
 		&DATA_WERT("Equipment_Identifier_96.1.1", $eid);
 		&DATA_WERT("Version_Information_96.1.4", $version);
 		&DATA_WERT("Tarif_Indicator_Electricity_96.14.0", $currenttarif);
-		&DATA_WERT("Breaker_State_Electricity_96.1.4", $breakerstate);
+		# Die Kennzahl im Namen ist die des GELESENEN Wertes: 96.3.10
+		# (siehe die Zuweisung weiter oben), nicht 96.1.4. Bis 2.4.3 hiess
+		# das Feld Breaker_State_Electricity_96.1.4 - und 96.1.4 ist im
+		# selben Katalog schon durch Version_Information_96.1.4 belegt,
+		# zwei verschiedene Groessen unter einer Kennzahl.
+		#
+		# Der Name ist zugleich der Name des virtuellen Eingangs in
+		# Loxone. Die Umbenennung ist deshalb ein BRUCH, und sie steht mit
+		# alter und neuer Adresse im Reiter "Einbindung in Loxone" und in
+		# der README.
+		&DATA_WERT("Breaker_State_Electricity_96.3.10", $breakerstate);
 		&DATA_WERT("Text_Message_96.13.0", $messagetext);
 		&DATA_WERT("Message_Code_96.13.1", $messagecode);
 		&DATA_SCHLIESSEN($datereadable, $epoche_time_lox);
@@ -1698,28 +1743,62 @@ sub CALCULATE_POWER
 	our $direction = lc shift;
 	&LOG ("Calculate average power for $direction.", "INFO");
 
-	$reading = sprintf("%.3f", $reading);
-	if ( !$reading ){
+	### Erst PRUEFEN, dann formatieren.
+	#
+	# Bis 2.4.2 stand sprintf davor - und sprintf("%.3f", undef) ist
+	# "0.000", in Perl ein WAHRER Wert (falsch sind nur "" und "0").
+	# Der Waechter darunter konnte damit nie greifen, und die Warnung
+	# "No current meter reading" ist nie erschienen. Gerufen wird die
+	# Funktion aus PARSE_DUMP mit "$readingconsT0" - ein undefinierter
+	# Zaehlerstand wird beim Interpolieren zu "".
+	if ( !defined $reading || $reading !~ /^-?[\d.]+$/ || $reading == 0 ) {
 		&LOG ("No current meter reading. Calculation not possible,", "WARNING");
 		return (0);
 	}
+	$reading = sprintf("%.3f", $reading);
 
 	# Calculate power - the ISKRA MT174 doesn't provide power
-	$now = time;
+	#
+	# Die Variablen sind LEXIKALISCH. Bis 2.4.2 waren es undeklarierte
+	# Paketvariablen, und PARSE_DUMP ruft die Funktion zweimal im selben
+	# Prozess auf - einmal fuer CONS, einmal fuer DEL. Ist die Datei
+	# <serial>.lastdel leer, laeuft die Schleife darunter kein einziges
+	# Mal, und die Werte des CONS-Aufrufs blieben stehen: der DEL-Zweig
+	# rechnete mit dem Zaehlerstand und dem Zeitstempel des Bezugs.
+	# Leer wird die Datei durch das Programm selbst (touch weiter unten),
+	# und ein Haushalt ohne Einspeisung fuellt sie nie.
+	my $now = time;
+	my ($lasttime, $lastreading, $period, $energy, $power);
 	if ( -e "/dev/shm/$psubfolder/$serial\.last$direction" ) {
 		open(F,"</dev/shm/$psubfolder/$serial\.last$direction");
-		@lines = <F>;
+		my @lines = <F>;
 		foreach (@lines){
 			s/[\n\r]//g;
-			@fields  = split(/\|/);
-			$lasttime = @fields[0];
-			$lastreading = @fields[1];
+			# $fields[0], nicht @fields[0]: ein einelementiger
+			# Listenausschnitt im Skalarkontext. Er liefert zufaellig das
+			# Richtige und meldet unter warnings bei jedem Lauf.
+			my @fields  = split(/\|/);
+			$lasttime = $fields[0];
+			$lastreading = $fields[1];
 		}
 		close(F);
+		# Steht in der Datei nichts Brauchbares, ist nichts zu rechnen.
+		if ( !defined $lasttime || !defined $lastreading
+		     || $lasttime !~ /^\d+$/ || $lastreading !~ /^-?[\d.]+$/ ) {
+			&LOG ("Last meter reading unreadable. Calculation not possible,", "WARNING");
+			return (0);
+		}
 		if ( $reading < $lastreading ) {
 			$lastreading = $reading;
 		}
 		$period = ($now - $lasttime) / 3600;
+		# Zwei Laeufe in derselben Sekunde machen $period exakt 0, und
+		# eine Division durch Null ist in Perl ein TOEDLICHER
+		# Laufzeitfehler, keine Warnung - der Leser waere weg.
+		if ( $period <= 0 ) {
+			&LOG ("Last reading is not older than this one. Calculation not possible,", "WARNING");
+			return (0);
+		}
 		$energy = $reading - $lastreading;
 		$power = $energy / $period;
 	} else {

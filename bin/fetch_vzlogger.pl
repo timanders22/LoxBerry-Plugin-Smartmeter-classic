@@ -19,6 +19,19 @@
 #                                Antwort gegen seine eigene Liste - ein
 #                                Vergleich zweier Listen, die beide aus PHP
 #                                stammen, misst nichts.
+#   fetch_vzlogger.pl --roh      die Antwort der vzlogger-HTTP-Schnittstelle
+#                                je Kanal ausgeben: UUID, OBIS-Kennzahl,
+#                                Feldname und der ROHE Wert, so wie vzlogger
+#                                ihn liefert. LIEST nur, schreibt nichts -
+#                                keine Datendatei, kein MQTT, kein UDP, und
+#                                der Umlaufzaehler wird nicht weitergedreht.
+#
+#                                Wofuer: der Feldkatalog bin/sm_felder.json
+#                                fuehrt je Feld ein einheit_vz, und das ist
+#                                LEER - vzlogger rechnet nicht um, und ohne
+#                                Zaehler war nicht zu entscheiden, welche
+#                                Einheit herauskommt. Genau das beantwortet
+#                                dieser Schalter an einer laufenden Anlage.
 
 use LoxBerry::System;
 use LoxBerry::JSON;
@@ -34,9 +47,11 @@ my $vzcfgfile  = "$lbpconfigdir/vzlogger.json";
 # einem Durchlauf landen: wer von Hand aufruft, soll bei einem Tippfehler
 # eine Antwort sehen.
 my $nur_themen = 0;
+my $nur_roh    = 0;
 foreach my $a ( @ARGV ) {
 	next if $a !~ /^--/;
 	if ( $a eq "--themen" ) { $nur_themen = 1; next; }
+	if ( $a eq "--roh" )    { $nur_roh    = 1; next; }
 	print STDERR "Unbekannter Schalter: $a\n";
 	exit 2;
 }
@@ -47,7 +62,7 @@ exit 0 if !-e $vzcfgfile;
 my $jsonobj = LoxBerry::JSON->new();
 my $cfg = $jsonobj->open(filename => $vzcfgfile, readonly => 1);
 exit 0 if !$cfg;
-exit 0 if !$cfg->{enabled} && !$nur_themen;
+exit 0 if !$cfg->{enabled} && !$nur_themen && !$nur_roh;
 
 ################################################################
 ### Die EINE Quelle: bin/sm_felder.json
@@ -120,6 +135,93 @@ if ( $nur_themen ) {
 		print "$n\n";
 	}
 	exit 0;
+}
+
+################################################################
+### --roh: was vzlogger WIRKLICH liefert
+###
+### Der eine Zweck ist einheit_vz in bin/sm_felder.json. Solange das Feld
+### leer ist, traegt die Loxone-Vorlage auf dem vzLogger-Weg gar keine
+### Einheit - das ist ehrlich, aber es ist auch nichts. Hier steht der
+### Rohwert, aus dem sich die Einheit ablesen laesst.
+###
+### Er BEHAUPTET nichts. Die Spalte "Groessenordnung" ist ein Hinweis aus
+### dem Zahlenwert, kein Messwert: ein Zaehlerstand um 12345 ist eher kWh,
+### einer um 12345678 eher Wh. Wer sie fuer eine Messung haelt, hat sie
+### falsch gelesen - massgeblich ist das Datenblatt des Zaehlers.
+###
+### Es wird NICHTS geschrieben: keine Datendatei, kein MQTT, kein UDP, und
+### der Umlaufzaehler bleibt stehen. Ein Messstueck, das den Messgegenstand
+### veraendert, misst sich selbst.
+################################################################
+if ( $nur_roh ) {
+	my $port = $cfg->{httpport} || 8083;
+	my $roh = `curl -s -m 5 http://127.0.0.1:$port/ 2>/dev/null`;
+	if ( !$roh ) {
+		print STDERR "Keine Antwort von der vzlogger-Schnittstelle auf Port $port.\n";
+		print STDERR "Laeuft vzlogger? Der Reiter vzLogger zeigt den Zustand.\n";
+		exit 3;
+	}
+	my $d = eval { decode_json($roh) };
+	if ( !$d || !$d->{data} ) {
+		print STDERR "Die Antwort auf Port $port ist kein brauchbares JSON.\n";
+		exit 3;
+	}
+	my %obis_by_uuid;
+	%obis_by_uuid = reverse %{$cfg->{uuids}} if $cfg->{uuids};
+
+	printf("%-38s %-14s %-42s %18s  %s\n",
+	       "UUID", "OBIS", "Feldname", "Rohwert", "Groessenordnung (Hinweis)");
+	print "-" x 132, "\n";
+	my $kanaele = 0;
+	foreach my $ch ( @{$d->{data}} ) {
+		my $uuid = $ch->{uuid} // "";
+		my $obis = $obis_by_uuid{$uuid} // "(unbekannt)";
+		my $feld = $obis eq "(unbekannt)" ? "(kein Kanal dieser Anlage)" : &feldname($obis);
+		if ( !$ch->{tuples} || !@{$ch->{tuples}} ) {
+			printf("%-38s %-14s %-42s %18s  %s\n",
+			       $uuid, $obis, $feld, "-", "noch kein Wert eingetroffen");
+			next;
+		}
+		my @sortiert = sort { $b->[0] <=> $a->[0] } @{$ch->{tuples}};
+		my $wert = $sortiert[0][1];
+		$kanaele++;
+		printf("%-38s %-14s %-42s %18s  %s\n",
+		       $uuid, $obis, $feld, $wert, &groessenordnung($obis, $wert));
+	}
+	print "\n";
+	print "Die letzte Spalte ist ein HINWEIS aus dem Zahlenwert, keine Messung.\n";
+	print "Massgeblich ist das Datenblatt des Zaehlers. Wer die Einheit belegt\n";
+	print "hat, traegt sie in Werkzeuge/sm_felder_erzeugen.py als einheit_vz ein\n";
+	print "und laesst den Erzeuger laufen - dann steht sie auch in der Vorlage.\n";
+	printf("\n%d Kanal/Kanaele mit einem Wert.\n", $kanaele);
+	exit 0;
+}
+
+# Aus einer OBIS-Kennzahl und einem Rohwert einen Hinweis auf die Einheit
+# bilden. Bewusst grob und bewusst als Hinweis benannt: die Grenzen sind
+# geschaetzt, nicht gemessen.
+sub groessenordnung
+{
+	my ($obis, $wert) = @_;
+	return "kein Zahlenwert" if !defined $wert || $wert !~ /^-?[\d.]+$/;
+	my $b = abs($wert) + 0;
+	my $kurz = $obis;
+	$kurz =~ s/^\d+-\d+://;
+	$kurz =~ s/\*\d+$//;
+	# Zaehlwerke: 1.8.x und 2.8.x
+	if ( $kurz =~ /^[12]\.8\./ ) {
+		return "0 - noch nichts gezaehlt"      if $b == 0;
+		return "eher kWh (Zaehlerstand klein)" if $b < 100000;
+		return "eher Wh (Zaehlerstand gross)";
+	}
+	# Momentanleistung: 16.7.0, 1.7.0, 2.7.0, 15.7.0
+	if ( $kurz =~ /^(1|2|15|16)\.7\.0$/ ) {
+		return "0 - gerade keine Leistung" if $b == 0;
+		return "eher kW (Wert klein)"      if $b < 100;
+		return "eher W (Wert gross)";
+	}
+	return "-";
 }
 
 # ---------------------------------------------------------------------------

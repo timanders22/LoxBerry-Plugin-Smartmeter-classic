@@ -112,7 +112,7 @@ function sm_koepfe()
 function sm_profile()
 {
     return array(
-        // Nur diese vier Eintraege sind uebersetzbar - die uebrigen 41 sind
+        // Nur diese vier Eintraege sind uebersetzbar - die uebrigen 39 sind
         // Geraetebezeichnungen und bleiben in jeder Sprache gleich.
         '0'                     => sm_t('PROFIL.OFFEN'),
         'manual'                => sm_t('PROFIL.MANUELL'),
@@ -239,15 +239,38 @@ function sm_cron_ordner()
  * 1, 3 oder 5 Minuten auf 10 wechselte, behielt die alte Verknuepfung: der
  * Zaehler wurde danach doppelt abgefragt.
  */
+/**
+ * Der Name der Cron-Verknuepfung - aus EINER Stelle und geprueft.
+ *
+ * Er geht in unlink() und symlink() und traegt die Schleife, die JEDE
+ * Verknuepfung dieses Namens aus allen cron.*-Ordnern raeumt. Ein
+ * "../"-Anteil aus einer von Hand bearbeiteten smartmeter.cfg trueg sie
+ * aus system/cron/ heraus. Aus dem Web ist das nicht erreichbar -
+ * SCRIPTNAME steht in sm_sichern_tabu() -, aber der Kommentar zum
+ * Rueckfall begruendet auf sechs Zeilen, warum genau dieser Name nicht
+ * falsch sein darf, und liess den Wert selbst ungeprueft. Bis 2.4.2
+ * stand dieselbe Zeile ausserdem an drei Stellen.
+ *
+ * Der Rueckfall ist der ERMITTELTE Pluginordner, nicht "smartmeter": so
+ * heisst das Originalplugin, das neben diesem installiert sein kann -
+ * mit dem falschen Namen loeschte die Tabula rasa dessen Cron-Eintraege.
+ */
+function sm_scriptname()
+{
+    $p = sm_paths();
+    $name = (string) sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
+    if (!preg_match('/^[A-Za-z0-9._-]+$/', $name)) {
+        sm_log_wenn_neu('scriptname',
+            'SCRIPTNAME enthaelt unerlaubte Zeichen und wird uebergangen.', 'WARN');
+        $name = $p['plugin'];
+    }
+    return $name;
+}
+
 function sm_cron_setzen($lesen, $takt)
 {
     $p = sm_paths();
-    // Der Rueckfall ist der ERMITTELTE Pluginordner, nicht "smartmeter": So
-    // heisst das Originalplugin, das neben diesem installiert sein kann. Und
-    // diese Funktion raeumt gleich unten "tabula rasa" alle Verknuepfungen
-    // dieses Namens weg - mit dem falschen Namen haette sie die Cron-Eintraege
-    // des FREMDEN Plugins geloescht.
-    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
+    $name = sm_scriptname();
     $basis = $p['home'] . '/system/cron/';
 
     // 1. Tabula rasa
@@ -264,7 +287,9 @@ function sm_cron_setzen($lesen, $takt)
 
     $takte = sm_takte();
     if (!isset($takte[$takt])) {
-        return array(false, sm_t('CRON.UNBEKANNT'));
+        // Mit sprintf: der Text nennt seit 2.4.3 den Wert, um den es geht.
+        // Ohne das Argument staende hier ein rohes %s auf dem Bildschirm.
+        return array(false, sprintf(sm_t('CRON.UNBEKANNT'), sm_e((string) $takt)));
     }
 
     // 2. Genau eine Verknuepfung setzen
@@ -294,7 +319,7 @@ function sm_cron_ist()
     $p = sm_paths();
     // Gegenstueck zu sm_cron_setzen(): derselbe Rueckfall, sonst suchte das
     // Lesen an einer anderen Stelle als das Schreiben.
-    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
+    $name = sm_scriptname();
     $basis = $p['home'] . '/system/cron/';
     foreach (sm_takte() as $wert => $t) {
         $ordner = ($wert === 'M') ? 'cron.reboot' : $t[0];
@@ -327,7 +352,7 @@ function sm_cron_lage()
     if ($p['home'] === '' || !is_dir($basis)) {
         return array(2, sm_t('CRON.LAGE_UNBEKANNT'));
     }
-    $name = sm_cfg_get(sm_cfg_read(), 'MAIN', 'SCRIPTNAME', $p['plugin']);
+    $name = sm_scriptname();
 
     // Der vzLogger-Weg haengt an cron/crontab, nicht an einer Verknuepfung.
     // Der klassische Weg haengt an genau einer Verknuepfung.
@@ -358,7 +383,16 @@ function sm_cron_lage()
     if (count($gefunden) > 1) {
         return array(0, sprintf(sm_t('CRON.LAGE_MEHRFACH'), implode(', ', $gefunden)));
     }
-    $soll = ($cfg['CRON'] === 'M') ? 'cron.reboot' : sm_takte()[$cfg['CRON']][0];
+    /* Ein Wert, den sm_takte() nicht kennt, kam bis 2.4.2 bis hierher:
+     * sm_legacy_read() ergaenzt nur FEHLENDE Schluessel, ein
+     * Unsinnswert in der Datei geht durch. Das gab zwei PHP-Warnungen
+     * und eine Meldung, die den eingestellten Takt gar nicht nennen
+     * konnte ("eingestellt ist aber ."). Jetzt wird er benannt. */
+    $takte = sm_takte();
+    if ($cfg['CRON'] !== 'M' && !array_key_exists($cfg['CRON'], $takte)) {
+        return array(0, sprintf(sm_t('CRON.UNBEKANNT'), sm_e($cfg['CRON'])));
+    }
+    $soll = ($cfg['CRON'] === 'M') ? 'cron.reboot' : $takte[$cfg['CRON']][0];
     if ($gefunden[0] !== $soll) {
         return array(0, sprintf(sm_t('CRON.LAGE_FALSCH'), $gefunden[0], $soll));
     }
@@ -506,6 +540,15 @@ function sm_suchlauf($device)
     $vorschlag = '';
     $treffer = array();
 
+    /* Gegen die Positivliste, wie jedes andere Auswahlfeld dieser
+     * Datei auch. Bis 2.4.2 wurde nur auf Vorhandensein geprueft - ein
+     * beliebiger vorhandener Pfad ging damit an sm_logger.pl, und
+     * /dev/shm/<basename>.data wurde geloescht. Eingeschleust werden
+     * konnte nichts (escapeshellarg steht weiter unten), aber die
+     * Auswahl war keine. */
+    if ($device !== '' && !in_array($device, sm_lesekoepfe(), true)) {
+        $device = '';
+    }
     if ($device === '' || !file_exists($device)) {
         return array(array(sprintf(sm_t('SUCHE.KEIN_GERAET'), sm_e($device))), '');
     }
@@ -542,7 +585,12 @@ function sm_suchlauf($device)
            . ' --parity ' . escapeshellarg($w['parity'])
            . ' --timeout ' . (int) (SM_SUCHE_GRENZE - 5);
         $start = microtime(true);
-        sm_sh($vor . 'perl ' . $b);
+        /* Rueckgabewert ansehen. Jeder Weg laeuft unter "timeout -k 5
+         * 20"; wird er abgeschnitten, ist das von "der Zaehler antwortet
+         * hier nicht" nicht zu unterscheiden - und der Anwender streicht
+         * ein Protokoll, das nur zu langsam war. 124 ist der
+         * Rueckgabewert von timeout(1) bei Zeitablauf. */
+        list($sm_rc, ) = sm_sh($vor . 'perl ' . $b);
         $dauer = round(microtime(true) - $start, 1);
 
         $werte = sm_werte($serial);
@@ -559,6 +607,13 @@ function sm_suchlauf($device)
             $treffer[] = $w;
             $zeilen[] = sprintf(sm_t('SUCHE.TREFFER'), sm_t($w['bez']), $dauer,
                 count($echte), implode(', ', array_slice($echte, 0, 6)));
+        } elseif ($sm_rc === 124) {
+            /* 124 ist der Rueckgabewert von timeout(1) bei Zeitablauf.
+             * Bis 2.4.2 wurde er verworfen, und ein abgeschnittener Weg
+             * war von "der Zaehler antwortet hier nicht" nicht zu
+             * unterscheiden - der Anwender strich ein Protokoll, das nur
+             * zu langsam war. */
+            $zeilen[] = sprintf(sm_t('SUCHE.ZEITGRENZE'), sm_t($w['bez']), $dauer);
         } else {
             $zeilen[] = sprintf(sm_t('SUCHE.NICHTS'), sm_t($w['bez']), $dauer);
         }

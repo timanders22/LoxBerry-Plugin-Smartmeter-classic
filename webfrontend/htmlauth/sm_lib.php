@@ -82,7 +82,15 @@ function sm_paths()
 
 function sm_e($s)
 {
-    return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+    /* ENT_SUBSTITUTE, sonst liefert htmlspecialchars() bei einem
+     * einzigen ungueltigen Byte einen LEERSTRING statt des Textes.
+     * Getroffen hat das den Mitschnitt: sm_mitschnitt() liefert rohe
+     * Bytes, bei D0 mit Steuerzeichen und einem BCC-Pruefbyte, das jeden
+     * Wert annehmen kann - und fread() schneidet bei 4000 Byte auch
+     * mitten in einer Mehrbytefolge. Der Anwender sah dann einen leeren
+     * Kasten ohne jeden Hinweis, ausgerechnet an dem Werkzeug, das jede
+     * Fehlersuche traegt. Gemessen am 02.09.2026 in 7.4.33 und 8.4.24. */
+    return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
 /* ==================================================================
@@ -198,6 +206,16 @@ function sm_log_ende($datei, $anzahl = 400, $block = 8192)
         $zeilen = explode("\n", $puffer);
     }
     fclose($fp);
+    /* Wurde nicht bis zum Dateianfang gelesen, ist $zeilen[0] der Rest
+     * einer angeschnittenen Zeile - kein Anfang. Er muss WEG, bevor
+     * gefiltert wird: das Filtern entfernt den Leereintrag, den das
+     * abschliessende \n erzeugt, und schiebt das Bruchstueck dadurch in
+     * die Auswahl. Gemessen am 02.09.2026 mit den echten Vorgaben (400
+     * Zeilen, Block 8192) in 7.4.33 und 8.4.24: die aelteste angezeigte
+     * Zeile begann mitten im Text. */
+    if ($pos > 0 && $zeilen) {
+        array_shift($zeilen);
+    }
     $zeilen = array_values(array_filter(array_map('rtrim', $zeilen), 'strlen'));
     return array_slice(array_reverse($zeilen), 0, $anzahl);
 }
@@ -281,8 +299,13 @@ function sm_atomar_schreiben($pfad, $inhalt, $rechte = null)
     if ($fh === false) {
         return false;
     }
-    if ($rechte !== null) {
-        @chmod($tmp, $rechte);
+    if ($rechte !== null && !@chmod($tmp, $rechte)) {
+        /* Der Kopfkommentar macht aus den Rechten ein Versprechen -
+         * smartmeter.cfg traegt das Zugriffstoken. Schlaegt chmod fehl,
+         * wuerde die Datei mit den Vorgaben der umask umbenannt, und
+         * niemand erfuehre es. Dann lieber gar nicht schreiben. */
+        @unlink($tmp);
+        return false;
     }
     $ok = ftruncate($fh, 0);
     // Nicht auf === false pruefen: eine KURZE Schreibung ist genauso kaputt
@@ -432,6 +455,23 @@ function sm_ve_name($praefix, $serial, $feld)
 function sm_check($serial, $feld)
 {
     return '\i' . $serial . ':' . $feld . ':\i\v';
+}
+
+/**
+ * Die Quellenspalte der Bausteinliste fuer einen OBIS-Kanal.
+ *
+ * Der Feldname kommt aus sm_obis_feld(), also aus bin/sm_felder.json -
+ * derselben Datei wie die Themen-Tabelle und der Dienst. Ist der Kanal
+ * gar nicht eingestellt, sagt die Zeile das, statt einen virtuellen
+ * Eingang vorzuschlagen, der nie einen Wert bekommt.
+ */
+function sm_quelle_mqtt($obis, $felder)
+{
+    $feld = sm_obis_feld($obis);
+    $mono = '<span class="sm-mono">' . sm_e($feld) . '</span>';
+    return in_array($feld, $felder, true)
+        ? 'MQTT ' . $mono
+        : $mono . ' <i>(' . sm_e(sm_t('LOX.KANAL_FEHLT')) . ')</i>';
 }
 
 /* ==================================================================
@@ -1064,11 +1104,24 @@ function sm_vz_running()
     return $erg;
 }
 
-/** Den Zwischenspeicher der drei Prozessabfragen verwerfen. */
+/**
+ * Die gepufferten Befunde des Reiters Test verwerfen.
+ *
+ * Beide Puffer, nicht nur einer: endpunkt.json fehlte bis 2.4.2. Genau
+ * ihn braucht es aber - lox_token_neu und lox_token_weg rufen diese
+ * Funktion, und nach "Token entfernen" steht der Endpunkt jedem Geraet im
+ * Netz offen, waehrend die Pruefzeile bis zu 300 s weiter den alten Haken
+ * zeigte. Eine Selbstpruefung, die beruhigt, ist schlimmer als keine.
+ *
+ * Der Zwischenspeicher der drei Prozessabfragen ist hiermit NICHT gemeint
+ * - der liegt in static-Variablen, die diese Funktion nicht erreicht.
+ * Dafuer gibt es sm_vz_running_frisch().
+ */
 function sm_cache_verwerfen()
 {
     $p = sm_paths();
     @unlink($p['datadir'] . '/diagnose.json');
+    @unlink($p['datadir'] . '/endpunkt.json');
 }
 
 /** Haelt sonst jemand die serielle Schnittstelle? Liefert Text oder ''. */
@@ -1230,6 +1283,22 @@ function sm_zaehler_lesen()
  * Loxone-Vorlagen
  * ================================================================== */
 
+/**
+ * Die Felder, die bin/fetch_vzlogger.pl SELBST bildet - nicht der Zaehler.
+ *
+ * Der Unterschied entscheidet ueber die Einheit: was das Plugin bildet,
+ * hat eine bekannte (die Zeitstempel sind Sekunden), was vom Zaehler
+ * kommt, geht auf dem vzLogger-Weg ungewandelt durch. Siehe
+ * sm_einheit_fuer().
+ *
+ * Die beiden abgeleiteten Leistungen stehen NICHT hier: sie werden aus
+ * 16.7.0 gerechnet und tragen deshalb dieselbe - ungemessene - Einheit.
+ */
+function sm_vz_eigene()
+{
+    return array('Last_Update', 'Last_UpdateUnix', 'Last_UpdateLoxEpoche');
+}
+
 /** Die Felder, die auf dem vzLogger-Weg wirklich veroeffentlicht werden. */
 function sm_vz_felder($cfg)
 {
@@ -1238,14 +1307,65 @@ function sm_vz_felder($cfg)
         $f[] = sm_obis_feld($c);
     }
     // Genau die Zusaetze, die bin/fetch_vzlogger.pl selbst bildet.
-    $f[] = 'Last_Update';
-    $f[] = 'Last_UpdateUnix';
-    $f[] = 'Last_UpdateLoxEpoche';
+    foreach (sm_vz_eigene() as $sm_e) {
+        $f[] = $sm_e;
+    }
     if (in_array('Total_Power_OBIS_16.7.0', $f, true)) {
         $f[] = 'Consumption_CalculatedPower_OBIS_1.99.0';
         $f[] = 'Delivery_CalculatedPower_OBIS_2.99.0';
     }
     return array_values(array_unique($f));
+}
+
+/**
+ * Einheit und Grenzen eines Feldes - je nach Leseweg verschieden.
+ *
+ * DER GRUND STEHT IM KATALOG SELBST. bin/sm_felder.json sagt zu 'einheit':
+ * "gilt fuer den KLASSISCHEN Weg; bin/sml_parser.php rechnet Wh auf kWh und
+ * W auf kW um" - und zu 'einheit_vz': "LEER und das mit Absicht: vzlogger
+ * rechnet nicht um, es reicht den Wert des Zaehlers durch."
+ *
+ * Bis 2.4.3 nahm die Vorlage BEIDER Wege 'einheit'. Auf dem vzLogger-Weg
+ * stand damit "<v.3> kWh" an einem Eingang, der moeglicherweise rohe Wh
+ * bekommt - und MaxVal=1000000 kappte einen Zaehlerstand in Wh schon nach
+ * 1000 kWh. Ein Eingang, der bei einem Messwert stehenbleibt, sieht in der
+ * Visualisierung aus wie ein ruhiger Zaehler.
+ *
+ * Solange 'einheit_vz' leer ist - und leer ist sie, weil es ohne Zaehler
+ * nicht zu messen war -, bekommt der vzLogger-Weg KEINE Einheit und weite
+ * Grenzen. Das ist die einzige Angabe, die nichts behauptet: lieber eine
+ * nackte Zahl als eine falsche Einheit, und lieber ein weiter Bereich als
+ * ein gekappter Wert.
+ *
+ * Rueckgabe: array(Einheit, MinVal, MaxVal).
+ */
+function sm_einheit_fuer($md, $weg, $feld = '')
+{
+    // Ohne Katalogeintrag wird nichts erfunden - weder Einheit noch Grenzen.
+    if (!$md) {
+        return array('', -1000000000, 1000000000);
+    }
+    // Unsicher ist nur, was der ZAEHLER liefert. Die Zeitstempel bildet
+    // das Plugin selbst (time() und die Loxone-Epoche) - dort ist die
+    // Einheit Sekunden, und daran aendert der Leseweg nichts. Sie mit
+    // wegzunehmen waere kein Vorbehalt, sondern ein Verlust.
+    if ($weg === 'vz' && !in_array($feld, sm_vz_eigene(), true)) {
+        $eh = isset($md['einheit_vz']) ? (string) $md['einheit_vz'] : '';
+        if ($eh === '') {
+            // Ungemessen: keine Einheit, und eine Obergrenze, die auch
+            // eine rohe Wh-Zahl traegt. Die Grenzen im Katalog gelten
+            // fuer die UMGERECHNETE Einheit des klassischen Weges.
+            //
+            // Nach UNTEN bleibt es beim Katalog: ob eine Groesse negativ
+            // werden kann, ist eine Eigenschaft der Groesse und keine
+            // der Einheit. Ein Zaehlerstand wird nicht negativ, nur weil
+            // niemand weiss, ob er in Wh oder kWh kommt.
+            return array('', $md['signed'] ? -1000000000 : 0, 1000000000);
+        }
+        // Steht sie da, ist sie gemessen - dann gelten auch ihre Grenzen.
+        return array($eh, (int) $md['min'], (int) $md['max']);
+    }
+    return array((string) $md['einheit'], (int) $md['min'], (int) $md['max']);
 }
 
 /**
@@ -1259,8 +1379,12 @@ function sm_vz_felder($cfg)
  * $eintraege ist eine Liste aus (Titel, Feldname). Textfelder gehoeren
  * NICHT hinein: das nachgebaute Format ist nur fuer Zahlenwerte belegt, und
  * ein Eingang mit Analog="true" auf einen Text zeigt dauerhaft 0.
+ *
+ * $weg ist 'legacy' oder 'vz' und entscheidet ueber Einheit und Grenzen -
+ * siehe sm_einheit_fuer(). Bis 2.4.3 gab es den Unterschied nicht, und die
+ * vzLogger-Vorlage trug die Einheiten des klassischen Weges.
  */
-function sm_xml_virtual_in($titel, $kommentar, $eintraege)
+function sm_xml_virtual_in($titel, $kommentar, $eintraege, $weg = 'legacy')
 {
     $crlf = "\r\n";
     $x = function ($s) {
@@ -1273,13 +1397,16 @@ function sm_xml_virtual_in($titel, $kommentar, $eintraege)
     foreach ($eintraege as $e) {
         list($t, $feld) = $e;
         $md = sm_feld($feld);
+        list($sm_eh, $sm_min, $sm_max) = sm_einheit_fuer($md, $weg, $feld);
         // Ein Feld, das der Katalog nicht kennt, bekommt keine erfundene
         // Einheit und keine erfundenen Grenzen.
-        $einheit = ($md && $md['einheit'] !== '') ? '<v.' . (int) $md['nk'] . '> ' . $md['einheit'] : '';
-        $nk   = $md ? (int) $md['nk'] : 0;
-        $min  = $md ? (int) $md['min'] : 0;
-        $max  = $md ? (int) $md['max'] : 1000000;
-        $sig  = ($md && $md['signed']) ? 'true' : 'false';
+        $einheit = ($sm_eh !== '') ? '<v.' . (int) $md['nk'] . '> ' . $sm_eh : '';
+        $min  = $sm_min;
+        $max  = $sm_max;
+        /* Ohne Katalogeintrag vorzeichenbehaftet: sm_obis_feld() bildet
+         * fuer jeden unbekannten Kanal ein OBIS_<kurz>, und ein negativer
+         * Wert wuerde durch Signed="false" auf 0 gekappt. */
+        $sig  = (!$md || $md['signed']) ? 'true' : 'false';
         // Der Kommentar wird in Loxone Config zum ANZEIGENAMEN, nicht zur
         // Dokumentation. Eine knappe Zeile, kein Fliesstext.
         $bed  = $md ? sm_t($md['bed']) : $feld;
@@ -1321,7 +1448,7 @@ function sm_vorlage()
     $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR'), date('d.m.Y'), $praefix)
         . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
     return array('VI_smartmeter_mqtt.xml',
-        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL'), $kommentar, $eintraege));
+        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL'), $kommentar, $eintraege, 'vz'));
 }
 
 /**
@@ -1365,7 +1492,7 @@ function sm_vorlage_legacy()
     $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR_LG'), date('d.m.Y'), $koepfe)
         . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
     return array('VI_smartmeter_klassisch.xml',
-        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL_LG'), $kommentar, $eintraege));
+        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL_LG'), $kommentar, $eintraege, 'legacy'));
 }
 
 /* ==================================================================
@@ -1473,6 +1600,17 @@ function sm_sichern_einlesen($roh)
         }
         if ($t[0] === '[' && substr($t, -1) === ']') {
             $abschnitt = trim(substr($t, 1, -1));
+            /* "[KOPF]" und "[KOPF   ]" ZUERST abfangen. Bis 2.4.2 stand
+             * die Pruefung 40 Zeilen weiter unten hinter strncmp(...,
+             * 'KOPF ', 5) - und weil $abschnitt getrimmt ist, konnte sie
+             * dort nie zutreffen. Die Meldung SICH.KOPF_OHNE_NAME war
+             * uebersetzter, nie erreichbarer Text. */
+            if (strncmp($abschnitt, 'KOPF', 4) === 0
+                && trim(substr($abschnitt, 4)) === '') {
+                $mangel[] = sprintf(sm_t('SICH.KOPF_OHNE_NAME'), $nr);
+                $abschnitt = '';
+                continue;
+            }
             if ($abschnitt !== 'MAIN' && $abschnitt !== 'VZLOGGER'
                 && strncmp($abschnitt, 'KOPF ', 5) !== 0) {
                 $mangel[] = sprintf(sm_t('SICH.ABSCHNITT'), $nr, sm_e($abschnitt));
@@ -1512,10 +1650,6 @@ function sm_sichern_einlesen($roh)
             $gefunden++;
         } elseif (strncmp($abschnitt, 'KOPF ', 5) === 0) {
             $s = trim(substr($abschnitt, 5));
-            if ($s === '') {
-                $mangel[] = sprintf(sm_t('SICH.KOPF_OHNE_NAME'), $nr);
-                continue;
-            }
             if (!in_array($k, $kopffelder, true)) {
                 $mangel[] = sprintf(sm_t('SICH.SCHLUESSEL'), $nr, sm_e($k));
                 continue;
@@ -1561,6 +1695,49 @@ function sm_sichern_einlesen($roh)
     if (isset($vz['protocol']) && !in_array($vz['protocol'], array('sml', 'd0'), true)) {
         $mangel[] = sprintf(sm_t('SICH.WERT'), 'protocol', sm_e($vz['protocol']));
     }
+    /* Die Zaehlernummer. Das Formular saeubert sie mit genau dieser
+     * Regel (index.php), bin/fetch_vzlogger.pl ebenso - der
+     * Rueckspielweg tat es bis 2.4.2 nicht. Ein Zeichen ausserhalb
+     * dieses Vorrats laesst Dienst und Themen-Tabelle auseinanderlaufen:
+     * der Dienst veroeffentlicht unter der gesaeuberten Nummer, die
+     * Oberflaeche zeigt die ungesaeuberte an. Abgewiesen wird sie, nicht
+     * zurechtgebogen - eine Sicherung ist eine Eingabe wie jede andere. */
+    if (isset($vz['serial']) && $vz['serial'] !== ''
+        && !preg_match('/^[A-Za-z0-9_\-]+$/', $vz['serial'])) {
+        $mangel[] = sprintf(sm_t('SICH.WERT'), 'serial', sm_e($vz['serial']));
+    }
+    /* Die Kanaele - dieselbe Regel wie im Formular. */
+    if (isset($vz['channels'])) {
+        foreach (preg_split('/[\s,]+/', trim((string) $vz['channels'])) as $sm_c) {
+            if ($sm_c !== '' && !preg_match('/^[\d\.:\-\*]+$/', $sm_c)) {
+                $mangel[] = sprintf(sm_t('SICH.WERT'), 'channels', sm_e($sm_c));
+            }
+        }
+    }
+    /* Schalter sind 0 oder 1. Ein "ja" oder ein leeres Feld wuerde sonst
+     * je nach Lesestelle verschieden ausgelegt. */
+    foreach (array('READ', 'SENDMQTT', 'SENDUDP') as $k) {
+        if (isset($main[$k]) && $main[$k] !== '0' && $main[$k] !== '1') {
+            $mangel[] = sprintf(sm_t('SICH.WERT'), $k, sm_e($main[$k]));
+        }
+    }
+    foreach (array('enabled', 'localtime', 'sendudp') as $k) {
+        if (isset($vz[$k]) && (string) $vz[$k] !== '0' && (string) $vz[$k] !== '1') {
+            $mangel[] = sprintf(sm_t('SICH.WERT'), $k, sm_e((string) $vz[$k]));
+        }
+    }
+    /* Zwei Leser koennen sich eine serielle Schnittstelle nicht teilen.
+     * Beide Formular-Handler weisen das ab; der Rueckspielweg ist der
+     * DRITTE Handler, und dort fehlte die Pruefung. Gemessen wird gegen
+     * den zusammengefuehrten Stand: was die Datei nicht nennt, bleibt
+     * wie es ist. */
+    $sm_read_neu = isset($main['READ'])
+        ? ($main['READ'] === '1') : (sm_legacy_read()['READ'] === '1');
+    $sm_vz_neu = isset($vz['enabled'])
+        ? ((string) $vz['enabled'] === '1') : (bool) sm_vz_read()['enabled'];
+    if ($sm_read_neu && $sm_vz_neu) {
+        $mangel[] = sm_t('FEHLER.BEIDE_LESER');
+    }
     $profile = sm_profile();
     foreach ($koepfe as $s => $w) {
         if (isset($w['METER']) && $w['METER'] !== ''
@@ -1596,8 +1773,20 @@ function sm_sichern_uebernehmen($neu)
         // gesetzt - sonst zeigt die Konfiguration auf ein Geraet, das es
         // nicht gibt.
         if (isset($w['DEVICE']) && $w['DEVICE'] !== '' && !file_exists($w['DEVICE'])) {
+            /* Nur MELDEN, nicht wegnehmen. Bis 2.4.2 stand hier ein
+             * unset() - und sm_koepfe() ueberspringt jeden Abschnitt
+             * OHNE DEVICE. Auf einer frischen Anlage, also genau dem
+             * Zweck dieser Datei, entstand der Abschnitt damit ohne
+             * DEVICE: der Lesekopf war in der Oberflaeche unsichtbar,
+             * nicht zu bearbeiten und in keiner Vorlage - waehrend die
+             * Meldung sagte, die Einstellung sei uebernommen. Wurde er
+             * spaeter angesteckt, legte sm_koepfe_anlegen() den
+             * Abschnitt neu an und ueberschrieb NAME und METER.
+             *
+             * Der Pfad kommt aus der udev-Regel und heisst deshalb auf
+             * jeder Anlage gleich; er bleibt stehen. Dass das Geraet
+             * gerade fehlt, sagt ANGESTECKT in sm_koepfe(). */
             $hinweis[] = sprintf(sm_t('SICH.KOPF_FEHLT'), sm_e($s), sm_e($w['DEVICE']));
-            unset($w['DEVICE']);
         }
         $ok = sm_cfg_set($s, $w) && $ok;
     }
@@ -1619,10 +1808,17 @@ function sm_sichern_uebernehmen($neu)
             $cfg['device'] = '';
         }
         $cfg['uuids'] = sm_vz_uuids($cfg['channels']);
-        $ok = sm_vz_write($cfg) && $ok;
-        if ($ok) {
+        /* Getrennt beurteilen. Bis 2.4.2 hing das Nachziehen der
+         * vzlogger.conf an $ok - und darin steckten schon die Ergebnisse
+         * der MAIN- und Kopf-Schreibungen. Scheiterte eine davon, blieb
+         * die conf auf dem alten Stand, waehrend vzlogger.json den neuen
+         * trug: zwei Wahrheiten, und der naechste Neustart nahm die
+         * alte. */
+        $vzok = sm_vz_write($cfg);
+        if ($vzok) {
             sm_vz_conf_schreiben(sm_vz_read());
         }
+        $ok = $vzok && $ok;
     }
     sm_cache_verwerfen();
     sm_log('Einstellungen aus einer Sicherung zurueckgespielt.');

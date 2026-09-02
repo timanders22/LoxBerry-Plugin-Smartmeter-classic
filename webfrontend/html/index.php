@@ -110,7 +110,11 @@ $sm_ordner = sm_pluginordner();
  * Token ausgewiesen. */
 $sm_kandidaten = array(
     ($sm_home !== '' ? $sm_home . '/bin/plugins/' . $sm_ordner . '/sm_gemein.php' : ''),
-    dirname(dirname(dirname(__DIR__))) . '/bin/plugins/' . $sm_ordner . '/sm_gemein.php',
+    // VIER Ebenen: von <home>/webfrontend/html/plugins/<ordner> herauf
+    // sind es plugins -> html -> webfrontend -> home. Bis 2.4.2 standen
+    // hier drei, der Kandidat zeigte also auf
+    // <home>/webfrontend/bin/plugins/<ordner> und traf nie.
+    dirname(dirname(dirname(dirname(__DIR__)))) . '/bin/plugins/' . $sm_ordner . '/sm_gemein.php',
     dirname(dirname(__DIR__)) . '/bin/sm_gemein.php',
 );
 $sm_gefunden = false;
@@ -248,8 +252,10 @@ $sm_zaehler = smg_zaehler_lesen($sm_shm . '/zaehler');
 
 if ($sm_juengste > 0) {
     $sm_alter = time() - $sm_juengste;
-    // Ein Zeitsprung nach vorn machte das Alter sonst negativ, und
-    // max(0, ...) meldete "gerade eben gemessen".
+    // Ein Zeitstempel aus der Zukunft - nach einem Zeitsprung nach
+    // HINTEN, wie ihn ein Raspberry Pi nach dem Booten macht, sobald NTP
+    // greift - machte das Alter sonst negativ, und max(0, ...) meldete
+    // "gerade eben gemessen".
     if ($sm_alter < 0) { $sm_alter = -1; }
 } else {
     // Kein Zeitstempel: es hat noch keine erfolgreiche Messung gegeben, oder

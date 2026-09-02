@@ -17,7 +17,7 @@
     "16.7.0": "Total_Power_OBIS_16.7.0"
   },
   "felder": {
-    "Breaker_State_Electricity_96.1.4": {
+    "Breaker_State_Electricity_96.3.10": {
       "typ": "zahl",
       "einheit": "",
       "einheit_vz": "",

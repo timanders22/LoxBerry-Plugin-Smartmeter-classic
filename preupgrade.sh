@@ -121,7 +121,17 @@ echo "<INFO> Sicherungsordner: $SICHERUNG"
 mkdir -p "$SICHERUNG/config"
 
 echo "<INFO> Backing up existing config files"
-cp -a "$ARGV5/config/plugins/$ARGV3/." "$SICHERUNG/config/" || true
+# Den Rueckgabewert ansehen. Bis 2.4.2 stand hier "|| true", und
+# postupgrade.sh prueft danach nur, ob $SICHERUNG/config als VERZEICHNIS
+# existiert - das tut es nach dem mkdir immer. Eine gescheiterte
+# Sicherung wurde damit als geglueckte Rueckspielung gemeldet.
+if cp -a "$ARGV5/config/plugins/$ARGV3/." "$SICHERUNG/config/"; then
+	echo "<OK> Konfiguration gesichert nach $SICHERUNG/config"
+else
+	echo "<WARNING> Die Konfiguration liess sich NICHT sichern."
+	echo "<WARNING> Nach dem Update bitte die Einstellungen im Reiter"
+	echo "<WARNING> Smartmeter (klassisch) nachsehen."
+fi
 
 # Exit with Status 0
 

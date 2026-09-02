@@ -36,7 +36,9 @@ else
 	SICHERUNG="/tmp/${ARGV1}_upgrade"
 fi
 
-if [ ! -d "$SICHERUNG/config" ]; then
+# Nicht nur das Verzeichnis: preupgrade.sh legt es mit mkdir -p an,
+# BEVOR kopiert wird. Ein leeres Verzeichnis ist keine Sicherung.
+if [ ! -s "$SICHERUNG/config/smartmeter.cfg" ]; then
 	# Vor dem Warnen nachsehen, wie es wirklich steht: postinstall.sh hat
 	# die Zweitschrift moeglicherweise schon zurueckgespielt. Eine Warnung
 	# bei heiler Konfiguration entwertet die echte beim naechsten Mal.
@@ -56,8 +58,16 @@ fi
 echo "<INFO> Spiele gesicherte Konfiguration zurueck aus $SICHERUNG"
 # -a erhaelt Rechte und Zeitstempel; der Punkt am Ende kopiert auch
 # Dateien, deren Name mit einem Punkt beginnt.
-cp -a "$SICHERUNG/config/." "$ARGV5/config/plugins/$ARGV3/" && \
+if cp -a "$SICHERUNG/config/." "$ARGV5/config/plugins/$ARGV3/"; then
 	echo "<OK> Konfiguration wiederhergestellt."
+else
+	# Bis 2.4.2 hatte diese Stelle keinen else-Zweig: scheiterte das
+	# Kopieren, erschien KEINE Zeile, und das Skript endete mit 0.
+	echo "<WARNING> Die Konfiguration liess sich nicht zurueckspielen."
+	echo "<WARNING> Die Sicherung liegt unter $SICHERUNG/config."
+	echo "<WARNING> Bitte die Einstellungen im Reiter Smartmeter"
+	echo "<WARNING> (klassisch) nachsehen."
+fi
 
 # Der Arbeitsordner des Installers wird von LoxBerry selbst aufgeraeumt.
 # Nur der Rueckfallweg unter /tmp gehoert uns.

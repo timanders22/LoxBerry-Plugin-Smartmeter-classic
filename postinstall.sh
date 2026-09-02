@@ -111,10 +111,13 @@ netz_ohne_vorgabe "vzlogger.conf"
 # Plugin deshalb selbst, und genau deshalb muss der Block darueber vorher
 # laufen.
 # ===========================================================================
-/bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" $ARGV5/config/plugins/$ARGV3/smartmeter.cfg
-/bin/sed -i "s#REPLACEBYNAME#$ARGV2#" $ARGV5/config/plugins/$ARGV3/smartmeter.cfg
-/bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" $ARGV5/system/daemons/plugins/$ARGV2
-/bin/sed -i "s#REPLACEBYBASEFOLDER#$ARGV5#" $ARGV5/system/daemons/plugins/$ARGV2
+# Die Pfade quotiert. Ein Leerzeichen im Installationsverzeichnis
+# zerlegte die Zeilen sonst, und sed schriebe in eine Datei, die niemand
+# gemeint hat.
+/bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" "$ARGV5/config/plugins/$ARGV3/smartmeter.cfg"
+/bin/sed -i "s#REPLACEBYNAME#$ARGV2#" "$ARGV5/config/plugins/$ARGV3/smartmeter.cfg"
+/bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" "$ARGV5/system/daemons/plugins/$ARGV2"
+/bin/sed -i "s#REPLACEBYBASEFOLDER#$ARGV5#" "$ARGV5/system/daemons/plugins/$ARGV2"
 
 # Die Konfiguration traegt das Zugriffstoken des Endpunkts.
 chmod 0640 "$NETZ_CFG/smartmeter.cfg" 2>/dev/null
@@ -159,7 +162,15 @@ for SM_SKRIPT in fetch.php reboot_cron_runner.sh sm_logger.pl fetch_vzlogger.pl 
 done
 
 echo "<INFO> Rename htaccess to .htaccess"
-mv $ARGV5/webfrontend/htmlauth/plugins/$ARGV3/htaccess $ARGV5/webfrontend/htmlauth/plugins/$ARGV3/.htaccess
+# Quotiert UND beurteilt. Scheitert das mv, bleibt die .htaccess aus -
+# und die Installation meldete bis 2.4.2 trotzdem Erfolg.
+if mv "$ARGV5/webfrontend/htmlauth/plugins/$ARGV3/htaccess" \
+      "$ARGV5/webfrontend/htmlauth/plugins/$ARGV3/.htaccess"; then
+	echo "<OK> .htaccess angelegt."
+else
+	echo "<WARNING> Die .htaccess liess sich nicht anlegen."
+	echo "<WARNING> Der angemeldete Bereich des Plugins ist dann ungeschuetzt."
+fi
 
 echo "<INFO> *******************************************************************"
 echo "<INFO> * Das Plugin ist einsatzbereit - ein Neustart ist nicht noetig.   *"

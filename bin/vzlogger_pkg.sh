@@ -97,9 +97,22 @@ configure_repository()
 
 block_service_start()
 {
-	[ -e "$POLICY_FILE" ] && mv "$POLICY_FILE" "$POLICY_BACKUP"
+	# Nur sichern, wenn noch keine Sicherung dasteht. Bricht ein Lauf
+	# zwischen block_ und unblock_service_start ab, bleibt der Stummel
+	# "exit 101" als /usr/sbin/policy-rc.d liegen und das Original in
+	# .smartmeter. Ohne diese Bedingung schoebe der NAECHSTE Lauf den
+	# Stummel ueber das Original - danach startete auf diesem Rechner
+	# kein Paket mehr seine Dienste, und das Plugin waere als Ursache
+	# nicht mehr zu erkennen.
+	if [ -e "$POLICY_FILE" ] && [ ! -e "$POLICY_BACKUP" ]; then
+		mv "$POLICY_FILE" "$POLICY_BACKUP"
+	elif [ -e "$POLICY_FILE" ]; then
+		rm -f "$POLICY_FILE"
+	fi
 	printf '#!/bin/sh\nexit 101\n' >"$POLICY_FILE"
 	chmod 0755 "$POLICY_FILE"
+	# Und eine Wache: ein Abbruch darf die Sperre nicht stehen lassen.
+	trap 'unblock_service_start' EXIT INT TERM
 }
 
 unblock_service_start()
@@ -143,7 +156,7 @@ install_package()
 	apt-get update
 
 	oldversion="$(installed_version)"
-	block_service_start
+	block_service_start   # setzt selbst einen trap auf unblock
 	echo "<INFO> Installiere vzlogger"
 	if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends vzlogger; then
 		unblock_service_start
