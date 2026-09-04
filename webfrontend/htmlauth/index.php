@@ -478,6 +478,12 @@ $sm_endpunkt = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin'] . '/index.ph
     . ($sm_token !== '' ? '?token=' . $sm_token : '');
 $sm_endpunkt_selftest = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin']
     . '/index.php?selftest=1' . ($sm_token !== '' ? '&token=' . $sm_token : '');
+/* Der Lastgang - dasselbe Bauteil, dasselbe Token. Eine Adresse, die
+ * angezeigt wird, damit jemand sie abschreibt, traegt JEDEN Parameter,
+ * den der eigene Endpunkt verlangt. */
+$sm_lastgang_url = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin']
+    . '/lastgang.php' . ($sm_token !== '' ? '?token=' . $sm_token : '');
+$sm_lastgang = sm_lastgang_lage();
 
 $sm_version = sm_fassung();
 
@@ -1242,6 +1248,36 @@ $sm_zustandszeile = '<span class="sm-mono">'
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.TOKEN'); ?></span>
 </div>
+</div>
+
+<div class="sm-step">
+<b><?php echo sm_t('LOX.S9_TITEL'); ?></b><br><br>
+<?php echo sm_t('LOX.S9_TEXT'); ?>
+<pre class="sm-pre"><?php echo sm_e($sm_lastgang_url); ?></pre>
+<p class="sm-small"><?php echo sm_t('LOX.S9_EINTRAGEN'); ?></p>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th style="width:26%"><?php echo sm_t('LOX.S9_SP_FELD'); ?></th>
+    <th><?php echo sm_t('LOX.S9_SP_WERT'); ?></th></tr>
+<tr><td><?php echo sm_t('LOX.S9_F_QUELLE'); ?></td><td class="sm-mono">objekt</td></tr>
+<tr><td><?php echo sm_t('LOX.S9_F_PFAD'); ?></td><td class="sm-mono">stunden</td></tr>
+<tr><td><?php echo sm_t('LOX.S9_F_EINHEIT'); ?></td><td class="sm-mono">wh</td></tr>
+<tr><td><?php echo sm_t('LOX.S9_F_URL'); ?></td><td class="sm-mono"><?php echo sm_e($sm_lastgang_url); ?></td></tr>
+</table>
+</div>
+<?php
+/* Der Zustand - gemessen an der Historie, nicht behauptet. Ein Kasten,
+ * der nur die Adresse zeigt, sagt nicht, ob dort etwas ankommt. */
+$sm_lg_klasse = $sm_lastgang['stunden_heute'] >= 20 ? 'sm-ok'
+              : ($sm_lastgang['zeilen'] > 0 ? 'sm-warn' : 'sm-info');
+?>
+<div class="sm-alert <?php echo $sm_lg_klasse; ?>"><?php
+printf(sm_t('LOX.S9_LAGE'), (int) $sm_lastgang['stunden_heute'],
+       (int) $sm_lastgang['zeilen'], (int) $sm_lastgang['offen']);
+?></div>
+<?php if ($sm_lastgang['offen'] > 0) { ?>
+<div class="sm-alert sm-warn"><?php echo sm_t('LOX.S9_OFFEN'); ?></div>
+<?php } ?>
 </div>
 </div>
 

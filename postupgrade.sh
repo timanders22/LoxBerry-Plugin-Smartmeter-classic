@@ -55,6 +55,32 @@ if [ ! -s "$SICHERUNG/config/smartmeter.cfg" ]; then
 	exit 0
 fi
 
+# ===========================================================================
+# Die Verbrauchshistorie zurueck an ihren Platz. Siehe preupgrade.sh.
+# ===========================================================================
+HIST_SICHER="$ARGV5/data/plugins/$ARGV3.upgrade_sicherung"
+HIST_ZIEL="$ARGV5/data/plugins/$ARGV3"
+if [ -d "$HIST_SICHER" ]; then
+	mkdir -p "$HIST_ZIEL" 2>/dev/null
+	HIST_N=0
+	for HIST_F in historie.csv historie_merker.json; do
+		if [ -f "$HIST_SICHER/$HIST_F" ]; then
+			if cp -p "$HIST_SICHER/$HIST_F" "$HIST_ZIEL/$HIST_F" 2>/dev/null; then
+				HIST_N=$((HIST_N + 1))
+			else
+				echo "<WARNING> $HIST_F liess sich nicht zurueckspielen."
+				echo "<WARNING> Die Sicherung bleibt unter $HIST_SICHER liegen."
+			fi
+		fi
+	done
+	if [ "$HIST_N" -gt 0 ]; then
+		echo "<OK> Verbrauchshistorie wiederhergestellt ($HIST_N Datei(en))."
+		# Nur raeumen, wenn wirklich alles zurueckgespielt wurde - eine
+		# geloeschte Sicherung nach einem halben Lauf waere endgueltig.
+		rm -rf "$HIST_SICHER" 2>/dev/null
+	fi
+fi
+
 echo "<INFO> Spiele gesicherte Konfiguration zurueck aus $SICHERUNG"
 # -a erhaelt Rechte und Zeitstempel; der Punkt am Ende kopiert auch
 # Dateien, deren Name mit einem Punkt beginnt.

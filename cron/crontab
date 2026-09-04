@@ -6,3 +6,16 @@ MAILTO=""
 # vzLogger mode: poll local vzlogger API and forward readings to the Miniserver.
 # fetch_vzlogger.pl exits immediately if the vzLogger mode is disabled.
 * * * * * loxberry REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/fetch_vzlogger.pl >/dev/null 2>&1
+#
+# Die Verbrauchshistorie je Stunde. Sie liest NUR, was einer der beiden
+# Leser auf der Ramdisk hinterlegt hat, und redet mit keinem Geraet -
+# deshalb laeuft sie in beiden Betriebsarten und schadet in keiner.
+#
+# Im selben Minutentakt wie der Leser darueber, ohne Versatz: cron kennt
+# keine Sekunden (fuenf Zeitfelder, das kleinste ist die Minute), und ein
+# Versatz waere auch nicht noetig - beide Leser schreiben ihre Datendatei
+# ueber temp + rename, eine halb geschriebene kann hier also nicht
+# ankommen. Die Differenz wird ohnehin ueber den Zeitstempel IN der Datei
+# gebildet und nicht ueber den Zeitpunkt des Lesens; ein Lauf ohne neue
+# Messung erkennt das und tut nichts.
+* * * * * loxberry REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/sm_historie.php >/dev/null 2>&1

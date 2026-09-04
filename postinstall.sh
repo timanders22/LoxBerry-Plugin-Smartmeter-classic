@@ -161,6 +161,9 @@ for SM_SKRIPT in fetch.php reboot_cron_runner.sh sm_logger.pl fetch_vzlogger.pl 
     fi
 done
 
+# Die Historie laeuft aus dem Cron und muss ausfuehrbar sein.
+chmod 0755 "$ARGV5/bin/plugins/$ARGV3/sm_historie.php" 2>/dev/null
+
 echo "<INFO> Rename htaccess to .htaccess"
 # Quotiert UND beurteilt. Scheitert das mv, bleibt die .htaccess aus -
 # und die Installation meldete bis 2.4.2 trotzdem Erfolg.

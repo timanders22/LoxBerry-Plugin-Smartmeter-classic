@@ -855,6 +855,121 @@ kein Miniserver. Die Attrappe der vzlogger-Schnittstelle ist aus
 nach wie vor leer — das ist der Zustand, den diese Fassung messbar macht,
 nicht der, den sie behebt.
 
+## Fassung 2.6.0 — der Verbrauch je Stunde
+
+Bis 2.5.0 hält das Plugin nur den **letzten** Zählerstand, und der liegt auf
+der Ramdisk. Nach jedem Neustart des LoxBerry ist er weg. Damit lässt sich
+nicht beantworten, was in der letzten Stunde verbraucht wurde — und genau
+das braucht ein dynamischer Tarif, weil dort jede Stunde einen eigenen Preis
+hat.
+
+### Was NICHT gebaut wurde, und warum
+
+Ein eigener Abruf der Börsenpreise. In diesem Konto liegen bereits drei
+Spotpreis-Linien (aWATTar, Octopus, Tibber), und die machen die Preisseite
+gründlich: Netzentgelt, Stromsteuer, Konzessionsabgabe, Umlagen,
+Anbieter-Aufschlag und Umsatzsteuer sind dort einzeln einstellbar, dazu der
+zweite Preissatz nach § 14a EnWG. Der Unterschied ist nicht klein — 8,00 ct
+Börsenpreis werden dort zu **26,01 ct** Endpreis. Wer nur „EPEX mal kWh"
+rechnet, bekommt eine Zahl, die um Faktor 3 danebenliegt und trotzdem
+plausibel aussieht.
+
+Ein vierter Abruf wäre die vierte Preisquelle und die zweite Stelle für
+Netzentgelte und Steuersätze gewesen. Statt dessen gilt: **das
+Spotpreis-Plugin liefert den Preis, dieses Plugin die Menge.** Jede Sache
+einmal.
+
+### Der Lastgang
+
+Die Spotpreis-Plugins gewichten ihren Tarifvergleich mit einem eingebauten
+**Haushaltsprofil**, weil ihnen niemand sagt, wann wirklich verbraucht wurde.
+Ihr `spot_lastgang()` holt dafür stündliche Werte von einer frei
+einstellbaren JSON-Adresse — geliefert hat sie bisher niemand. Jetzt gibt es
+sie:
+
+    /plugins/<Ordner>/lastgang.php?token=…
+
+    {"ok":1,"einheit":"wh","stunden":{"1756000000":812.5, …},
+     "anzahl":48,"heute":24,"offen":0}
+
+Im Spotpreis-Plugin unter *Eigener Lastgang* einzutragen: Quelle `objekt`,
+Pfad `stunden`, Einheit `wh`. Der Reiter *Einbindung in Loxone* zeigt die
+Adresse samt Token und sagt, wie viele der 24 Stunden des heutigen Tages
+gedeckt sind — das Spotpreis-Plugin verlangt mindestens 20.
+
+### Wie die Historie entsteht
+
+Es gibt zwei Leser: `bin/fetch.php` (klassisch, PHP) und
+`bin/fetch_vzlogger.pl` (vzLogger, Perl). Die Fortschreibung in beide
+einzubauen hieße, dieselbe Rechnung in zwei Sprachen zu pflegen — genau der
+Fehler, den 2.4.0 mit `bin/sm_felder.json` abgestellt hat. Beide schreiben
+aber dieselbe Datei im selben Schema, und die ist damit die vorhandene
+gemeinsame Schnittstelle:
+
+    /dev/shm/<Ordner>/<serial>.data      Zeilen "SERIAL:Feldname:Wert"
+
+`bin/sm_historie.php` liest sie im Minutentakt, bildet Differenzen und
+schreibt je Stunde eine Zeile. Es redet mit **keinem Gerät**; läuft kein
+Leser, wächst die Historie nicht — und das ist die richtige Antwort, nicht
+eine gerechnete Fortsetzung.
+
+### Zwei Dateien, und warum
+
+Der erste Entwurf hielt alles in der CSV und schrieb sie bei jedem
+Minutenlauf neu. Bei 24 Monaten sind das rund 17 500 Zeilen, **1440 mal am
+Tag**, auf einer SD-Karte. Jetzt sammelt ein kleiner Merker die laufende
+Stunde, und erst wenn sie vorbei ist, wird **eine** Zeile angehängt: 24
+Schreibvorgänge am Tag statt 1440 vollständiger Neuschreibungen. Der
+Rückschnitt auf 24 Monate schreibt die Datei doch einmal ganz — einmal
+täglich um drei Uhr nachts.
+
+Die Historie überlebt ein Update: `data/plugins/<Ordner>/` wird bei **jedem**
+Upgrade abgeräumt (`purge_installation` in `plugininstall.pl`, und zwar bevor
+`postupgrade.sh` läuft). Gesichert wird deshalb **neben** den Datenordner,
+wie es das Spotpreis-Plugin für seine `history.csv` vormacht.
+
+### Die Fallen, jede einzeln nachgemessen
+
+| Fall | Was geschieht |
+|---|---|
+| Zähler springt zurück (Zählerwechsel) | Differenz **verworfen**, nicht gedreht — gedreht sähe sie aus wie 1001 kWh in einer Stunde |
+| Uhr springt zurück | keine Differenz. Ein Raspberry Pi hat keine Echtzeituhr; nach dem Booten steht er in der Vergangenheit |
+| Lücke über zwei Stunden | bleibt eine **Lücke**. Die Energie auf die Stunden dazwischen zu verteilen wäre gleichmäßiger Verbrauch — genau die Annahme, die dieses Modul abschaffen soll |
+| Neustart | Ramdisk leer, Historie und Merker stehen weiter |
+| Leseweg gewechselt | die erste Differenz danach wird verworfen (andere Einheit, evtl. anderer Zählpunkt) |
+| Zwei Lesekköpfe | je Zählernummer eine Zeile; der Endpunkt **addiert** sie |
+
+### Die Einheit — und was sie noch offen lässt
+
+Auf dem **klassischen** Weg rechnet `bin/sml_parser.php` Wh auf kWh um; die
+Einheit ist belegt, und die Historie schreibt Wh.
+
+Auf dem **vzLogger**-Weg reicht vzlogger den Wert des Zählers durch.
+`einheit_vz` im Katalog ist leer, weil es ohne Zähler nicht zu messen war —
+deshalb steht seit 2.5.0 auch in der Loxone-Vorlage keine Einheit. Die
+Historie schreibt die Differenz trotzdem mit, aber sie schreibt die Einheit
+**daneben**: eine Zeile mit `?` heißt gemessen ja, umgerechnet nein. Der
+Lastgang-Endpunkt liefert solche Stunden **nicht** aus und zählt sie in
+`offen`.
+
+Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
+1000 daneben, und niemand sähe es. Der Knopf *vzLogger-Rohwerte* im Reiter
+*Test* (seit 2.5.0) zeigt, was wirklich ankommt.
+
+### Was ausdrücklich NICHT gemessen ist
+
+* **Kein Zähler, kein vzlogger.** Die Zählerstände des Prüfstands sind
+  gelegt; ob ein echter Zähler sie so liefert, ist offen.
+* **Der Rückschnitt nach 24 Monaten.** Er bräuchte Zeilen, die zwei Jahre
+  alt sind, und eine gestellte Uhr — nicht eine gelegte Datei.
+* **Kein cron und kein Apache.** Die Cron-Zeile ist auf fünf Zeitfelder und
+  den Benutzer geprüft, nicht ausgeführt.
+* **Das Zusammenspiel mit dem Spotpreis-Plugin.** Das Format ist an
+  `plan_pv_lesen()` aus aWATTar 1.2.20 abgelesen und der Endpunkt liefert
+  es; ob dessen Tarifvergleich damit rechnet, zeigt erst die Anlage.
+* **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
+  `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
+
 ## Lizenz
 
 Apache License 2.0 — wie das Original. Siehe [`LICENSE`](LICENSE) und

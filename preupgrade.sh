@@ -120,6 +120,35 @@ fi
 echo "<INFO> Sicherungsordner: $SICHERUNG"
 mkdir -p "$SICHERUNG/config"
 
+# ===========================================================================
+# DIE VERBRAUCHSHISTORIE
+#
+# data/plugins/<ordner>/ wird bei JEDEM Upgrade abgeraeumt - purge_installation
+# in plugininstall.pl macht das, und zwar bevor postupgrade.sh laeuft. Eine
+# Historie ueber zwei Jahre waere danach weg, und niemand koennte sie neu
+# bilden: sie entsteht nur, indem der Zaehler laeuft.
+#
+# Gesichert wird deshalb NEBEN den Datenordner, nicht hinein. Dieselbe
+# Bauform wie im Spotpreis-Plugin fuer dessen history.csv.
+# ===========================================================================
+HIST_QUELLE="$ARGV5/data/plugins/$ARGV3"
+HIST_SICHER="$ARGV5/data/plugins/$ARGV3.upgrade_sicherung"
+mkdir -p "$HIST_SICHER" 2>/dev/null
+chmod 0700 "$HIST_SICHER" 2>/dev/null
+HIST_N=0
+for HIST_F in historie.csv historie_merker.json; do
+	if [ -f "$HIST_QUELLE/$HIST_F" ]; then
+		if cp -p "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F" 2>/dev/null; then
+			HIST_N=$((HIST_N + 1))
+		else
+			echo "<WARNING> $HIST_F liess sich nicht sichern - die Historie geht beim Update verloren."
+		fi
+	fi
+done
+if [ "$HIST_N" -gt 0 ]; then
+	echo "<INFO> Verbrauchshistorie gesichert ($HIST_N Datei(en)) nach $HIST_SICHER"
+fi
+
 echo "<INFO> Backing up existing config files"
 # Den Rueckgabewert ansehen. Bis 2.4.2 stand hier "|| true", und
 # postupgrade.sh prueft danach nur, ob $SICHERUNG/config als VERZEICHNIS

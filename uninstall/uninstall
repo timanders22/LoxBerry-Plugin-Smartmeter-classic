@@ -119,6 +119,12 @@ fi
 # Der Zwischenspeicher auf der Ramdisk verschwindet beim naechsten Neustart
 # ohnehin - hier steht er trotzdem, damit eine Neuinstallation am selben Tag
 # nicht auf alten Zaehlerwerten aufsetzt.
+# Die Sicherung der Verbrauchshistorie liegt NEBEN dem Datenordner und
+# wird deshalb nicht mit ihm abgeraeumt.
+if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
+	rm -rf "$ARGV5/data/plugins/$ARGV3.upgrade_sicherung" 2>/dev/null
+fi
+
 # Erst pruefen, dann loeschen: ein leeres $3 traefe /dev/shm SELBST.
 if [ -n "$ARGV3" ]; then
 	rm -rf "/dev/shm/$ARGV3" 2>/dev/null

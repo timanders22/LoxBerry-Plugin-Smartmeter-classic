@@ -1280,6 +1280,56 @@ function sm_zaehler_lesen()
 }
 
 /* ==================================================================
+ * Die Verbrauchshistorie - nur LESEN
+ *
+ * Geschrieben wird sie von bin/sm_historie.php aus dem Cron. Die
+ * Oberflaeche sieht sie nur an: zwei Schreiber auf derselben Datei waeren
+ * zwei Wahrheiten, und der Cron-Lauf haette keine Chance gegen einen
+ * Seitenaufbau.
+ * ================================================================== */
+
+/**
+ * Wie steht es um den Lastgang? Gemessen an der Datei, nicht behauptet.
+ *
+ * Rueckgabe: stunden_heute (wieviele der 24 Stunden des heutigen Tages
+ * gedeckt sind - genau danach entscheidet spot_lastgang() im
+ * Spotpreis-Plugin, ob es die Messung nimmt oder sein eingebautes
+ * Profil), zeilen (insgesamt), offen (Stunden ohne belegte Einheit).
+ */
+function sm_lastgang_lage()
+{
+    $p = sm_paths();
+    $erg = array('stunden_heute' => 0, 'zeilen' => 0, 'offen' => 0, 'da' => false);
+    $datei = $p['datadir'] . '/historie.csv';
+    // clearstatcache, weil derselbe Prozess die Datei mehrfach ansieht
+    // und der Cron sie zwischendurch verlaengert haben kann.
+    clearstatcache(true, $datei);
+    if (!is_readable($datei)) {
+        return $erg;
+    }
+    $erg['da'] = true;
+    $fh = @fopen($datei, 'rb');
+    if ($fh === false) {
+        return $erg;
+    }
+    $heute = strtotime('today');
+    $stunden = array();
+    while (($z = fgets($fh)) !== false) {
+        $z = trim($z);
+        if ($z === '' || strncmp($z, 'stunde;', 7) === 0) { continue; }
+        $f = explode(';', $z);
+        if (count($f) < 7) { continue; }
+        $erg['zeilen']++;
+        if ($f[4] !== 'Wh') { $erg['offen']++; continue; }
+        $st = (int) $f[0];
+        if ($st >= $heute && $st < $heute + 86400) { $stunden[$st] = true; }
+    }
+    fclose($fh);
+    $erg['stunden_heute'] = count($stunden);
+    return $erg;
+}
+
+/* ==================================================================
  * Loxone-Vorlagen
  * ================================================================== */
 
