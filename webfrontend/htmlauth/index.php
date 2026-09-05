@@ -322,6 +322,31 @@ if (isset($_POST['test']) && is_string($_POST['test'])) {
 }
 
 /* ---------------------------------------------------------------- *
+ * Fahrplan-Abgleich (2.7.0)
+ * ---------------------------------------------------------------- */
+if (isset($_POST['ab_speichern'])) {
+    $sm_ab_url = (isset($_POST['ab_url']) && is_string($_POST['ab_url']))
+        ? trim($_POST['ab_url']) : '';
+    $sm_ab_an  = isset($_POST['ab_aktiv']);
+    /* Die Adresse wird ABGEWIESEN, nicht zurechtgebogen. Nur http und
+     * https: ein file:// oder ein Pfad waere ein Weg, dem Plugin eine
+     * beliebige Datei unterzuschieben. */
+    if ($sm_ab_url !== '' && !preg_match('#^https?://#i', $sm_ab_url)) {
+        $sm_fehler[] = sm_t('AB.FEHLER_URL');
+    } elseif ($sm_ab_an && $sm_ab_url === '') {
+        // Einschalten ohne Adresse waere ein Schalter ohne Wirkung.
+        $sm_fehler[] = sm_t('AB.FEHLER_LEER');
+    } elseif (!sm_cfg_set('ABGLEICH', array(
+            'AKTIV' => $sm_ab_an ? '1' : '0', 'FAHRPLAN_URL' => $sm_ab_url))) {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
+                               '<span class="sm-mono">smartmeter.cfg</span>');
+    } else {
+        $sm_meldung = sm_t('MELD.GESPEICHERT');
+    }
+    $sm_tab = 'tab-loxone';
+}
+
+/* ---------------------------------------------------------------- *
  * Legacy-Leser
  * ---------------------------------------------------------------- */
 $sm_lg_ausgabe = '';
@@ -1277,6 +1302,67 @@ printf(sm_t('LOX.S9_LAGE'), (int) $sm_lastgang['stunden_heute'],
 ?></div>
 <?php if ($sm_lastgang['offen'] > 0) { ?>
 <div class="sm-alert sm-warn"><?php echo sm_t('LOX.S9_OFFEN'); ?></div>
+<?php } ?>
+</div>
+
+<div class="sm-step">
+<b><?php echo sm_t('AB.TITEL'); ?></b><br><br>
+<?php echo sm_t('AB.TEXT'); ?>
+<div class="sm-alert sm-info"><?php echo sm_t('AB.SCHRANKE'); ?></div>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<?php echo sm_fmt(); ?>
+<div class="sm-row">
+  <label><input data-role="none" type="checkbox" name="ab_aktiv" value="1"<?php
+    echo sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'AKTIV', '0') === '1' ? ' checked' : '';
+    ?>> <?php echo sm_t('AB.LABEL_AKTIV'); ?></label>
+</div>
+<div class="sm-row">
+  <label for="ab_url"><?php echo sm_t('AB.LABEL_URL'); ?></label>
+  <input data-role="none" type="text" id="ab_url" name="ab_url"
+         value="<?php echo sm_e(sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'FAHRPLAN_URL', '')); ?>">
+  <p class="sm-small"><?php echo sm_t('AB.HINT_URL'); ?></p>
+</div>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.AB_SPEICHERN'); ?></span>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ab_speichern" value="1"><?php
+    echo sm_t('ALLG.SPEICHERN'); ?></button>
+</div>
+</form>
+<?php
+$sm_ab = sm_abgleich_stand();
+if ($sm_ab['da'] && $sm_ab['regeln']) { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?php echo sm_t('AB.SP_REGEL'); ?></th>
+    <th><?php echo sm_t('AB.SP_SOLL'); ?></th>
+    <th><?php echo sm_t('AB.SP_IST'); ?></th>
+    <th><?php echo sm_t('AB.SP_FEHLT'); ?></th>
+    <th><?php echo sm_t('AB.SP_URTEIL'); ?></th></tr>
+<?php foreach ($sm_ab['regeln'] as $sm_nr => $sm_r) {
+    $sm_u = isset($sm_r['urteil']) ? $sm_r['urteil'] : '';
+    /* Nur "zieht_nicht" ist ein Befund. "unsicher" und die uebrigen sind
+     * KEIN Urteil - sie duerfen deshalb nicht rot aussehen. */
+    $sm_farbe = ($sm_u === 'zieht') ? '#6dac20'
+              : (($sm_u === 'zieht_nicht') ? '#e0620d' : '#546e7a');
+    ?>
+<tr><td class="sm-mono"><?php echo sm_e($sm_nr); ?></td>
+    <td class="sm-mono"><?php echo isset($sm_r['soll']) ? sm_e(number_format((float) $sm_r['soll'], 3, ',', '')) : '&ndash;'; ?></td>
+    <td class="sm-mono"><?php echo isset($sm_r['ist']) ? sm_e(number_format((float) $sm_r['ist'], 3, ',', '')) : '&ndash;'; ?></td>
+    <td class="sm-mono"><?php echo isset($sm_r['fehlt']) ? sm_e(number_format((float) $sm_r['fehlt'], 3, ',', '')) : '&ndash;'; ?></td>
+    <td style="color:<?php echo $sm_farbe; ?>"><?php
+      echo sm_e($sm_u !== '' ? sm_t('AB.U_' . strtoupper($sm_u)) : '&ndash;'); ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php if (!$sm_ab['quelle_ok']) { ?>
+<div class="sm-alert sm-warn"><?php
+  printf(sm_t('AB.QUELLE_WEG'), sm_e($sm_ab['grund'])); ?></div>
+<?php } ?>
+<?php } elseif (sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'AKTIV', '0') === '1') { ?>
+<div class="sm-alert sm-info"><?php echo sm_t('AB.NOCH_NICHTS'); ?></div>
 <?php } ?>
 </div>
 </div>

@@ -19,3 +19,14 @@ MAILTO=""
 # gebildet und nicht ueber den Zeitpunkt des Lesens; ein Lauf ohne neue
 # Messung erkennt das und tut nichts.
 * * * * * loxberry REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/sm_historie.php >/dev/null 2>&1
+#
+# Der Fahrplan-Abgleich (2.7.0). Er bricht sofort ab, solange
+# ABGLEICH.AKTIV nicht auf 1 steht - ab Werk tut er also nichts.
+#
+# Fuenf Minuten, nicht eine: er fragt eine FREMDE Adresse ab (den JSON-
+# Endpunkt des oertlichen Spotpreis-Plugins), und dessen Fahrplan aendert
+# sich stuendlich. Ein Minutentakt brachte nichts und belastete den
+# Nachbarn sechzigmal so oft. Die Laufzeit einer Regel wird trotzdem auf
+# die Sekunde gerechnet - gemessen wird ueber die Zeitstempel IN den
+# Datendateien, nicht ueber den Zeitpunkt des Laufs.
+*/5 * * * * loxberry REPLACELBHOMEDIR/bin/plugins/REPLACELBPPLUGINDIR/sm_abgleich.php >/dev/null 2>&1

@@ -1329,6 +1329,30 @@ function sm_lastgang_lage()
     return $erg;
 }
 
+/**
+ * Der Stand des Fahrplan-Abgleichs - nur LESEN.
+ *
+ * Geschrieben wird er von bin/sm_abgleich.php aus dem Cron. Zwei Schreiber
+ * auf derselben Datei waeren zwei Wahrheiten.
+ */
+function sm_abgleich_stand()
+{
+    $p = sm_paths();
+    $datei = $p['datadir'] . '/abgleich.json';
+    clearstatcache(true, $datei);
+    if (!is_readable($datei)) {
+        return array('regeln' => array(), 'ts' => 0, 'quelle_ok' => 0,
+                     'grund' => '', 'da' => false);
+    }
+    $d = json_decode((string) @file_get_contents($datei), true);
+    if (!is_array($d)) {
+        return array('regeln' => array(), 'ts' => 0, 'quelle_ok' => 0,
+                     'grund' => 'UNLESBAR', 'da' => true);
+    }
+    return array_merge(array('regeln' => array(), 'ts' => 0, 'quelle_ok' => 0,
+                             'grund' => '', 'da' => true), $d);
+}
+
 /* ==================================================================
  * Loxone-Vorlagen
  * ================================================================== */

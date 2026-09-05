@@ -970,6 +970,93 @@ Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
 * **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
   `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
 
+## Fassung 2.7.0 — tut die Hardware, was der Fahrplan sagt?
+
+Der Planer der Spotpreis-Plugins schaltet Regeln (Wallbox, Speicher,
+Wärmepumpe) in die günstigen Stunden. Ob das Gerät dann wirklich zieht,
+weiß er nicht: er sendet einen Befehl und sieht keinen Zähler. Dieses
+Plugin sieht den Zähler.
+
+### Warum es kein „Delta“ ist
+
+Die naheliegende Rechnung wäre „geplanter minus realer Netzbezug“. Sie geht
+nicht — **einen geplanten Netzbezug gibt es nicht.** Gemessen am Planer von
+Spotpreis-aWATTar 1.2.20: er sendet je Regel `aktiv`, `in`, `rest`, `ct`,
+`ein`, `rang`, `fehlt`, `spart` und trägt eine konfigurierte `leistung` in
+kW. Das einzige Vorkommen des Wortes „Netzbezug“ im ganzen Plugin ist der
+vom Anwender **eingetragene** Jahresverbrauch für den Tarifvergleich.
+
+Der Planer plant also Schaltfenster einzelner Regeln; gemessen wird der
+Bezug des **ganzen Hauses**. Die Differenz wäre Grundlast plus Herd plus
+alles andere minus PV — der Rest des Hauses, nicht die Regelabweichung.
+
+### Was statt dessen gerechnet wird: eine untere Schranke
+
+Läuft eine Regel mit 11 kW 47 Minuten, muss sie 8,6 kWh gezogen haben. Der
+Netzbezug in dieser Zeit kann nur **größer** sein — der Rest des Hauses
+kommt dazu, zieht nie ab. Sind es 2,1 kWh, hat die Regel **nachweislich**
+nicht gezogen.
+
+Die Richtung ist entscheidend: „zu wenig Bezug“ ist ein Befund, „zu viel“
+ist keiner. Wer daraus eine Abweichung in beide Richtungen macht, misst den
+Haushalt und nennt es Regelabweichung.
+
+**Die eine Ausnahme wird genannt.** Eigene Einspeisung drückt den Netzbezug,
+ohne dass die Regel weniger zieht. Lief in der Zeit eine Einspeisung, ist die
+Schranke keine mehr — die Aussage heißt dann `unsicher` und ist kein Befund.
+Ein Alarm, der bei jeder Wolke anschlägt, wird abgeschaltet.
+
+### Woher der Fahrplan kommt
+
+Über HTTP von `spot.php?json=1` des örtlichen Spotpreis-Plugins — derselbe
+Weg wie für den Preis. **Kein MQTT-Abo:** das bräuchte einen Dauerprozess,
+eine neue Abhängigkeit (paho oder Net::MQTT) und einen Neustart-Wächter. Im
+ganzen Bestand empfängt nur Midea2Lox, und dessen erste Fassung schaltete
+dem Anwender ein Gerät aus, das er gerade eingeschaltet hatte. Solange der
+Zähler ohnehin nur minutenweise gelesen wird, brächte ein Abo nichts.
+
+Ab Werk ist der Abgleich **aus** — er fragt eine fremde Adresse ab, und was
+nach außen greift, wird nicht ungefragt eingeschaltet. Der Cron läuft alle
+fünf Minuten, nicht jede: der Fahrplan ändert sich stündlich, und ein
+Minutentakt belästigte den Nachbarn sechzigmal so oft ohne Gewinn.
+
+### Was es NICHT ist
+
+**Kein schneller Weg.** Wer sekundenschnell nachregeln will, tut das im
+Miniserver: dort liegen der Netzbezug (aus diesem Plugin) und
+`regel/<n>/aktiv` (aus dem Planer) ohnehin beide an, und ein Baustein
+rechnet sie in einem Zyklus. Der Weg über dieses Skript ist zwei
+MQTT-Sprünge und einen Cron-Lauf **langsamer**. Was es dafür kann und der
+Miniserver nicht: über eine Laufzeit hinweg Energie summieren.
+
+### Die Themen
+
+    <praefix>/abgleich/quelle_ok        1 = Fahrplan erreichbar
+    <praefix>/abgleich/<n>/aktiv        die Regel soll laufen
+    <praefix>/abgleich/<n>/soll         kWh, Leistung mal Laufzeit
+    <praefix>/abgleich/<n>/ist          kWh, gemessener Netzbezug
+    <praefix>/abgleich/<n>/fehlt        kWh Fehlbetrag
+    <praefix>/abgleich/<n>/dauer        Sekunden
+    <praefix>/abgleich/<n>/sicher       1 = keine Einspeisung, Einheit belegt
+    <praefix>/abgleich/<n>/ok           1 zieht · 0 zieht nicht · -1 kein Urteil
+
+`ok` ist bewusst dreiwertig. Ein Miniserver kann Wörter nicht vergleichen,
+und „unbekannt“ als 0 zu senden wäre eine Aussage, wo keine steht.
+
+### Was ausdrücklich NICHT gemessen ist
+
+* **Kein Spotpreis-Plugin.** Der Fahrplan kommt im Prüfstand aus einer
+  festen Datei; die Form ist an `spot_lib.php` und `planer.php` abgelesen
+  und nicht im Zusammenspiel erprobt.
+* **Kein Zähler, keine Wallbox.** Die Zählerstände werden gelegt. Ob die
+  Toleranz von 80 % und die Mindestlaufzeit von zehn Minuten an einer
+  echten Anlage taugen, zeigt erst der Betrieb.
+* **Kein MQTT-Gateway.** Im Prüfstand ist das Senden abgeschaltet; gemessen
+  wird die Rechnung, nicht der Sendeweg.
+* **Auf dem vzLogger-Weg ruht der Abgleich**, solange `einheit_vz` nicht
+  belegt ist — ohne Einheit gibt es keine kWh, und eine geratene wäre um
+  den Faktor 1000 daneben.
+
 ## Lizenz
 
 Apache License 2.0 — wie das Original. Siehe [`LICENSE`](LICENSE) und
