@@ -970,6 +970,60 @@ Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
 * **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
   `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
 
+## Fassung 2.7.1 — die Cron-Aufträge erreichen bestehende Anlagen wieder
+
+**Der wichtigste Punkt betrifft nur den Aktualisierungsfall**, also den
+Zustand, den eine Neuinstallation nie durchläuft.
+
+Bis 2.7.0 lieferte dieses Plugin seine drei Aufträge als `cron/crontab` aus.
+Am Quelltext des Installateurs nachgemessen (`sbin/plugininstall.pl`, frischer
+Klon), nicht vermutet:
+
+| Stelle | Was dort steht |
+|---|---|
+| `:989` | `if (-e "$tempfolder/cron/crontab" && !-e ".../cron/cron.d/$pname")` — kopiert wird **nur, wenn die Zieldatei noch nicht existiert** |
+| `:1571` | `if ($option eq "all")` — entfernt wird sie **ausschließlich beim Deinstallieren**; der Kommentar dort sagt es wörtlich |
+| `:1566` / `:1000` | die Ordner `cron.NNmin/` werden beim Upgrade **entfernt und frisch kopiert** |
+
+Zusammen heißt das: **eine Änderung an `cron/crontab` erreicht eine bestehende
+Anlage nie.** Sie wirkt allein bei einer Neuinstallation. Aufgefallen ist das
+dem eigenen Freigabewerkzeug, nicht beim Lesen.
+
+Seit 2.7.1 kommen dieselben Aufträge aus `cron/cron.01min` und
+`cron/cron.05min`. Zwei Dinge sind dabei bewusst so gebaut:
+
+* **Die beiden Minutenaufträge laufen nebenläufig.** In der alten `crontab`
+  standen `fetch_vzlogger.pl` und `sm_historie.php` als *zwei* Zeilen; cron
+  startet zwei Zeilen derselben Minute parallel, und hängt die eine, läuft die
+  andere trotzdem. Ein Skript, das beide nacheinander aufruft, hätte genau das
+  aufgegeben. Sie stehen deshalb im Hintergrund mit abschließendem `wait` —
+  die alte Lage nachgebildet, nicht stillschweigend verschärft.
+* **Die Fehlerausgabe geht ins Systemprotokoll** statt nach `/dev/null`. Die
+  normale Ausgabe bleibt unterdrückt; im Regelfall schweigen beide.
+
+**Beim Aktualisieren wird die alte `cron.d`-Datei entfernt** — ohne diesen
+Schritt liefen nach dem Upgrade **beide** Wege, der Leser also zweimal je
+Minute. `postupgrade.sh` löscht sie und **sieht danach nach, ob es geklappt
+hat**: die Datei gehört root, das Skript läuft als `loxberry`, und ob das
+Löschen gelingt, hängt an den Rechten des Ordners `system/cron/cron.d` — das
+ist von hier aus nicht gemessen. Scheitert es, steht die Anweisung im
+Installationsprotokoll (`sudo rm -f …`) statt einer Erfolgsmeldung. Niemand
+bemerkt doppelt laufende Cron-Aufträge von selbst.
+
+In drei Fällen geeicht: Datei vorhanden und entfernbar (`<OK>`), keine Datei
+vorhanden (`<INFO>`), Datei vorhanden und Ordner schreibgeschützt
+(`<WARNING>` mit Anweisung).
+
+**Sonst** prüft `postinstall.sh` jetzt nach, ob die Platzhalter wirklich
+ersetzt wurden: `sed` legt seine Ersatzdatei im Zielverzeichnis an, und
+scheiterte das, blieb wörtlich `REPLACEBYSUBFOLDER` stehen — ohne ein Wort im
+Protokoll. Und die Meldung zu den Zeilenenden sagt jetzt, was **nachher** in
+der Datei steht, statt eine Umstellung zu behaupten, die nicht stattfand.
+
+Die Sprachdateien sind gegenüber 2.7.0 **byte-gleich** — gemessen gegen das
+veröffentlichte Archiv, nicht gegen den Tag: ein Tag-Auscheckvorgang
+normalisiert Zeilenenden und täuscht dort eine Änderung aller 558 Zeilen vor.
+
 ## Fassung 2.7.0 — tut die Hardware, was der Fahrplan sagt?
 
 Der Planer der Spotpreis-Plugins schaltet Regeln (Wallbox, Speicher,

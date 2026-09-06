@@ -1,0 +1,29 @@
+#!/bin/sh
+# Smartmeter classic - Fahrplan-Abgleich, alle fuenf Minuten.
+#
+# Zur Begruendung des Ortes (cron.05min statt cron/crontab) siehe den Kopf von
+# cron.01min: eine cron/crontab erreicht eine bestehende Anlage nie wieder.
+#
+# WARUM FUENF MINUTEN UND NICHT EINE
+#
+# Der Abgleich fragt eine FREMDE Adresse ab - den JSON-Endpunkt des oertlichen
+# Spotpreis-Plugins -, und dessen Fahrplan aendert sich stuendlich. Ein
+# Minutentakt braechte nichts und belastete den Nachbarn sechzigmal so oft.
+# Die Laufzeit einer Regel wird trotzdem auf die Sekunde gerechnet: gemessen
+# wird ueber die Zeitstempel IN den Datendateien, nicht ueber den Zeitpunkt
+# des Laufs.
+#
+# Er bricht ausserdem sofort ab, solange ABGLEICH.AKTIV nicht auf 1 steht -
+# ab Werk tut er also nichts.
+#
+# REPLACELBPBINDIR wird bei der Installation ersetzt.
+BIN="REPLACELBPBINDIR"
+
+if [ ! -x "$BIN/sm_abgleich.php" ]; then
+    logger -t smartmeter-classic "sm_abgleich.php fehlt oder ist nicht ausfuehrbar"
+    exit 1
+fi
+
+# Normale Ausgabe ins Nichts, Fehlerausgabe ins Systemprotokoll.
+"$BIN/sm_abgleich.php" 2>&1 >/dev/null | logger -t smartmeter-classic
+exit 0

@@ -1,0 +1,61 @@
+#!/bin/sh
+# Smartmeter classic - Minutentakt.
+#
+# WARUM DIESE DATEI SEIT 2.7.1 EXISTIERT
+#
+# Bis 2.7.0 lieferte diese Linie ihre Auftraege als cron/crontab aus. Am
+# Quelltext des Installateurs gemessen (sbin/plugininstall.pl, frischer Klon):
+#
+#   :989   if (-e "$tempfolder/cron/crontab"
+#             && !-e "$lbhomedir/system/cron/cron.d/$pname") { cp ... }
+#   :1571  if ($option eq "all") { rm -vf .../cron/cron.d/$pname }
+#          # Kommentar dort: "Delete individual crontab file (only on uninstall)"
+#
+# Zusammen heisst das: die Datei wird NUR angelegt, wenn sie noch nicht da
+# ist, und nur beim DEINSTALLIEREN entfernt. Auf einer bestehenden Anlage
+# erreicht eine Aenderung an cron/crontab also nie an - sie wirkt allein bei
+# einer Neuinstallation. Die Ordner cron.NNmin/ verhalten sich umgekehrt: sie
+# werden beim Upgrade entfernt (:1566) und frisch kopiert (:1000).
+#
+# ZWEI AUFTRAEGE, NEBENLAEUFIG - UND WARUM
+#
+# In der alten crontab standen fetch_vzlogger.pl und sm_historie.php als ZWEI
+# Zeilen. cron startet zwei Zeilen derselben Minute nebenlaeufig; haengt die
+# eine, laeuft die andere trotzdem. Ein Skript, das beide nacheinander
+# aufruft, haette genau das aufgegeben - ein haengender Leser haette die
+# Historie mit angehalten. Deshalb stehen sie hier im Hintergrund mit
+# abschliessendem 'wait': das bildet die alte Lage nach, statt sie
+# stillschweigend zu verschaerfen.
+#
+# FEHLERAUSGABE
+#
+# Die alte crontab schrieb '>/dev/null 2>&1' - auch Fehlermeldungen. Hier geht
+# die normale Ausgabe weiter ins Nichts (im Regelfall schweigen beide), die
+# FEHLERausgabe aber ins Systemprotokoll. Dieselbe Bauart wie bei
+# BatterieBMS und Abfahrts-Assistent.
+#
+# REPLACELBPBINDIR wird bei der Installation ersetzt (plugininstall.pl:1854).
+BIN="REPLACELBPBINDIR"
+
+if [ ! -d "$BIN" ]; then
+    logger -t smartmeter-classic "bin-Ordner nicht gefunden: $BIN"
+    exit 1
+fi
+
+# vzLogger: bricht selbst sofort ab, wenn die Betriebsart nicht vzLogger ist.
+if [ -x "$BIN/fetch_vzlogger.pl" ]; then
+    ( "$BIN/fetch_vzlogger.pl" 2>&1 >/dev/null | logger -t smartmeter-classic ) &
+else
+    logger -t smartmeter-classic "fetch_vzlogger.pl fehlt oder ist nicht ausfuehrbar"
+fi
+
+# Verbrauchshistorie: liest nur, was ein Leser auf der Ramdisk hinterlegt hat,
+# und redet mit keinem Geraet - laeuft deshalb in beiden Betriebsarten.
+if [ -x "$BIN/sm_historie.php" ]; then
+    ( "$BIN/sm_historie.php" 2>&1 >/dev/null | logger -t smartmeter-classic ) &
+else
+    logger -t smartmeter-classic "sm_historie.php fehlt oder ist nicht ausfuehrbar"
+fi
+
+wait
+exit 0

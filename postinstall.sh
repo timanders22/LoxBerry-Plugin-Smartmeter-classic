@@ -119,6 +119,30 @@ netz_ohne_vorgabe "vzlogger.conf"
 /bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" "$ARGV5/system/daemons/plugins/$ARGV2"
 /bin/sed -i "s#REPLACEBYBASEFOLDER#$ARGV5#" "$ARGV5/system/daemons/plugins/$ARGV2"
 
+# Nachgelesen statt angenommen.
+#
+# sed legt seine Ersatzdatei im ZIELverzeichnis an. Scheitert das - Rechte,
+# volle Ramdisk, Datei fehlt -, endet der Aufruf zwar mit einem Fehler, aber
+# niemand sah ihn: die vier Zeilen oben pruefen nichts und melden nichts.
+# In der Konfiguration bliebe dann woertlich REPLACEBYSUBFOLDER stehen, das
+# Plugin liefe ins Leere, und im Installationsprotokoll stuende dazu kein
+# Wort. Deshalb wird jetzt gelesen, was wirklich in den Dateien steht.
+SM_REST=0
+for SM_ZIEL in "$ARGV5/config/plugins/$ARGV3/smartmeter.cfg" \
+               "$ARGV5/system/daemons/plugins/$ARGV2"; do
+    if [ ! -f "$SM_ZIEL" ]; then
+        echo "<ERROR> $SM_ZIEL fehlt - die Installation ist unvollstaendig."
+        SM_REST=1
+    elif grep -q "REPLACEBY" "$SM_ZIEL"; then
+        echo "<ERROR> In $SM_ZIEL stehen noch Platzhalter (REPLACEBY...)."
+        echo "<ERROR> Die Ersetzung ist gescheitert; das Plugin wuerde so nicht laufen."
+        SM_REST=1
+    fi
+done
+if [ "$SM_REST" = "0" ]; then
+    echo "<OK> Platzhalter in Konfiguration und Dienstdatei ersetzt."
+fi
+
 # Die Konfiguration traegt das Zugriffstoken des Endpunkts.
 chmod 0640 "$NETZ_CFG/smartmeter.cfg" 2>/dev/null
 
@@ -157,7 +181,16 @@ for SM_SKRIPT in fetch.php reboot_cron_runner.sh sm_logger.pl fetch_vzlogger.pl 
         else
             /bin/sed -i "s/$(printf '\r')$//" "$SM_PFAD" 2>/dev/null
         fi
-        echo "<WARNING> $SM_SKRIPT trug Windows-Zeilenenden und wurde umgestellt."
+        # Gemeldet wird, was NACHHER in der Datei steht. Bis 2.7.0 stand
+        # hier "wurde umgestellt", auch wenn weder dos2unix noch sed
+        # schreiben konnten - und ein Skript mit CR am Zeilenende startet
+        # nicht ("bad interpreter").
+        if head -c 200 "$SM_PFAD" 2>/dev/null | grep -q "$(printf '\r')"; then
+            echo "<ERROR> $SM_SKRIPT traegt Windows-Zeilenenden und liess sich"
+            echo "<ERROR> nicht umstellen - so wird es nicht starten."
+        else
+            echo "<WARNING> $SM_SKRIPT trug Windows-Zeilenenden und wurde umgestellt."
+        fi
     fi
 done
 
