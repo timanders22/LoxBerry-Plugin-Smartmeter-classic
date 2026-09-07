@@ -26,4 +26,13 @@ fi
 
 # Normale Ausgabe ins Nichts, Fehlerausgabe ins Systemprotokoll.
 "$BIN/sm_abgleich.php" 2>&1 >/dev/null | logger -t smartmeter-classic
+
+# Die Kostenrechnung (2.8.0) - derselbe Takt, dieselbe fremde Adresse.
+# Sie bricht sofort ab, solange KOSTEN.AKTIV nicht auf 1 steht.
+if [ -x "$BIN/sm_kosten.php" ]; then
+    "$BIN/sm_kosten.php" 2>&1 >/dev/null | logger -t smartmeter-classic
+else
+    logger -t smartmeter-classic "sm_kosten.php fehlt oder ist nicht ausfuehrbar"
+fi
+
 exit 0

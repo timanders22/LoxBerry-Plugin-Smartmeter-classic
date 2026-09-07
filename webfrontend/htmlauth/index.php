@@ -347,6 +347,33 @@ if (isset($_POST['ab_speichern'])) {
 }
 
 /* ---------------------------------------------------------------- *
+ * Kostenrechnung (2.8.0)
+ * ---------------------------------------------------------------- */
+if (isset($_POST['ko_speichern'])) {
+    $sm_ko_url = (isset($_POST['ko_url']) && is_string($_POST['ko_url']))
+        ? trim($_POST['ko_url']) : '';
+    $sm_ko_an  = isset($_POST['ko_aktiv']);
+    /* Dieselbe Abweisung wie beim Fahrplan: nur http und https. Ein
+     * file:// waere ein Weg, dem Plugin eine beliebige Datei
+     * unterzuschieben. */
+    if ($sm_ko_url !== '' && !preg_match('#^https?://#i', $sm_ko_url)) {
+        $sm_fehler[] = sm_t('KO.FEHLER_URL');
+    } elseif ($sm_ko_an && $sm_ko_url === ''
+              && trim(sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'FAHRPLAN_URL', '')) === '') {
+        /* Leer heisst "nimm die Adresse des Fahrplans" - steht dort auch
+         * nichts, waere das Einschalten ein Schalter ohne Wirkung. */
+        $sm_fehler[] = sm_t('KO.FEHLER_LEER');
+    } elseif (!sm_cfg_set('KOSTEN', array(
+            'AKTIV' => $sm_ko_an ? '1' : '0', 'PREIS_URL' => $sm_ko_url))) {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
+                               '<span class="sm-mono">smartmeter.cfg</span>');
+    } else {
+        $sm_meldung = sm_t('MELD.GESPEICHERT');
+    }
+    $sm_tab = 'tab-loxone';
+}
+
+/* ---------------------------------------------------------------- *
  * Legacy-Leser
  * ---------------------------------------------------------------- */
 $sm_lg_ausgabe = '';
@@ -1076,7 +1103,7 @@ foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
      *
      * Maskiert wird die Einheit; nur der Gedankenstrich fuer "keine
      * Einheit" ist Auszeichnung und geht roh hinaus. */
-    list($sm_eh_roh, , ) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
+    list($sm_eh_roh, , , $sm_nk_vz) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
     $sm_eh = ($sm_eh_roh !== '') ? sm_e($sm_eh_roh) : '&ndash;';
     $sm_bd = $sm_md ? sm_t($sm_md['bed']) : $sm_feld;
     ?>
@@ -1128,9 +1155,9 @@ foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
     /* Dieselbe Quelle wie die Vorlage, die der Knopf darunter erzeugt.
      * Die Tabelle erklaert, WAS importiert wird - sie muss deshalb genau
      * das zeigen, was in der Datei steht. */
-    list($sm_eh_roh, , ) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
+    list($sm_eh_roh, , , $sm_nk_vz) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
     $sm_eh = ($sm_eh_roh !== '')
-        ? '&lt;v.' . (int) $sm_md['nk'] . '&gt;&nbsp;' . sm_e($sm_eh_roh) : '&ndash;';
+        ? '&lt;v.' . (int) $sm_nk_vz . '&gt;&nbsp;' . sm_e($sm_eh_roh) : '&ndash;';
     $sm_bd = $sm_md ? sm_t($sm_md['bed']) : $sm_feld; ?>
 <tr><td class="sm-mono"><?php echo sm_e(sm_ve_name($sm_legacy['MQTTTOPIC'], $sm_cfg['serial'], $sm_feld)); ?></td>
     <td><?php echo $sm_eh; ?></td><td><?php echo sm_e($sm_bd); ?></td></tr>
@@ -1363,6 +1390,67 @@ if ($sm_ab['da'] && $sm_ab['regeln']) { ?>
 <?php } ?>
 <?php } elseif (sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'AKTIV', '0') === '1') { ?>
 <div class="sm-alert sm-info"><?php echo sm_t('AB.NOCH_NICHTS'); ?></div>
+<?php } ?>
+</div>
+
+<div class="sm-step">
+<b><?php echo sm_t('KO.TITEL'); ?></b><br><br>
+<?php echo sm_t('KO.TEXT'); ?>
+<div class="sm-alert sm-info"><?php echo sm_t('KO.NUR_HEUTE'); ?></div>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<?php echo sm_fmt(); ?>
+<div class="sm-row">
+  <label><input data-role="none" type="checkbox" name="ko_aktiv" value="1"<?php
+    echo sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1' ? ' checked' : '';
+    ?>> <?php echo sm_t('KO.LABEL_AKTIV'); ?></label>
+</div>
+<div class="sm-row">
+  <label for="ko_url"><?php echo sm_t('KO.LABEL_URL'); ?></label>
+  <input data-role="none" type="text" id="ko_url" name="ko_url"
+         value="<?php echo sm_e(sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'PREIS_URL', '')); ?>">
+  <p class="sm-small"><?php echo sm_t('KO.HINT_URL'); ?></p>
+</div>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.KO_SPEICHERN'); ?></span>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ko_speichern" value="1"><?php
+    echo sm_t('ALLG.SPEICHERN'); ?></button>
+</div>
+</form>
+<?php
+$sm_ko = sm_kosten_stand();
+if ($sm_ko['da'] && $sm_ko['ts']) {
+    /* Ein fehlender Wert bekommt einen Strich. Eine 0 waere eine Aussage -
+     * sie hiesse, es habe nichts gekostet. */
+?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?php echo sm_t('KO.SP_GROESSE'); ?></th><th><?php echo sm_t('KO.SP_WERT'); ?></th></tr>
+<tr><td><?php echo sm_t('KO.Z_STUNDE'); ?></td><td class="sm-mono"><?php
+  echo $sm_ko['stunde_ct'] === null ? '&ndash;'
+     : sm_e(number_format((float) $sm_ko['stunde_ct'], 2, ',', '.')) . '&nbsp;ct'; ?></td></tr>
+<tr><td><?php echo sm_t('KO.Z_HEUTE'); ?></td><td class="sm-mono"><?php
+  echo $sm_ko['heute_ct'] === null ? '&ndash;'
+     : sm_e(number_format((float) $sm_ko['heute_ct'] / 100.0, 2, ',', '.')) . '&nbsp;EUR'; ?></td></tr>
+<tr><td><?php echo sm_t('KO.Z_MENGE'); ?></td><td class="sm-mono"><?php
+  echo $sm_ko['heute_kwh'] === null ? '&ndash;'
+     : sm_e(number_format((float) $sm_ko['heute_kwh'], 3, ',', '.')) . '&nbsp;kWh'; ?></td></tr>
+<tr><td><?php echo sm_t('KO.Z_STUNDEN'); ?></td><td class="sm-mono"><?php
+  echo (int) $sm_ko['stunden']; ?></td></tr>
+</table>
+</div>
+<?php if ((int) $sm_ko['offen'] > 0 || (int) $sm_ko['ohne_preis'] > 0) { ?>
+<div class="sm-alert sm-warn"><?php
+  printf(sm_t('KO.UEBERGANGEN'), (int) $sm_ko['offen'], (int) $sm_ko['ohne_preis']); ?></div>
+<?php }
+   if (!$sm_ko['quelle_ok']) { ?>
+<div class="sm-alert sm-warn"><?php
+  printf(sm_t('KO.QUELLE_WEG'), sm_e($sm_ko['grund'])); ?></div>
+<?php } ?>
+<?php } elseif (sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1') { ?>
+<div class="sm-alert sm-info"><?php echo sm_t('KO.NOCH_NICHTS'); ?></div>
 <?php } ?>
 </div>
 </div>

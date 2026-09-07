@@ -970,6 +970,175 @@ Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
 * **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
   `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
 
+## Fassung 2.8.0 — die Einheit ist gemessen, und damit rechnet sich der Preis
+
+### `einheit_vz` ist belegt: Wh und W
+
+Seit 2.5.0 stand in der Loxone-Vorlage auf dem vzLogger-Weg **keine
+Einheit**, weil vzlogger den Wert des Zählers ungewandelt durchreicht und
+niemand gemessen hatte, welche Einheit das ist. Am **07.09.2026** ist es
+gemessen — über `fetch_vzlogger.pl --roh` am laufenden Zähler:
+
+| Kanal | Rohwert | Einheit |
+|---|---|---|
+| `1-0:1.8.0` | 11.088.277,7 | **Wh** (11.088 kWh Bezug) |
+| `1-0:2.8.0` | 20.409.178 | **Wh** |
+| `1-0:16.7.0` | 514 | **W** |
+
+In kWh wären das 11 Millionen kWh, in kW 514 kW — beides für einen Haushalt
+unmöglich. Die Größenordnung entscheidet eindeutig; ein Datenblatt liegt
+nicht vor, und dieser Vorbehalt bleibt stehen.
+
+**Was nicht gemessen ist, bleibt leer.** Gemessen wurde **ein** Zähler an
+**einer** Anlage. Von diesen drei Kanälen wird nicht auf die übrigen 61
+Felder geschlossen — dort steht weiterhin nichts, und die Vorlage trägt dort
+weiterhin keine Einheit. Wer einen anderen Zähler hat, misst mit `--roh`
+nach.
+
+Die beiden abgeleiteten Leistungen (`1.99.0`, `2.99.0`) bekommen **W** aus
+einem anderen Grund: `fetch_vzlogger.pl` bildet sie unmittelbar aus
+`16.7.0`. Das ist kein Schluss über den Zähler, sondern eine Ablesung am
+eigenen Code — der Katalog führt die Herkunft jetzt als `quelle_vz`
+(`zaehler` oder `code`).
+
+### Mit der Einheit kommen die Grenzen — und beinahe eine Falle
+
+Mit belegter Einheit gälten wieder die Grenzen des Katalogs. Die stehen
+aber für die **umgerechnete** Einheit des klassischen Weges: ein
+Zählerstand von 11.088.277 Wh sprengt `MaxVal=1000000` (kWh) um den Faktor
+elf. Loxone hätte ihn gekappt, der Eingang wäre stehengeblieben — und hätte
+ausgesehen wie ein ruhiger Zähler.
+
+`sm_einheit_fuer()` rechnet Grenzen **und** Nachkommastellen deshalb mit um,
+wenn sich die Einheiten nur um das k unterscheiden: mal 1000 bei den
+Grenzen, drei Stellen weniger hinter dem Komma. Das ist dieselbe
+Umrechnung, die `bin/sml_parser.php` auf dem klassischen Weg in die andere
+Richtung macht.
+
+    bis 2.7.2   Unit=""              Min=0   Max=1000000000
+    ab  2.8.0   Unit="<v.0> Wh"      Min=0   Max=1000000000
+                Unit="<v.0> W"       Min=-100000000  Max=100000000
+
+Der klassische Weg bleibt unberührt: dort wird umgerechnet, dort gelten kWh
+und die Grenzen des Katalogs.
+
+### Die Kostenrechnung
+
+`bin/sm_kosten.php` verbindet, was seit 2.6.0 und 2.7.0 vorliegt: die
+**Menge** je Stunde aus `historie.csv` und den **Preis** je Stunde vom
+örtlichen Spotpreis-Plugin.
+
+Genommen wird der **Endpreis** (`ct`), nicht der Börsenpreis (`boerse`).
+Aus 8,00 ct Börse werden dort 26,01 ct Endpreis — wer den falschen nimmt,
+bekommt eine Zahl, die um den Faktor drei danebenliegt und trotzdem
+plausibel aussieht. Der Prüfstand liefert beide absichtlich weit
+auseinander und misst gegen den falschen mit.
+
+    <praefix>/kosten/stunde_ct    die letzte VOLLE Stunde
+    <praefix>/kosten/heute_ct     heute bisher, in ct
+    <praefix>/kosten/heute_eur    dasselbe in Euro
+    <praefix>/kosten/heute_kwh    heute bisher verbraucht
+    <praefix>/kosten/stunden      wieviele Stunden gerechnet wurden
+    <praefix>/kosten/offen        Stunden ohne belegte Einheit
+    <praefix>/kosten/ohne_preis   Stunden ohne Preis
+
+`-1` heißt „unbekannt“. Eine 0 wäre eine Aussage — sie hieße, es habe
+nichts gekostet.
+
+**Nur heute.** Das Spotpreis-Plugin liefert Stundenpreise für heute und
+morgen; eine Preishistorie über zurückliegende Tage in **Stunden** führt es
+nicht (seine `history.csv` hält Tageswerte). Was der Dienstag gekostet hat,
+lässt sich damit nicht nachrechnen — und eine Zahl aus dem Tagesmittel
+hieße „Kosten“ und wäre keine. Wer es braucht, müsste die Stundenpreise
+mitschreiben; das gehört ins Spotpreis-Plugin, denn dort entstehen sie.
+
+Stunden ohne belegte Einheit und Stunden ohne Preis werden **übergangen und
+gezählt**, nicht mit dem Mittel gefüllt.
+
+### Eine Meldung, die acht Fassungen lang mitlief
+
+`fetch_vzlogger.pl` gab am Gerät bei **jedem** Lauf aus:
+
+    Prototype mismatch: sub main::decode_json ($) vs none
+    at /usr/lib/.../Exporter.pm line 63.
+
+`LoxBerry::JSON` lädt selbst `JSON.pm`, das `decode_json` mit dem Prototyp
+`($)` exportiert; `JSON::PP` exportiert dasselbe ohne. Der zweite Import
+lässt Exporter melden — im Cron-Lauf also ins Systemprotokoll, bei
+`--themen` und `--roh` mitten in die Antwort.
+
+Der genaue Weg, an der Anlage gelesen: `LoxBerry/JSON.pm` hat in **Zeile 2**
+ein `use JSON;`, während `package LoxBerry::JSON;` erst in Zeile 6 kommt —
+zum Zeitpunkt des Imports ist das laufende Paket also noch `main`, und
+`JSON.pm` (gemessen: 4.10) setzt beide Namen mit `($)` unmittelbar beim
+Aufrufer. Jetzt ohne Import, die drei Aufrufe voll qualifiziert — in vier
+Zeilen isoliert nachgestellt und beidseitig geeicht (alt meldet, neu nicht,
+`decode_json` arbeitet weiter).
+
+**Warum es acht Fassungen lang durchging, ist mit behoben.** Die
+Perl-Attrappe war an dieser Stelle nachsichtiger als das Original: sie
+bildete weder das `use JSON;` an seiner entscheidenden Stelle nach noch die
+Prototypen. Beides ist nachgetragen, und `freigabe_pruefen.py` ruft seit dem
+07.09.2026 selbst `perl -c` (Prüfung *Perl-Syntax*) — dabei wird die
+**Ausgabe** gelesen, denn `perl -c` endet mit 0, obwohl es warnt. Über den
+ganzen Bestand gemessen: vorher meldete keine Datei, nachher sieben, und
+alle sieben sind die älteren Ordner dieser Linie; am Übersetzen änderte sich
+in keiner einzigen Datei etwas.
+
+### Was ausdrücklich NICHT gemessen ist
+
+* **Ein Zähler, eine Anlage.** Die Einheiten gelten für diesen SML-Zähler.
+* **Kein Spotpreis-Plugin im Zusammenspiel.** Die Preise kommen im
+  Prüfstand aus einer festen Datei; dass der echte Endpunkt sie unter
+  `heute.hours[h].ct` führt, ist an `spot.php` abgelesen.
+* **Die Zeitzone.** `sm_kosten.php` rechnet mit `date('G')` und
+  `strtotime('today')`. Wer sie auf einem LoxBerry falsch stellt, bekommt
+  die Kosten der falschen Stunden — ohne Fehlermeldung. Im Prüfstand ist
+  genau das einmal passiert.
+* **Kein MQTT-Gateway.** Im Prüfstand ist das Senden abgeschaltet.
+
+## Fassung 2.7.2 — das Aufräumen stand an einer Stelle, an der es nicht wirken kann
+
+2.7.1 hat die Cron-Aufträge richtig von `cron/crontab` auf die Ordner
+`cron.01min` und `cron.05min` umgestellt. Der Schritt, der die **alte**
+`system/cron/cron.d/<Name>` entfernt, stand dort in `postupgrade.sh` — mit
+dem ausdrücklichen Vermerk, ob das gelingt, sei „von hier aus NICHT
+gemessen“.
+
+Jetzt ist es gemessen, am 07.09.2026 an der laufenden Anlage:
+
+| Was | Gemessen |
+|---|---|
+| Aufruf von `postupgrade` | `sudo -n -u loxberry "$script" …` (plugininstall.pl) |
+| Ordner `system/cron/cron.d` | `drwxrwxr-x root root` |
+| Gruppen von `loxberry` | `loxberry adm tty dialout audio www-data video i2c gpio docker` — **nicht** root |
+| `sudo -u loxberry touch …/cron.d/.probe` | **Permission denied**, rc=1 |
+
+Wer im **Verzeichnis** nicht schreiben darf, kann darin auch nichts löschen —
+das hängt am Verzeichnis, nicht an der Datei. Der Versuch wäre also auf jeder
+Anlage in den WARNING-Zweig gelaufen, und die Aufträge blieben doppelt.
+
+Er steht jetzt in `postroot.sh`. Das läuft als root (plugininstall.pl ruft es
+**ohne** sudo-Präfix auf) und danach — die Reihenfolge ist Cron kopieren,
+`postinstall`, `postupgrade`, `postroot`.
+
+**Und er steht dort ganz oben.** Der erste Anlauf hängte den Block ans
+Dateiende — hinter zwei `exit 0`. Er wäre nie gelaufen; gefunden hat es erst
+das Nachzählen der Zeilennummern. Jetzt steht er vor jedem Ausstieg und ist
+von vzlogger unabhängig, denn das ist er auch.
+
+Der Dateiname ist der Plugin-**Name** (`$2`), nicht der Ordner (`$3`). Auf
+dieser Anlage sind beide `smartmeter-classic`; das muss nicht so bleiben.
+
+### Was am Gerät sonst auffiel
+
+`data/plugins/smartmeter-classic/` war **leer**, obwohl 2.7.0 seit dem
+05.09.2026 installiert ist und `sm_historie.php` daneben liegt. Die
+Verbrauchshistorie aus 2.6.0 hat auf dieser Anlage nie einen Wert
+geschrieben — die installierte `cron.d/smartmeter-classic` stammt vom
+31.07.2026 und kennt nur `fetch_vzlogger.pl`. Der Punkt aus 2.7.1 war auf
+dieser Anlage also **nicht latent, sondern akut**.
+
 ## Fassung 2.7.1 — die Cron-Aufträge erreichen bestehende Anlagen wieder
 
 **Der wichtigste Punkt betrifft nur den Aktualisierungsfall**, also den

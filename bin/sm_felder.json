@@ -31,13 +31,14 @@
     "Consumption_CalculatedPower_OBIS_1.99.0": {
       "typ": "zahl",
       "einheit": "kW",
-      "einheit_vz": "",
+      "einheit_vz": "W",
       "nk": 4,
       "min": 0,
       "max": 100000,
       "signed": false,
       "bed": "FELD.BEZUG_RECHNERISCH",
-      "quelle": "bestand"
+      "quelle": "bestand",
+      "quelle_vz": "code"
     },
     "Consumption_Power_L1_OBIS_21.7.0": {
       "typ": "zahl",
@@ -317,13 +318,14 @@
     "Consumption_Total_OBIS_1.8.0": {
       "typ": "zahl",
       "einheit": "kWh",
-      "einheit_vz": "",
+      "einheit_vz": "Wh",
       "nk": 3,
       "min": 0,
       "max": 1000000,
       "signed": false,
       "bed": "FELD.BEZUG_GESAMT",
-      "quelle": "bestand"
+      "quelle": "bestand",
+      "quelle_vz": "zaehler"
     },
     "Consumption_Total_OBIS_6.8.0": {
       "typ": "zahl",
@@ -339,13 +341,14 @@
     "Delivery_CalculatedPower_OBIS_2.99.0": {
       "typ": "zahl",
       "einheit": "kW",
-      "einheit_vz": "",
+      "einheit_vz": "W",
       "nk": 4,
       "min": 0,
       "max": 100000,
       "signed": false,
       "bed": "FELD.EINSP_RECHNERISCH",
-      "quelle": "bestand"
+      "quelle": "bestand",
+      "quelle_vz": "code"
     },
     "Delivery_Consumption_OBIS_C.5.0": {
       "typ": "zahl",
@@ -471,13 +474,14 @@
     "Delivery_Total_OBIS_2.8.0": {
       "typ": "zahl",
       "einheit": "kWh",
-      "einheit_vz": "",
+      "einheit_vz": "Wh",
       "nk": 3,
       "min": 0,
       "max": 1000000,
       "signed": false,
       "bed": "FELD.EINSP_GESAMT",
-      "quelle": "bestand"
+      "quelle": "bestand",
+      "quelle_vz": "zaehler"
     },
     "Equipment_Identifier_96.1.1": {
       "typ": "text",
@@ -713,13 +717,14 @@
     "Total_Power_OBIS_16.7.0": {
       "typ": "zahl",
       "einheit": "kW",
-      "einheit_vz": "",
+      "einheit_vz": "W",
       "nk": 3,
       "min": -100000,
       "max": 100000,
       "signed": true,
       "bed": "FELD.WIRKLEISTUNG",
-      "quelle": "bestand"
+      "quelle": "bestand",
+      "quelle_vz": "zaehler"
     },
     "Version_Information_96.1.4": {
       "typ": "zahl",

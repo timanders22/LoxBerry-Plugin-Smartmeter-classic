@@ -1353,6 +1353,33 @@ function sm_abgleich_stand()
                              'grund' => '', 'da' => true), $d);
 }
 
+/**
+ * Der zuletzt gerechnete Kostenstand aus data/plugins/<ordner>/kosten.json.
+ *
+ * Wie bei sm_abgleich_stand(): "da" sagt, ob bin/sm_kosten.php ueberhaupt
+ * schon gelaufen ist. Ein fehlender Wert bleibt fehlend - die Oberflaeche
+ * zeigt dann einen Strich, keine Null. Eine Null hiesse, es habe nichts
+ * gekostet.
+ */
+function sm_kosten_stand()
+{
+    $p = sm_paths();
+    $datei = $p['datadir'] . '/kosten.json';
+    clearstatcache(true, $datei);
+    $leer = array('ts' => 0, 'quelle_ok' => 0, 'grund' => '', 'da' => false);
+    if (!is_readable($datei)) {
+        return $leer;
+    }
+    $d = json_decode((string) @file_get_contents($datei), true);
+    if (!is_array($d)) {
+        $leer['da'] = true;
+        $leer['grund'] = 'UNLESBAR';
+        return $leer;
+    }
+    $leer['da'] = true;
+    return array_merge($leer, $d);
+}
+
 /* ==================================================================
  * Loxone-Vorlagen
  * ================================================================== */
@@ -1366,7 +1393,10 @@ function sm_abgleich_stand()
  * sm_einheit_fuer().
  *
  * Die beiden abgeleiteten Leistungen stehen NICHT hier: sie werden aus
- * 16.7.0 gerechnet und tragen deshalb dieselbe - ungemessene - Einheit.
+ * 16.7.0 gerechnet und tragen deshalb dessen Einheit. Seit 2.8.0 ist die
+ * am Zaehler gemessen (W), und der Katalog fuehrt sie mit quelle_vz
+ * "code" - die Angabe ist am eigenen Quelltext abgelesen, nicht am
+ * Zaehler.
  */
 function sm_vz_eigene()
 {
@@ -1411,13 +1441,27 @@ function sm_vz_felder($cfg)
  * nackte Zahl als eine falsche Einheit, und lieber ein weiter Bereich als
  * ein gekappter Wert.
  *
- * Rueckgabe: array(Einheit, MinVal, MaxVal).
+ * SEIT 2.8.0 IST einheit_vz FUER FUENF FELDER BELEGT (am Zaehler
+ * gemessen, siehe Werkzeuge/sm_felder_erzeugen.py). Damit kommt die
+ * Einheit zurueck in die Vorlage - und mit ihr eine Falle: die Grenzen im
+ * Katalog gelten fuer die UMGERECHNETE Einheit des klassischen Weges. Ein
+ * Zaehlerstand von 11.088.277 Wh sprengt MaxVal=1000000 (kWh) um den
+ * Faktor elf, und Loxone kappt ihn - der Eingang bliebe stehen und saehe
+ * aus wie ein ruhiger Zaehler.
+ *
+ * Deshalb werden Grenzen UND Nachkommastellen mit umgerechnet, wenn sich
+ * die beiden Einheiten nur um das k unterscheiden (kWh->Wh, kW->W): mal
+ * 1000 bei den Grenzen, drei Stellen weniger hinter dem Komma. Das ist
+ * genau die Umrechnung, die bin/sml_parser.php auf dem klassischen Weg in
+ * die andere Richtung macht - keine neue Annahme, sondern dieselbe Regel.
+ *
+ * Rueckgabe: array(Einheit, MinVal, MaxVal, Nachkommastellen).
  */
 function sm_einheit_fuer($md, $weg, $feld = '')
 {
     // Ohne Katalogeintrag wird nichts erfunden - weder Einheit noch Grenzen.
     if (!$md) {
-        return array('', -1000000000, 1000000000);
+        return array('', -1000000000, 1000000000, 0);
     }
     // Unsicher ist nur, was der ZAEHLER liefert. Die Zeitstempel bildet
     // das Plugin selbst (time() und die Loxone-Epoche) - dort ist die
@@ -1425,7 +1469,24 @@ function sm_einheit_fuer($md, $weg, $feld = '')
     // wegzunehmen waere kein Vorbehalt, sondern ein Verlust.
     if ($weg === 'vz' && !in_array($feld, sm_vz_eigene(), true)) {
         $eh = isset($md['einheit_vz']) ? (string) $md['einheit_vz'] : '';
-        if ($eh === '') {
+        if ($eh !== '') {
+            /* Belegt. Unterscheiden sich die Einheiten nur um das k, wird
+             * mit umgerechnet - sonst gelten die Grenzen des Katalogs
+             * unveraendert (dann ist die vz-Einheit dieselbe wie die des
+             * klassischen Weges, und es gibt nichts umzurechnen). */
+            $faktor = 1;
+            $kat_eh = (string) $md['einheit'];
+            if ($kat_eh === 'k' . $eh) {
+                $faktor = 1000;
+            }
+            $nk = (int) $md['nk'];
+            if ($faktor > 1) {
+                $nk = max(0, $nk - 3);
+            }
+            return array($eh, (int) $md['min'] * $faktor,
+                         (int) $md['max'] * $faktor, $nk);
+        }
+        {
             // Ungemessen: keine Einheit, und eine Obergrenze, die auch
             // eine rohe Wh-Zahl traegt. Die Grenzen im Katalog gelten
             // fuer die UMGERECHNETE Einheit des klassischen Weges.
@@ -1434,12 +1495,11 @@ function sm_einheit_fuer($md, $weg, $feld = '')
             // werden kann, ist eine Eigenschaft der Groesse und keine
             // der Einheit. Ein Zaehlerstand wird nicht negativ, nur weil
             // niemand weiss, ob er in Wh oder kWh kommt.
-            return array('', $md['signed'] ? -1000000000 : 0, 1000000000);
+            return array('', $md['signed'] ? -1000000000 : 0, 1000000000, 0);
         }
-        // Steht sie da, ist sie gemessen - dann gelten auch ihre Grenzen.
-        return array($eh, (int) $md['min'], (int) $md['max']);
     }
-    return array((string) $md['einheit'], (int) $md['min'], (int) $md['max']);
+    return array((string) $md['einheit'], (int) $md['min'], (int) $md['max'],
+                 (int) $md['nk']);
 }
 
 /**
@@ -1471,10 +1531,12 @@ function sm_xml_virtual_in($titel, $kommentar, $eintraege, $weg = 'legacy')
     foreach ($eintraege as $e) {
         list($t, $feld) = $e;
         $md = sm_feld($feld);
-        list($sm_eh, $sm_min, $sm_max) = sm_einheit_fuer($md, $weg, $feld);
+        list($sm_eh, $sm_min, $sm_max, $sm_nk) = sm_einheit_fuer($md, $weg, $feld);
         // Ein Feld, das der Katalog nicht kennt, bekommt keine erfundene
         // Einheit und keine erfundenen Grenzen.
-        $einheit = ($sm_eh !== '') ? '<v.' . (int) $md['nk'] . '> ' . $sm_eh : '';
+        // $sm_nk, nicht $md['nk']: bei Wh statt kWh sind drei Stellen
+        // hinter dem Komma drei Stellen zuviel.
+        $einheit = ($sm_eh !== '') ? '<v.' . (int) $sm_nk . '> ' . $sm_eh : '';
         $min  = $sm_min;
         $max  = $sm_max;
         /* Ohne Katalogeintrag vorzeichenbehaftet: sm_obis_feld() bildet

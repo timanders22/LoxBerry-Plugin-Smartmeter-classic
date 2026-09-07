@@ -96,37 +96,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Die alte cron.d-Datei entfernen - SONST LAEUFT ALLES DOPPELT.
+# DIE ALTE cron.d-DATEI WIRD HIER NICHT MEHR ENTFERNT - sie kann es nicht.
 #
-# Bis 2.7.0 lieferte diese Linie ihre Auftraege als cron/crontab aus. Der
-# Installateur legt daraus system/cron/cron.d/<name> an und entfernt diese
-# Datei ausschliesslich beim DEINSTALLIEREN (plugininstall.pl:1571, Kommentar
-# dort: "only on uninstall"). Seit 2.7.1 kommen dieselben Auftraege aus
-# cron/cron.01min und cron/cron.05min. Ohne diesen Schritt liefen auf jeder
-# bestehenden Anlage nach dem Upgrade BEIDE Wege - der Leser also zweimal je
-# Minute.
+# In 2.7.1 stand der Versuch an dieser Stelle. Am 07.09.2026 an der laufenden
+# Anlage nachgemessen, und er kann dort nicht gelingen:
 #
-# Die Datei gehoert root (plugininstall.pl:997 setzt Eigentuemer root), dieses
-# Skript laeuft als loxberry. Ob das Loeschen gelingt, haengt an den Rechten
-# des Ordners system/cron/cron.d und ist von hier aus NICHT gemessen. Deshalb
-# wird die Wirkung geprueft und im Fehlerfall die Anweisung ausgegeben - eine
-# Erfolgsmeldung ohne Nachsehen waere hier das Schlimmste, denn niemand
-# bemerkt doppelt laufende Cron-Auftraege von selbst.
-ALT_CRON="$ARGV5/system/cron/cron.d/smartmeter-classic"
-if [ -e "$ALT_CRON" ]; then
-	echo "<INFO> Entferne die alte cron.d-Datei aus der Zeit vor 2.7.1: $ALT_CRON"
-	rm -f "$ALT_CRON" 2>/dev/null
-	if [ -e "$ALT_CRON" ]; then
-		echo "<WARNING> Die alte cron.d-Datei liess sich NICHT entfernen."
-		echo "<WARNING> Bis das geschehen ist, laufen die Auftraege DOPPELT."
-		echo "<WARNING> Bitte einmal von Hand ausfuehren:"
-		echo "<WARNING>   sudo rm -f $ALT_CRON"
-	else
-		echo "<OK> Alte cron.d-Datei entfernt; die Auftraege laufen jetzt einfach."
-	fi
-else
-	echo "<INFO> Keine alte cron.d-Datei vorhanden - nichts zu entfernen."
-fi
+#   plugininstall.pl ruft postupgrade mit "sudo -n -u loxberry" auf
+#   /opt/loxberry/system/cron/cron.d ist drwxrwxr-x root root
+#   loxberry ist NICHT in der Gruppe root (id loxberry)
+#   sudo -u loxberry touch .../cron.d/.probe  ->  Permission denied, rc=1
+#
+# Wer im Verzeichnis nicht schreiben darf, kann darin auch nichts loeschen -
+# das haengt am VERZEICHNIS, nicht an der Datei. Der Versuch waere also
+# jedesmal in den WARNING-Zweig gelaufen, und die Auftraege blieben doppelt.
+#
+# Er steht jetzt in postroot.sh: das laeuft als root (plugininstall.pl ruft
+# es OHNE sudo-Praefix auf) und danach - die Reihenfolge ist Cron-Kopieren,
+# postinstall, postupgrade, postroot.
+# ---------------------------------------------------------------------------
 
 # Der Arbeitsordner des Installers wird von LoxBerry selbst aufgeraeumt.
 # Nur der Rueckfallweg unter /tmp gehoert uns.

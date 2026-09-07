@@ -36,7 +36,22 @@
 use LoxBerry::System;
 use LoxBerry::JSON;
 use IO::Socket;
-use JSON::PP qw(decode_json);
+# JSON::PP OHNE Import - und die Aufrufe voll qualifiziert.
+#
+# LoxBerry::JSON (eine Zeile hoeher eingebunden) macht selbst "use JSON;",
+# und JSON.pm exportiert decode_json mit dem Prototyp ($). JSON::PP
+# exportiert dasselbe ohne Prototyp. Der zweite Import laesst Exporter bei
+# JEDEM Lauf melden:
+#
+#     Prototype mismatch: sub main::decode_json ($) vs none
+#     at /usr/lib/.../Exporter.pm line 63.
+#
+# Am 07.09.2026 an der Anlage gemessen und in vier Zeilen isoliert
+# nachgestellt. Die Meldung geht auf die Standardfehlerausgabe - im
+# Cron-Lauf also ins Systemprotokoll, bei --themen und --roh mitten in die
+# Antwort. Die Perl-Attrappe zeigt sie nicht: sie bildet LoxBerry::JSON
+# nach, ohne JSON.pm zu laden.
+use JSON::PP ();
 use warnings;
 use strict;
 
@@ -86,7 +101,7 @@ my %OBIS;
 if ( -e $felderdatei ) {
 	my $roh = "";
 	if ( open(my $f, "<", $felderdatei) ) { local $/; $roh = <$f>; close($f); }
-	my $d = eval { decode_json($roh) };
+	my $d = eval { JSON::PP::decode_json($roh) };
 	if ( $d && $d->{obis} ) { %OBIS = %{$d->{obis}}; }
 }
 if ( !%OBIS ) {
@@ -162,7 +177,7 @@ if ( $nur_roh ) {
 		print STDERR "Laeuft vzlogger? Der Reiter vzLogger zeigt den Zustand.\n";
 		exit 3;
 	}
-	my $d = eval { decode_json($roh) };
+	my $d = eval { JSON::PP::decode_json($roh) };
 	if ( !$d || !$d->{data} ) {
 		print STDERR "Die Antwort auf Port $port ist kein brauchbares JSON.\n";
 		exit 3;
@@ -291,7 +306,7 @@ if ( !$raw ) {
 	exit 0;
 }
 
-my $data = eval { decode_json($raw) };
+my $data = eval { JSON::PP::decode_json($raw) };
 if ( !$data || !$data->{data} ) {
 	&LOG("Invalid JSON from vzlogger HTTP API.", "WARN");
 	&ZAEHLER_WEITER();
