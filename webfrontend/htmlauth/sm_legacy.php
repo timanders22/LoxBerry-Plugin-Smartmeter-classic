@@ -238,12 +238,15 @@ function sm_cron_ordner()
  * und "cron.5min" ohne fuehrende Null. Diese Ordner gibt es nicht. Wer von
  * 1, 3 oder 5 Minuten auf 10 wechselte, behielt die alte Verknuepfung: der
  * Zaehler wurde danach doppelt abgefragt.
+ *
+ * "Alle" heisst seit 2.8.2: alle EIGENEN Verknuepfungen des klassischen
+ * Lesers (sm_cron_verweise()), nicht mehr alles, was den Namen des Plugins
+ * traegt - siehe sm_cron_verweisname().
  */
 /**
- * Der Name der Cron-Verknuepfung - aus EINER Stelle und geprueft.
+ * Der Name des Plugins in den Cron-Ordnern - aus EINER Stelle und geprueft.
  *
- * Er geht in unlink() und symlink() und traegt die Schleife, die JEDE
- * Verknuepfung dieses Namens aus allen cron.*-Ordnern raeumt. Ein
+ * Aus ihm entsteht der Name der Verknuepfung (sm_cron_verweisname()). Ein
  * "../"-Anteil aus einer von Hand bearbeiteten smartmeter.cfg trueg sie
  * aus system/cron/ heraus. Aus dem Web ist das nicht erreichbar -
  * SCRIPTNAME steht in sm_sichern_tabu() -, aber der Kommentar zum
@@ -267,21 +270,102 @@ function sm_scriptname()
     return $name;
 }
 
+/**
+ * Der Name der Verknuepfung des klassischen Lesers: <SCRIPTNAME>-legacy.
+ *
+ * BERICHTIGT MIT 2.8.2. Bis dahin hiess die Verknuepfung wie das Plugin
+ * selbst. SCRIPTNAME steht ab Werk auf REPLACEBYNAME, und postinstall.sh
+ * ersetzt das durch $2 - den Plugin-NAMEN. Unter genau diesem Namen legt
+ * der Installateur die Cron-Dateien des Plugins ab (plugininstall.pl :990:
+ * cron/cron.01min und cron/cron.05min nach system/cron/<cron.X>/<NAME>).
+ * Gemessen am 17.09.2026 in WSL (Pruefung-Smartmeter-classic-2.8.2,
+ * messe_cron_kollision.sh):
+ *
+ *   - Jedes Speichern im Reiter Legacy - ob Leser an oder aus - loeschte
+ *     beide Dateien. vzLogger-Abholung, Verbrauchshistorie, Fahrplan-Abgleich
+ *     und Kostenrechnung liefen danach nicht mehr, bis zum naechsten Update.
+ *   - Jedes Update raeumte die Verknuepfung ab (:1554 loescht
+ *     system/cron/<cron.X>/<NAME>), und niemand legte sie wieder an.
+ *   - Die Zeile "Cron-Eintrag" im Reiter Test hielt die Dateien des
+ *     Installateurs fuer Verknuepfungen des Lesers und zeigte nach jeder
+ *     Installation ein Kreuz.
+ *
+ * Mit eigenem Namen trifft der Installateur die Verknuepfung nicht mehr;
+ * postupgrade.sh stellt sie nach einem Update wieder her, wenn sie vorher
+ * lag, und uninstall raeumt sie ab.
+ */
+function sm_cron_verweisname()
+{
+    return sm_scriptname() . '-legacy';
+}
+
+/**
+ * Ist $pfad eine Verknuepfung des klassischen Lesers DIESES Plugins?
+ *
+ * Nur eine Verknuepfung, nie eine Datei. Und nur, wenn sie auf fetch.php
+ * oder reboot_cron_runner.sh im eigenen bin-Ordner zeigt - gleich unter
+ * welchem Namen. Damit wandert eine Verknuepfung unter dem alten Namen
+ * beim naechsten Speichern mit, und eine Datei des Installateurs oder ein
+ * fremder Eintrag wird nie angefasst.
+ */
+function sm_cron_ist_eigener_verweis($pfad)
+{
+    if (!is_link($pfad)) {
+        return false;
+    }
+    $ziel = (string) @readlink($pfad);
+    $p = sm_paths();
+    return in_array(basename($ziel), array('fetch.php', 'reboot_cron_runner.sh'), true)
+        && basename(dirname($ziel)) === $p['plugin']
+        && basename(dirname(dirname($ziel))) === 'plugins'
+        && basename(dirname(dirname(dirname($ziel)))) === 'bin';
+}
+
+/**
+ * Alle eigenen Verknuepfungen in den Takt-Ordnern.
+ * Rueckgabe: Liste von array(ordner, pfad), in der Reihenfolge von
+ * sm_cron_ordner().
+ */
+function sm_cron_verweise()
+{
+    $p = sm_paths();
+    $basis = $p['home'] . '/system/cron/';
+    $liste = array();
+    foreach (sm_cron_ordner() as $ordner) {
+        // Erst nachsehen: ein fehlender Ordner ist kein Fehler, und scandir()
+        // meldet ihn trotz @ an einen eingehaengten Fehlerbehandler.
+        if (!is_dir($basis . $ordner)) {
+            continue;
+        }
+        $namen = @scandir($basis . $ordner);
+        if (!is_array($namen)) {
+            continue;
+        }
+        foreach ($namen as $n) {
+            if ($n === '.' || $n === '..') {
+                continue;
+            }
+            if (sm_cron_ist_eigener_verweis($basis . $ordner . '/' . $n)) {
+                $liste[] = array($ordner, $basis . $ordner . '/' . $n);
+            }
+        }
+    }
+    return $liste;
+}
+
 function sm_cron_setzen($lesen, $takt)
 {
     $p = sm_paths();
-    $name = sm_scriptname();
+    $name = sm_cron_verweisname();
     $basis = $p['home'] . '/system/cron/';
 
-    // 1. Tabula rasa
-    foreach (sm_cron_ordner() as $ordner) {
-        $ziel = $basis . $ordner . '/' . $name;
-        if (is_link($ziel) || file_exists($ziel)) {
-            @unlink($ziel);
-        }
+    // 1. Tabula rasa - ueber die eigenen Verknuepfungen, nie ueber die
+    //    Cron-Dateien des Plugins, die unter dem Plugin-Namen liegen.
+    foreach (sm_cron_verweise() as $v) {
+        @unlink($v[1]);
     }
     if (!$lesen) {
-        sm_log('Klassischer Leser abgeschaltet, Cron-Eintraege entfernt.');
+        sm_log('Klassischer Leser abgeschaltet, seine Cron-Verknuepfungen entfernt.');
         return array(true, sm_t('CRON.ABGESCHALTET'));
     }
 
@@ -316,16 +400,17 @@ function sm_cron_setzen($lesen, $takt)
 /** Wo liegt derzeit eine Verknuepfung? Liefert den Takt oder ''. */
 function sm_cron_ist()
 {
-    $p = sm_paths();
-    // Gegenstueck zu sm_cron_setzen(): derselbe Rueckfall, sonst suchte das
-    // Lesen an einer anderen Stelle als das Schreiben.
-    $name = sm_scriptname();
-    $basis = $p['home'] . '/system/cron/';
+    // Gegenstueck zu sm_cron_setzen(): dieselbe Erkennung der eigenen
+    // Verknuepfungen, sonst suchte das Lesen an einer anderen Stelle als das
+    // Schreiben.
+    $ordner_da = array();
+    foreach (sm_cron_verweise() as $v) {
+        $ordner_da[$v[0]] = true;
+    }
     foreach (sm_takte() as $wert => $t) {
         $ordner = ($wert === 'M') ? 'cron.reboot' : $t[0];
         if ($ordner === '') { continue; }
-        if (file_exists($basis . $ordner . '/' . $name)
-            || is_link($basis . $ordner . '/' . $name)) {
+        if (isset($ordner_da[$ordner])) {
             return $wert;
         }
     }
@@ -352,18 +437,22 @@ function sm_cron_lage()
     if ($p['home'] === '' || !is_dir($basis)) {
         return array(2, sm_t('CRON.LAGE_UNBEKANNT'));
     }
-    $name = sm_scriptname();
-
-    // Der vzLogger-Weg haengt an cron/crontab, nicht an einer Verknuepfung.
-    // Der klassische Weg haengt an genau einer Verknuepfung.
+    // Der vzLogger-Weg, die Historie, der Abgleich und die Kostenrechnung
+    // haengen an den Cron-DATEIEN des Plugins (<NAME> in cron.01min und
+    // cron.05min). Der klassische Weg haengt an genau einer eigenen
+    // Verknuepfung. Bis 2.8.2 zaehlten hier beide unter einem Namen - nach
+    // jeder Installation stand deshalb ein Kreuz.
     $gefunden = array();
+    foreach (sm_cron_verweise() as $v) {
+        $gefunden[] = $v[0];
+    }
     $verzeichnisse = array();
     foreach (sm_cron_ordner() as $ordner) {
-        $ziel = $basis . $ordner . '/' . $name;
-        if (is_dir($ziel) && !is_link($ziel)) {
-            $verzeichnisse[] = $ordner;
-        } elseif (is_link($ziel) || is_file($ziel)) {
-            $gefunden[] = $ordner;
+        foreach (array(sm_scriptname(), sm_cron_verweisname()) as $n) {
+            $ziel = $basis . $ordner . '/' . $n;
+            if (is_dir($ziel) && !is_link($ziel)) {
+                $verzeichnisse[] = $ordner . '/' . $n;
+            }
         }
     }
     if ($verzeichnisse) {

@@ -130,23 +130,150 @@ mkdir -p "$SICHERUNG/config"
 #
 # Gesichert wird deshalb NEBEN den Datenordner, nicht hinein. Dieselbe
 # Bauform wie im Spotpreis-Plugin fuer dessen history.csv.
+#
+# abgleich.json (ERGAENZT MIT 2.8.2) traegt fuer jede gerade laufende Regel
+# den Startpunkt - Zeitpunkt und Zaehlerstand beim Einschalten
+# (bin/sm_abgleich.php) - und fuer beendete Regeln das letzte Urteil. Beides
+# entsteht nicht aus Messwerten neu: ohne die Datei beginnt eine laufende
+# Beobachtung von vorn, und die Themen abgleich/<n>/soll, ist, fehlt stehen
+# auf 0 und ok auf -1. Gemessen am 17.09.2026: die Datei fehlte nach jedem
+# Upgrade (Pruefung-Smartmeter-classic-2.8.2, messe_upgrade_sicherung.sh).
+#
+# kosten.json wird NICHT gesichert: bin/sm_kosten.php rechnet sie bei
+# jedem Lauf aus historie.csv und den Preisen des Tages ganz neu. Aus der
+# alten Datei nimmt es nur dann etwas, wenn die Preisquelle nicht antwortet -
+# und dann waere ein Stand von vor dem Update keine bessere Aussage als
+# "unbekannt".
 # ===========================================================================
 HIST_QUELLE="$ARGV5/data/plugins/$ARGV3"
 HIST_SICHER="$ARGV5/data/plugins/$ARGV3.upgrade_sicherung"
-mkdir -p "$HIST_SICHER" 2>/dev/null
-chmod 0700 "$HIST_SICHER" 2>/dev/null
-HIST_N=0
-for HIST_F in historie.csv historie_merker.json; do
-	if [ -f "$HIST_QUELLE/$HIST_F" ]; then
-		if cp -p "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F" 2>/dev/null; then
-			HIST_N=$((HIST_N + 1))
-		else
-			echo "<WARNING> $HIST_F liess sich nicht sichern - die Historie geht beim Update verloren."
-		fi
+
+# ---------------------------------------------------------------------------
+# EINE LIEGENGEBLIEBENE SICHERUNG WIRD NICHT UEBERSCHRIEBEN (ERGAENZT MIT
+# 2.8.2, zweite Runde)
+#
+# postupgrade.sh raeumt diesen Ordner nur weg, wenn wirklich alles
+# zurueckgespielt wurde. Blieb er nach einem missglueckten Upgrade liegen,
+# schrieb der naechste Lauf hier den DANN vorhandenen Stand darueber - und
+# das ist nach einem missglueckten Upgrade gerade nicht der gute: im
+# Datenordner steht dann, was der Takt in der Luecke neu angelegt hat.
+# Gemessen am 17.09.2026 (Pruefung-Smartmeter-classic-2.8.2,
+# messe_nebenbefunde.sh, Fall P4a: der Merkinhalt MERKALT war nach dem Lauf
+# nirgends mehr zu finden).
+#
+# Die alte Sicherung wird deshalb mit Zeitstempel beiseite gelegt und
+# gemeldet; entfernt wird sie nie - es ist die Verbrauchshistorie des
+# Anwenders. Laesst sie sich nicht verschieben, wird in diesem Lauf gar
+# nichts gesichert: die aeltere, vollstaendigere Sicherung hat Vorrang vor
+# dem duennen Stand von jetzt, und postupgrade.sh spielt sie zurueck.
+# ---------------------------------------------------------------------------
+SM_SICH_OK=1
+if [ -d "$HIST_SICHER" ] && [ -n "$(ls -A "$HIST_SICHER" 2>/dev/null)" ]; then
+	SM_BEISEITE="$HIST_SICHER.liegengeblieben-$(date '+%Y%m%d-%H%M%S' 2>/dev/null)"
+	if [ ! -e "$SM_BEISEITE" ] && mv "$HIST_SICHER" "$SM_BEISEITE" 2>/dev/null; then
+		echo "<WARNING> Es lag noch eine Sicherung aus einem frueheren, nicht"
+		echo "<WARNING> abgeschlossenen Upgrade. Sie wird NICHT ueberschrieben,"
+		echo "<WARNING> sondern beiseite gelegt: $SM_BEISEITE"
+		echo "<WARNING> Bitte hineinsehen und den Ordner danach von Hand entfernen."
+	else
+		SM_SICH_OK=0
+		echo "<WARNING> Unter $HIST_SICHER liegt eine Sicherung aus einem frueheren,"
+		echo "<WARNING> nicht abgeschlossenen Upgrade, und sie liess sich nicht"
+		echo "<WARNING> beiseite legen. Sie wird nicht ueberschrieben; in diesem Lauf"
+		echo "<WARNING> wird nichts dazu gesichert. postupgrade.sh spielt danach den"
+		echo "<WARNING> AELTEREN Stand zurueck."
 	fi
-done
-if [ "$HIST_N" -gt 0 ]; then
-	echo "<INFO> Verbrauchshistorie gesichert ($HIST_N Datei(en)) nach $HIST_SICHER"
+fi
+
+if [ "$SM_SICH_OK" = "1" ]; then
+	mkdir -p "$HIST_SICHER" 2>/dev/null
+	chmod 0700 "$HIST_SICHER" 2>/dev/null
+	HIST_N=0
+	for HIST_F in historie.csv historie_merker.json abgleich.json; do
+		if [ -f "$HIST_QUELLE/$HIST_F" ]; then
+			if cp -p "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F" 2>/dev/null; then
+				HIST_N=$((HIST_N + 1))
+			else
+				echo "<WARNING> $HIST_F liess sich nicht sichern - die Historie geht beim Update verloren."
+			fi
+		fi
+	done
+	if [ "$HIST_N" -gt 0 ]; then
+		echo "<INFO> Verbrauchshistorie und Abgleich gesichert ($HIST_N Datei(en)) nach $HIST_SICHER"
+	fi
+fi
+
+# ===========================================================================
+# DIE VERKNUEPFUNG DES KLASSISCHEN LESERS (ERGAENZT MIT 2.8.2)
+#
+# Der Reiter Legacy legt fuer den eingestellten Takt eine Verknuepfung in
+# system/cron/<cron.X>/ an, die auf bin/fetch.php oder
+# bin/reboot_cron_runner.sh zeigt. Bis 2.8.1 hiess sie wie das Plugin - und
+# purge_installation loescht beim Upgrade in allen Takt-Ordnern genau diesen
+# Namen (plugininstall.pl :1554). Gemessen am 17.09.2026: nach jedem Upgrade
+# war der klassische Leser still, die Einstellung sagte weiter "an"
+# (Pruefung-Smartmeter-classic-2.8.2, messe_cron_kollision.sh, U1/U5).
+#
+# Hier wird nur FESTGEHALTEN, welche Verknuepfung jetzt liegt - erkannt am
+# Ziel, nicht am Namen, damit auch die unter dem alten Namen zaehlt.
+# postupgrade.sh legt genau diese unter dem neuen Namen <NAME>-legacy wieder
+# an. Was vorher nicht lag, wird danach nicht eingeschaltet.
+# ===========================================================================
+#
+# Geschrieben wird nur in eine Sicherung, die zu diesem Lauf gehoert. Liegt
+# eine aeltere fest (siehe oben, SM_SICH_OK=0), bleibt sie unangetastet -
+# auch mit dieser Zeile.
+SM_VERWEISE="$HIST_SICHER/leser_verweise"
+SM_VN=0
+if [ "$SM_SICH_OK" = "1" ] && [ -n "$ARGV3" ] && [ -n "$ARGV5" ] && [ -d "$HIST_SICHER" ]; then
+	rm -f "$SM_VERWEISE" 2>/dev/null
+	for SM_ORDNER in cron.reboot cron.01min cron.03min cron.05min cron.10min cron.15min cron.30min cron.hourly; do
+		for SM_E in "$ARGV5/system/cron/$SM_ORDNER"/*; do
+			[ -L "$SM_E" ] || continue
+			SM_ZIEL=$(readlink "$SM_E" 2>/dev/null)
+			case "$SM_ZIEL" in
+				*/bin/plugins/"$ARGV3"/fetch.php|*/bin/plugins/"$ARGV3"/reboot_cron_runner.sh)
+					echo "$SM_ORDNER ${SM_ZIEL##*/}" >> "$SM_VERWEISE"
+					SM_VN=$((SM_VN + 1))
+					;;
+			esac
+		done
+	done
+fi
+if [ "$SM_VN" -gt 0 ]; then
+	echo "<INFO> Verknuepfung des klassischen Lesers festgehalten ($SM_VN): $(tr '\n' ' ' < "$SM_VERWEISE")"
+fi
+
+# ===========================================================================
+# DER MERKER "vzlogger hat dieses Plugin installiert" (ERGAENZT MIT 2.8.2,
+# zweite Runde)
+#
+# bin/vzlogger_pkg.sh legte ihn bis 2.8.1 unter
+# config/plugins/<ordner>/vzlogger.installed-by-plugin ab - also IN dem
+# Verzeichnis, das purge_installation bei jedem Upgrade abraeumt
+# (plugininstall.pl :1629/:1631, Regeln/06). Zurueck kam er nur mit der
+# Konfigurations-Sicherung; fehlte die, war er weg, und uninstall liess
+# vzlogger und die fremde Paketquelle stehen, obwohl das Plugin sie
+# installiert hatte. Gemessen am 17.09.2026
+# (Pruefung-Smartmeter-classic-2.8.2, messe_nebenbefunde.sh, Fall P3a:
+# "Merker alte Stelle: weg ... vzlogger-Paket nach uninstall: LIEGT NOCH").
+#
+# Seit 2.8.2 liegt er als Nachbar mit Punkt NEBEN dem Datenordner. Diese
+# Zeilen holen ihn einmalig von der alten Stelle herueber - es ist das
+# einzige Fenster dafuer, denn gleich danach ist das Verzeichnis fort.
+# uninstall liest beide Stellen.
+# ===========================================================================
+SM_MERK_ALT="$ARGV5/config/plugins/$ARGV3/vzlogger.installed-by-plugin"
+SM_MERK_NEU="$ARGV5/data/plugins/$ARGV3.vzlogger-installiert"
+if [ -e "$SM_MERK_ALT" ] && [ ! -e "$SM_MERK_NEU" ]; then
+	if touch "$SM_MERK_NEU" 2>/dev/null && [ -e "$SM_MERK_NEU" ]; then
+		echo "<INFO> Merker uebernommen: vzlogger hat dieses Plugin installiert"
+		echo "<INFO> ($SM_MERK_NEU). Beim Deinstallieren wird es wieder entfernt."
+	else
+		echo "<WARNING> Der Merker, dass dieses Plugin vzlogger installiert hat,"
+		echo "<WARNING> liess sich nicht nach $SM_MERK_NEU uebernehmen."
+		echo "<WARNING> Beim Deinstallieren bliebe vzlogger dann stehen."
+	fi
 fi
 
 echo "<INFO> Backing up existing config files"
@@ -154,8 +281,21 @@ echo "<INFO> Backing up existing config files"
 # postupgrade.sh prueft danach nur, ob $SICHERUNG/config als VERZEICHNIS
 # existiert - das tut es nach dem mkdir immer. Eine gescheiterte
 # Sicherung wurde damit als geglueckte Rueckspielung gemeldet.
+#
+# ERGAENZT MIT 2.8.2, zweite Runde: der Rueckgabewert allein reicht nicht.
+# Ist der Konfigurationsordner da, aber leer, glueckt "cp -a" und meldete
+# bis dahin "<OK> Konfiguration gesichert" - gesichert war nichts. Gemessen
+# am 17.09.2026 (messe_nebenbefunde.sh, Fall P1c). Gemeldet wird jetzt, was
+# danach wirklich in der Sicherung liegt.
 if cp -a "$ARGV5/config/plugins/$ARGV3/." "$SICHERUNG/config/"; then
-	echo "<OK> Konfiguration gesichert nach $SICHERUNG/config"
+	if [ -s "$SICHERUNG/config/smartmeter.cfg" ]; then
+		echo "<OK> Konfiguration gesichert nach $SICHERUNG/config"
+	else
+		echo "<WARNING> Das Kopieren glueckte, aber in $SICHERUNG/config liegt"
+		echo "<WARNING> keine smartmeter.cfg mit Inhalt - gesichert ist nichts."
+		echo "<WARNING> Nach dem Update bitte die Einstellungen im Reiter"
+		echo "<WARNING> Smartmeter (klassisch) nachsehen."
+	fi
 else
 	echo "<WARNING> Die Konfiguration liess sich NICHT sichern."
 	echo "<WARNING> Nach dem Update bitte die Einstellungen im Reiter"

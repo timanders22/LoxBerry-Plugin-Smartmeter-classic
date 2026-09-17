@@ -970,6 +970,145 @@ Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
 * **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
   `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
 
+## Fassung 2.8.2 — ein Name für zwei Dinge in den Cron-Ordnern
+
+Gemessen in WSL, nicht am Gerät (Prüfstände `messe_cron_kollision.sh` und
+`messe_upgrade_sicherung.sh`).
+
+### Speichern im Reiter Legacy löschte die Cron-Dateien des Plugins
+
+Die Verknüpfung des klassischen Lesers hieß wie das Plugin. Unter genau
+diesem Namen legt LoxBerry auch die Cron-Dateien des Plugins ab
+(`cron.01min`: vzLogger-Abholung und Verbrauchshistorie; `cron.05min`:
+Fahrplan-Abgleich und Kostenrechnung). Jedes Speichern im Reiter Legacy —
+auch mit ausgeschaltetem Leser — und jedes Zurückspielen einer Sicherung
+räumte beide ab; bis zum nächsten Update lief davon nichts mehr. Beim
+Takt „jede Minute“ oder „alle 5 Minuten“ trat die Verknüpfung an die Stelle
+der Datei. Die Zeile „Cron-Eintrag“ im Reiter Test hielt umgekehrt die
+Dateien des Plugins für Verknüpfungen und zeigte nach jeder Installation ein
+Kreuz.
+
+Die Verknüpfung heißt jetzt `<NAME>-legacy`. Erkannt, entfernt und angezeigt
+wird nur noch, was eine Verknüpfung ist **und** auf `fetch.php` oder
+`reboot_cron_runner.sh` im eigenen `bin`-Ordner zeigt — gleich unter welchem
+Namen. Eine Verknüpfung unter dem alten Namen wandert damit beim nächsten
+Speichern mit; Dateien und fremde Einträge bleiben unberührt.
+
+### Jedes Update schaltete den klassischen Leser still ab
+
+LoxBerry löscht beim Update in allen Takt-Ordnern den Plugin-Namen, also
+auch die Verknüpfung; die Einstellung sagte danach weiter „an“.
+`preupgrade.sh` hält jetzt fest, welche Verknüpfung vorher lag, und
+`postupgrade.sh` legt genau diese unter dem neuen Namen wieder an. Lag vorher
+keine, wird auch keine angelegt — auch dann nicht, wenn die Einstellung „an“
+sagt; der Reiter Test meldet diesen Fall wie bisher. Die Deinstallation räumt
+die Verknüpfung ab.
+
+### Was sich für eine bestehende Anlage ändert
+
+* Nach dem Update auf 2.8.2 laufen die Cron-Dateien des Plugins wieder (das
+  tat jedes Update schon); neu ist, dass Speichern im Reiter Legacy sie nicht
+  mehr abräumt. Wer den klassischen Leser benutzt, bekommt damit auch die
+  Verbrauchshistorie und — soweit eingeschaltet — Abgleich und
+  Kostenrechnung dauerhaft.
+* Ein vor dem Update eingerichteter Abfragetakt steht danach als
+  `<NAME>-legacy` im selben Ordner.
+* Ein Takt, der schon bei einem früheren Update verloren ging, wird nicht
+  von selbst wieder eingerichtet: der Reiter Test zeigt dann „eingeschaltet,
+  aber kein Cron-Eintrag“, einmal Speichern setzt ihn.
+
+### Die Historie hing an der Konfigurationssicherung
+
+`postupgrade.sh` prüfte zuerst, ob die Konfiguration gesichert war, und
+endete sonst mit `exit 0` — vor der Rückholung der Verbrauchshistorie. Die
+Historie blieb dann neben dem Datenordner liegen. Sie kommt jetzt zuerst
+zurück, ohne Inhaltsprüfung.
+
+### Der Fahrplan-Abgleich verlor bei jedem Update seinen Stand
+
+`abgleich.json` trägt für laufende Regeln Startzeit und Zählerstand und für
+beendete das letzte Urteil; beides entsteht nicht neu. Die Datei wird jetzt
+mit der Historie gesichert. `kosten.json` nicht: `sm_kosten.php` rechnet sie
+bei jedem Lauf aus `historie.csv` und den Preisen des Tages ganz neu.
+
+### Eine Entwarnung, die nichts wusste
+
+Fehlte die Konfigurationssicherung, schrieb `postupgrade.sh` ins
+Installationsprotokoll: „die vorhandene `smartmeter.cfg` trägt aber eigene
+Einstellungen“ — auch dann, wenn sie Zeichen für Zeichen die Werkseinstellung
+war und Zählerprofile, Takt und Zugriffstoken verloren waren. Dahinter stand
+die Frage, ob in der Datei noch der Platzhalter `REPLACEBYSUBFOLDER` steht;
+den ersetzt aber `postinstall.sh`, und das läuft eine Stufe vorher. Die
+Antwort konnte nie „ja“ lauten, der Warnzweig war unerreichbar.
+
+Gefragt wird jetzt nach dem Inhalt. Die mitgelieferte Vorgabe liegt im
+Arbeitsordner des Installers noch unverändert daneben; ist die Datei nach
+denselben zwei Ersetzungen zeichengleich, trägt sie nichts Eigenes, und das
+Protokoll sagt es. Vier Ausgänge statt zwei: eigene Werte, Werkseinstellung,
+die Datei fehlt, und „ließ sich nicht prüfen“ — Letzteres, wenn eine ältere
+LoxBerry-Fassung den Arbeitsordner nicht mitgibt. Eine Prüfsumme steht dafür
+nirgends im Quelltext; sie würde beim nächsten Zeichen in der Vorgabedatei
+still falsch.
+
+### Der Rückfallweg unter `/tmp` blieb liegen
+
+Dieselben zwei Zweige endeten mit `exit 0` und übersprangen damit das
+Aufräumen am Dateiende. Wo LoxBerry den Arbeitsordner nicht mitgibt, sichert
+`preupgrade.sh` nach `/tmp` — und diese Kopie der Konfiguration, mit
+Zugriffstoken, blieb dann liegen. Es gibt jetzt genau einen Weg durch den
+Rest der Datei; aufgeräumt wird in jedem Fall.
+
+### Der Merker für vzlogger übersteht jetzt ein Update
+
+Das Plugin entfernt vzlogger beim Deinstallieren nur, wenn es das Paket
+selbst installiert hat. Der Merker dafür lag unter
+`config/plugins/<ordner>/vzlogger.installed-by-plugin` — in dem Verzeichnis
+also, das LoxBerry bei **jedem** Update vollständig abräumt. Zurück kam er nur
+mit der Konfigurationssicherung; fehlte die, blieben vzlogger und die fremde
+Paketquelle von volkszaehler.org beim Deinstallieren stehen, ohne dass jemand
+davon erfuhr.
+
+Er liegt jetzt als Nachbar mit Punkt neben dem Datenordner
+(`data/plugins/<ordner>.vzlogger-installiert`) und übersteht damit jedes
+Update. `preupgrade.sh` holt ihn einmalig von der alten Stelle herüber,
+`uninstall` liest beide. Und die Erfolgszeile wird nicht mehr behauptet: nach
+dem Entfernen wird `dpkg` gefragt und nach Paketquelle und Schlüsselbund
+gesehen; bleibt etwas übrig, steht das als Warnung samt den Befehlen von Hand
+im Protokoll.
+
+### Eine liegengebliebene Sicherung wird nicht mehr überschrieben
+
+`postupgrade.sh` räumt die Sicherung neben dem Datenordner nur weg, wenn
+wirklich alles zurückgespielt wurde. Blieb sie nach einem missglückten Update
+liegen, schrieb der nächste Lauf den dann vorhandenen Stand darüber — und das
+ist nach einem missglückten Update gerade nicht der gute: im Datenordner steht
+dann, was der Minutentakt in der Zwischenzeit neu angelegt hat. Die alte
+Sicherung wird jetzt mit Zeitstempel beiseite gelegt
+(`<ordner>.upgrade_sicherung.liegengeblieben-<Datum>`), im Protokoll genannt
+und nie entfernt; wer sie nicht mehr braucht, löscht sie selbst, und die
+Deinstallation nimmt sie mit. Lässt sie sich nicht verschieben, wird in diesem
+Lauf gar nichts gesichert: die ältere, vollständigere Sicherung hat Vorrang.
+
+### Zwei weitere Meldungen, die mehr sagten, als sie wussten
+
+* War der Konfigurationsordner vorhanden, aber leer, glückte das Kopieren in
+  `preupgrade.sh`, und darunter stand `<OK> Konfiguration gesichert` —
+  gesichert war nichts. Gemeldet wird jetzt, was danach wirklich in der
+  Sicherung liegt.
+* `uninstall` meldete „vzlogger und die Paketquelle sind entfernt“, ohne
+  nachzusehen; die Ausgabe von `apt-get` geht dort nach `/dev/null`. Siehe
+  oben.
+
+### Was sich für eine bestehende Anlage ändert (2. Teil)
+
+* Wer vzlogger über dieses Plugin installiert hat, bekommt den Merker beim
+  Update auf 2.8.2 an die neue Stelle übernommen. Wer nie über 2.8.2
+  aktualisiert, ist nicht schlechter gestellt: `uninstall` liest die alte
+  Stelle weiter.
+* Nichts davon ändert eine Einstellung, und nichts davon läuft im laufenden
+  Betrieb; die Änderungen liegen ausschließlich in den Hakenskripten und im
+  Deinstallationsskript.
+
 ## Fassung 2.8.0 — die Einheit ist gemessen, und damit rechnet sich der Preis
 
 ### `einheit_vz` ist belegt: Wh und W

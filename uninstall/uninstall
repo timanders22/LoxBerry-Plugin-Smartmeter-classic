@@ -9,7 +9,15 @@
 ARGV3=$3
 ARGV5=$5
 
-MARKER="$ARGV5/config/plugins/$ARGV3/vzlogger.installed-by-plugin"
+# ZWEI STELLEN, SEIT 2.8.2 (zweite Runde). Bis 2.8.1 stand der Merker allein
+# unter config/plugins/<ordner>/ - in dem Verzeichnis, das purge_installation
+# bei jedem Upgrade abraeumt (Regeln/06). Zurueck kam er nur mit der
+# Konfigurations-Sicherung; fehlte die, blieb vzlogger samt fremder
+# Paketquelle beim Deinstallieren stehen. Er liegt jetzt neben dem
+# Datenordner; die alte Stelle wird weiter gelesen, damit eine Anlage, die
+# nie ueber 2.8.2 aktualisiert wurde, nicht schlechter dasteht.
+MARKER="$ARGV5/data/plugins/$ARGV3.vzlogger-installiert"
+MARKER_ALT="$ARGV5/config/plugins/$ARGV3/vzlogger.installed-by-plugin"
 SOURCE_LIST="/etc/apt/sources.list.d/volkszaehler-volkszaehler-org-project.list"
 KEYRING="/usr/share/keyrings/volkszaehler-volkszaehler-org-project-archive-keyring.gpg"
 VZCONF="$ARGV5/config/plugins/$ARGV3/vzlogger.conf"
@@ -47,12 +55,32 @@ fi
 pkill -f -- "-c $VZCONF" >/dev/null 2>&1
 sleep 1
 
-if [ -e "$MARKER" ]; then
+if [ -e "$MARKER" ] || [ -e "$MARKER_ALT" ]; then
 	echo "<INFO> vzlogger wurde von diesem Plugin installiert - es wird entfernt."
 	DEBIAN_FRONTEND=noninteractive apt-get purge -y vzlogger >/dev/null 2>&1
 	rm -f "$SOURCE_LIST" "$KEYRING"
 	apt-get update >/dev/null 2>&1
-	echo "<INFO> vzlogger und die Paketquelle von volkszaehler.org sind entfernt."
+	# Nachgelesen statt angenommen (Regeln/06): die Ausgabe von apt-get geht
+	# nach /dev/null, und bis 2.8.1 stand die Erfolgszeile unbedingt darunter.
+	# Gemeldet wird jetzt, was dpkg und das Dateisystem sagen.
+	SM_VZ_REST=""
+	if dpkg-query -W -f='${Status}' vzlogger 2>/dev/null | grep -q "install ok installed"; then
+		SM_VZ_REST="das Paket vzlogger"
+	fi
+	if [ -e "$SOURCE_LIST" ] || [ -e "$KEYRING" ]; then
+		SM_VZ_REST="${SM_VZ_REST:+$SM_VZ_REST und }die Paketquelle"
+	fi
+	if [ -z "$SM_VZ_REST" ]; then
+		echo "<INFO> vzlogger und die Paketquelle von volkszaehler.org sind entfernt."
+	else
+		echo "<WARNING> Nach dem Entfernen liegt noch $SM_VZ_REST auf dem System."
+		echo "<WARNING> Bitte von Hand nachsehen: apt-get purge vzlogger,"
+		echo "<WARNING> $SOURCE_LIST, $KEYRING"
+	fi
+	# Der Merker selbst ueberlebt als Nachbar mit Punkt jedes Abraeumen des
+	# Installers - hier wird er weggeraeumt, sonst hielte eine spaetere
+	# Neuinstallation ein fremdes vzlogger fuer ihr eigenes.
+	rm -f "$MARKER"
 else
 	echo "<INFO> vzlogger war vor diesem Plugin vorhanden - es bleibt unangetastet."
 fi
@@ -121,13 +149,61 @@ fi
 # nicht auf alten Zaehlerwerten aufsetzt.
 # Die Sicherung der Verbrauchshistorie liegt NEBEN dem Datenordner und
 # wird deshalb nicht mit ihm abgeraeumt.
+#
+# Dazu die beiseite gelegten Sicherungen missglueckter Upgrades
+# (ERGAENZT MIT 2.8.2, zweite Runde): preupgrade.sh legt sie unter
+# <ordner>.upgrade_sicherung.liegengeblieben-<Zeitstempel> ab und entfernt
+# sie nie. Beim Deinstallieren gehen sie mit - sonst blieben sie unbegrenzt
+# liegen, ohne dass noch ein Plugin da waere, das sie erklaert.
 if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
 	rm -rf "$ARGV5/data/plugins/$ARGV3.upgrade_sicherung" 2>/dev/null
+	SM_LN=0
+	for SM_L in "$ARGV5/data/plugins/$ARGV3".upgrade_sicherung.liegengeblieben-*; do
+		[ -d "$SM_L" ] || continue
+		rm -rf "$SM_L" 2>/dev/null
+		[ -d "$SM_L" ] || SM_LN=$((SM_LN + 1))
+	done
+	if [ "$SM_LN" -gt 0 ]; then
+		echo "<INFO> $SM_LN liegengebliebene Sicherung(en) frueherer Upgrades entfernt."
+	fi
 fi
 
 # Erst pruefen, dann loeschen: ein leeres $3 traefe /dev/shm SELBST.
 if [ -n "$ARGV3" ]; then
 	rm -rf "/dev/shm/$ARGV3" 2>/dev/null
+fi
+
+# ===========================================================================
+# DIE VERKNUEPFUNG DES KLASSISCHEN LESERS (ERGAENZT MIT 2.8.2)
+#
+# Sie heisst seit 2.8.2 <NAME>-legacy. LoxBerry entfernt beim Deinstallieren
+# in den Takt-Ordnern nur den Namen <NAME> (plugininstall.pl :1554) - die
+# Verknuepfung bliebe liegen und zeigte ins Leere. Erkannt wird sie am Ziel
+# (fetch.php oder reboot_cron_runner.sh im eigenen bin-Ordner), nicht am
+# Namen; entfernt wird nur eine Verknuepfung, nie eine Datei.
+# ===========================================================================
+if [ -n "$ARGV3" ] && [ -n "$ARGV5" ] && [ -d "$ARGV5/system/cron" ]; then
+	SM_VWEG=0
+	SM_VREST=0
+	for SM_ORDNER in cron.reboot cron.01min cron.03min cron.05min cron.10min cron.15min cron.30min cron.hourly cron.daily cron.weekly cron.monthly cron.yearly; do
+		for SM_E in "$ARGV5/system/cron/$SM_ORDNER"/*; do
+			[ -L "$SM_E" ] || continue
+			case "$(readlink "$SM_E" 2>/dev/null)" in
+				*/bin/plugins/"$ARGV3"/fetch.php|*/bin/plugins/"$ARGV3"/reboot_cron_runner.sh)
+					rm -f "$SM_E"
+					if [ -L "$SM_E" ]; then
+						SM_VREST=$((SM_VREST + 1))
+						echo "<WARNING> Die Verknuepfung $SM_E liess sich nicht entfernen."
+					else
+						SM_VWEG=$((SM_VWEG + 1))
+					fi
+					;;
+			esac
+		done
+	done
+	if [ "$SM_VWEG" -gt 0 ]; then
+		echo "<INFO> $SM_VWEG Verknuepfung(en) des klassischen Lesers entfernt."
+	fi
 fi
 
 exit 0

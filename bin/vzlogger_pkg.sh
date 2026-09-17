@@ -33,7 +33,14 @@ REPO_BASE="https://dl.cloudsmith.io/public/volkszaehler/volkszaehler-org-project
 KEY_URL="$REPO_BASE/gpg.21DBDAC56DF44DA1.key"
 POLICY_FILE="/usr/sbin/policy-rc.d"
 POLICY_BACKUP="/usr/sbin/policy-rc.d.smartmeter"
-MARKER="$LBHOMEDIR/config/plugins/$PLUGINNAME/vzlogger.installed-by-plugin"
+# BERICHTIGT MIT 2.8.2, zweite Runde. Der Merker lag bis 2.8.1 unter
+# config/plugins/<ordner>/vzlogger.installed-by-plugin - in dem Verzeichnis
+# also, das purge_installation bei JEDEM Upgrade abraeumt (Regeln/06). Er kam
+# nur mit der Konfigurations-Sicherung zurueck; fehlte die, entfernte
+# uninstall vzlogger nicht mehr. Er liegt jetzt als Nachbar mit Punkt neben
+# dem Datenordner und uebersteht damit jedes Upgrade. Die Wanderung von der
+# alten Stelle nimmt preupgrade.sh einmalig mit; uninstall liest beide.
+MARKER="$LBHOMEDIR/data/plugins/$PLUGINNAME.vzlogger-installiert"
 
 installed_version()
 {
@@ -148,7 +155,13 @@ install_package()
 	if dpkg-query -W -f='${Status}' vzlogger 2>/dev/null | grep -q "install ok installed"; then
 		echo "<INFO> vzlogger war bereits installiert - es bleibt beim Deinstallieren erhalten."
 	else
-		touch "$MARKER"
+		touch "$MARKER" 2>/dev/null
+		# Nachgelesen statt angenommen: ohne Merker entfernt uninstall
+		# vzlogger spaeter NICHT, und niemand saehe hier, woran es lag.
+		if [ ! -e "$MARKER" ]; then
+			echo "<WARNING> Der Merker $MARKER liess sich nicht anlegen."
+			echo "<WARNING> Beim Deinstallieren des Plugins bliebe vzlogger stehen."
+		fi
 	fi
 
 	configure_repository
