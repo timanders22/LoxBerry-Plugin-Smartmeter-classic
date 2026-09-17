@@ -16,7 +16,7 @@
 # Er bricht ausserdem sofort ab, solange ABGLEICH.AKTIV nicht auf 1 steht -
 # ab Werk tut er also nichts.
 #
-# REPLACELBPBINDIR wird bei der Installation ersetzt.
+# Den bin-Pfad des Plugins setzt der Installer in der Zeile darunter ein.
 BIN="REPLACELBPBINDIR"
 
 if [ ! -x "$BIN/sm_abgleich.php" ]; then

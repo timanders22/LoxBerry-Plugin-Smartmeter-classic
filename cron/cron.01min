@@ -34,7 +34,7 @@
 # FEHLERausgabe aber ins Systemprotokoll. Dieselbe Bauart wie bei
 # BatterieBMS und Abfahrts-Assistent.
 #
-# REPLACELBPBINDIR wird bei der Installation ersetzt (plugininstall.pl:1854).
+# Den bin-Pfad des Plugins setzt der Installer in der Zeile darunter ein (plugininstall.pl:1854).
 BIN="REPLACELBPBINDIR"
 
 if [ ! -d "$BIN" ]; then
