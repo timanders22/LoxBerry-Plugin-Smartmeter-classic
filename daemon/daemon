@@ -8,14 +8,114 @@ echo "# LoxBerry Smartmeter classic - DO NOT EDIT BY HAND!
 # (wortgleich mit postroot.sh - beide schreiben dieselbe Datei)
 # Frueherer Kopf: LoxBerry SML-eMon Plugin device rule file - DO NOT EDIT BY HAND!" >/etc/udev/rules.d/99-smartmeter.rules
 echo "KERNEL==\"ttyUSB[0-9]*\",GROUP=\"loxberry\",MODE=\"0666\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\"" >>/etc/udev/rules.d/99-smartmeter.rules
-echo "`date` - New UDEV-Rule for I/R heads created. " >>$logfile
-echo "`date` - Reload rules... " >>$logfile
-udevadm control --reload-rules >>$logfile && udevadm trigger >>$logfile
+# Gemeldet wird, was in der Datei steht, nicht der Vorsatz (NEU MIT 2.8.3).
+# Am 18.09.2026 in WSL gemessen: schlug das Schreiben fehl (Permission
+# denied), stand im Protokoll trotzdem "New UDEV-Rule ... created."
+if [ -s /etc/udev/rules.d/99-smartmeter.rules ]; then
+	echo "`date` - New UDEV-Rule for I/R heads created. " >>$logfile
+	echo "`date` - Reload rules... " >>$logfile
+	udevadm control --reload-rules >>$logfile && udevadm trigger >>$logfile
+else
+	echo "`date` - WARNING: /etc/udev/rules.d/99-smartmeter.rules could not be written - the reading heads keep their ttyUSB names " >>$logfile
+fi
 
 # Start vzlogger at boot if the vzLogger mode is enabled
 VZJSON=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.json
 VZCONF=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.conf
+MARKE=REPLACEBYBASEFOLDER/data/plugins/REPLACEBYSUBFOLDER.upgrade_laeuft
+
+# ---------------------------------------------------------------------------
+# Die Prozesse UNSERES vzlogger finden - argumentweise ueber /proc.
+#
+# NEU MIT 2.8.3. Bis 2.8.2 startete diese Datei bedingungslos, sobald die
+# Betriebsart eingeschaltet war. Gemessen am 18.09.2026 in WSL/Ubuntu
+# (Pruefung-Smartmeter-classic-2.8.3/messe_daemon.vorher.txt, Fall G2):
+# lief bereits ein vzlogger, standen nach dem Aufruf ZWEI - beide auf
+# derselben seriellen Schnittstelle und demselben HTTP-Port.
+#
+# Ein Treffer traegt die beiden Argumente "-c" (oder "--config") und GENAU
+# unsere Konfigurationsdatei, und der Kern nennt ihn vzlogger. Der
+# Programmname aus "ps -o comm=" stammt vom Kern und nicht aus der frei
+# beschreibbaren Befehlszeile. "pgrep -f" traf jede Befehlszeile, in der
+# der Pfad irgendwo vorkam - auch einen Editor auf der Datei.
+# Dieselbe Erkennung fahren uninstall/uninstall und
+# webfrontend/htmlauth/sm_lib.php (sm_vz_pids).
+# ---------------------------------------------------------------------------
+sm_vz_pids() {
+	for sm_d in /proc/[0-9]*; do
+		[ -r "$sm_d/cmdline" ] || continue
+		grep -qaF -- "$VZCONF" "$sm_d/cmdline" 2>/dev/null || continue
+		sm_nach_c=0
+		sm_treffer=0
+		while IFS= read -r sm_arg; do
+			if [ "$sm_nach_c" = "1" ]; then
+				[ "$sm_arg" = "$VZCONF" ] && sm_treffer=1
+				sm_nach_c=0
+			elif [ "$sm_arg" = "-c" ] || [ "$sm_arg" = "--config" ]; then
+				sm_nach_c=1
+			fi
+		done <<SM_ARGUMENTE
+$(tr '\0' '\n' < "$sm_d/cmdline" 2>/dev/null)
+SM_ARGUMENTE
+		[ "$sm_treffer" = "1" ] || continue
+		case "$(ps -p "${sm_d#/proc/}" -o comm= 2>/dev/null)" in
+			*vzlogger*) echo "${sm_d#/proc/}" ;;
+		esac
+	done
+}
+
 if [ -f "$VZJSON" ] && [ -f "$VZCONF" ] && grep -Eq '"enabled"[[:space:]]*:[[:space:]]*(1|true)' "$VZJSON"; then
+	# -------------------------------------------------------------------
+	# 1. Laeuft gerade eine Aktualisierung dieses Plugins?
+	#
+	# preupgrade.sh legt die Marke NEBEN den Datenordner (dort ueberlebt
+	# sie purge_installation), postroot.sh entfernt sie. Nur eine Marke,
+	# die hoechstens eine Stunde alt ist, zaehlt - eine abgebrochene
+	# Installation darf den Zaehler nicht fuer immer stilllegen.
+	#
+	# Gemessen am 18.09.2026 in WSL (messe_luecke.vorher.txt, Fall L5):
+	# faellt der Systemstart in das Fenster, in dem postinstall.sh die
+	# vzlogger.json schon zurueckgespielt hat, standen danach ZWEI
+	# vzlogger - der aus der Zeit vor dem Update lief weiter.
+	#
+	# Ohne lesbare Uhr faellt die Pruefung GESCHLOSSEN aus (CLAUDE.md,
+	# Abschnitt 4): liefert "date" nichts - unter Last kann ein fork
+	# scheitern -, gilt die Marke.
+	# -------------------------------------------------------------------
+	if [ -f "$MARKE" ]; then
+		SEIT=$(cat "$MARKE" 2>/dev/null)
+		case "$SEIT" in
+			''|*[!0-9]*) SEIT=0 ;;
+		esac
+		JETZT=$(date +%s 2>/dev/null)
+		case "$JETZT" in
+			''|*[!0-9]*) JETZT="" ;;
+		esac
+		if [ -z "$JETZT" ]; then
+			echo "`date` - vzlogger nicht gestartet: eine Aktualisierung laeuft (Uhrzeit nicht lesbar) " >>$logfile
+			echo "`date` - End Init " >>$logfile
+			exit 0
+		fi
+		ALTER=$(( JETZT - SEIT ))
+		if [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]; then
+			echo "`date` - vzlogger nicht gestartet: eine Aktualisierung dieses Plugins laeuft " >>$logfile
+			echo "`date` - End Init " >>$logfile
+			exit 0
+		fi
+	fi
+
+	# -------------------------------------------------------------------
+	# 2. Laeuft schon einer? Argumentweise, nicht ueber eine PID-Datei -
+	#    die gibt es hier gar nicht, und purge_installation loeschte sie
+	#    beim Upgrade ohnehin mit dem Datenordner.
+	# -------------------------------------------------------------------
+	SM_LAEUFT=$(sm_vz_pids)
+	if [ -n "$SM_LAEUFT" ]; then
+		echo "`date` - vzlogger laeuft bereits (PID $(echo $SM_LAEUFT)) - kein zweiter Start " >>$logfile
+		echo "`date` - End Init " >>$logfile
+		exit 0
+	fi
+
 	# Hier stand bis 2.3.1 zusaetzlich ein Zweig, der ein mitgeliefertes
 	# vzlogger unter bin/plugins/<ordner>/vzlogger/vzlogger gesucht hat.
 	# Dieses Plugin liefert kein vzlogger mit - der Ordner wird von keinem

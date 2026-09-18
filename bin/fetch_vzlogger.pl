@@ -281,7 +281,15 @@ my $httpport = $cfg->{httpport} || 8083;
 my $vzconf = "$lbpconfigdir/vzlogger.conf";
 if ( -e $vzconf && !&vz_laeuft($vzconf) ) {
 	my $bin = &vz_binary();
-	if ( !$bin ) {
+	# Waehrend einer Aktualisierung wird nichts nachgestartet (NEU MIT
+	# 2.8.3). preupgrade.sh legt die Marke an, postroot.sh entfernt sie;
+	# die Begruendung samt Messung steht in preupgrade.sh. Ohne diese
+	# Frage koennte der Minutentakt mitten in der Installation ein
+	# zweites vzlogger auf dieselbe serielle Schnittstelle setzen.
+	if ( &upgrade_laeuft() ) {
+		&LOG("vzlogger laeuft nicht - es wird nicht nachgestartet, solange eine Aktualisierung dieses Plugins laeuft.", "INFO");
+	}
+	elsif ( !$bin ) {
 		&LOG("vzlogger ist eingeschaltet, aber es ist kein lauffaehiges vzlogger installiert.", "WARN");
 	} else {
 		my $log = "/dev/shm/$psubfolder/vzlogger.log";
@@ -581,6 +589,27 @@ sub SAEUBERN
 # Laeuft ein vzlogger mit UNSERER Konfiguration? pgrep -f findet auch die
 # aufrufende Shell, deren Befehlszeile das Suchmuster enthaelt - deshalb wird
 # jede Fundstelle gegen den echten Programmnamen geprueft.
+# Laeuft gerade eine Aktualisierung dieses Plugins? (NEU MIT 2.8.3)
+#
+# Die Marke liegt NEBEN dem Datenordner - dort ueberlebt sie
+# purge_installation. Nur eine Marke, die hoechstens eine Stunde alt ist,
+# zaehlt; aelter, aus der Zukunft oder unlesbar gilt sie nicht, denn eine
+# abgebrochene Installation darf den Zaehler nicht fuer immer stilllegen.
+sub upgrade_laeuft
+{
+	my $marke = "$lbhomedir/data/plugins/$psubfolder.upgrade_laeuft";
+	return 0 if !-f $marke;
+	my $fh;
+	return 0 if !open($fh, '<', $marke);
+	my $seit = <$fh>;
+	close($fh);
+	$seit = "" if !defined $seit;
+	$seit =~ s/\s//g;
+	return 0 if $seit !~ /^\d+$/;
+	my $alter = time() - $seit;
+	return ( $alter >= 0 && $alter < 3600 ) ? 1 : 0;
+}
+
 sub vz_laeuft
 {
 	my ($conf) = @_;

@@ -1075,8 +1075,86 @@ function sm_vz_install()
 }
 
 /**
- * PIDs unseres vzlogger - erkannt an unserer eigenen Konfigurationsdatei,
- * damit ein vzlogger eines anderen Plugins nie mitgezaehlt wird.
+ * Die Prozessnummern UNSERES vzlogger - argumentweise ueber /proc.
+ *
+ * BERICHTIGT MIT 2.8.3. Bis 2.8.2 stand hier
+ *
+ *     pgrep -f -- "-c <unsere vzlogger.conf>"
+ *
+ * mit einer Gegenprobe ueber "ps -o comm=". Die Gegenprobe war richtig, das
+ * Suchmuster nicht: "-f" vergleicht eine Teilzeichenkette der GANZEN
+ * Befehlszeile und trifft deshalb auch die Schale, die pgrep aufruft, und
+ * jeden fremden Prozess, in dem der Pfad hinter einem "-c" vorkommt. Am
+ * 18.09.2026 in WSL gemessen: der Aufruf lieferte RC=15 - pkill an derselben
+ * Stelle hatte die eigene Huellschale mit beendet
+ * (Pruefung-Smartmeter-classic-2.8.3/messe_pkill.vorher.txt, Fall B2).
+ *
+ * Ein Treffer traegt jetzt die beiden Argumente "-c" (oder "--config") und
+ * GENAU unsere Konfigurationsdatei, und der Kern nennt ihn vzlogger.
+ * /proc/<pid>/comm ist derselbe Wert, den "ps -o comm=" ausgibt - nur ohne
+ * Prozessstart, und er stammt vom Kern und nicht aus der frei
+ * beschreibbaren Befehlszeile. Dieselbe Erkennung fahren daemon/daemon
+ * und uninstall/uninstall.
+ *
+ * Rueckgabe: Feld von Prozessnummern als Zeichenketten, aufsteigend.
+ */
+function sm_vz_pids()
+{
+    $conf = sm_paths()['vzconf'];
+    $gefunden = array();
+    // Erst fragen, dann oeffnen: ein @opendir auf ein fehlendes Verzeichnis
+    // ist stumm, aber ein gesetzter Fehlerbehandler sieht die Warnung
+    // trotzdem - dieselbe Stelle wie in sm_log_ende(). Beim Rendern unter
+    // Windows (Werkzeuge/rendern.py) gibt es /proc nicht.
+    if (!is_dir('/proc')) {
+        return $gefunden;
+    }
+    $dh = @opendir('/proc');
+    if ($dh === false) {
+        return $gefunden;
+    }
+    while (($e = readdir($dh)) !== false) {
+        if (!preg_match('/^[0-9]+$/', $e)) {
+            continue;
+        }
+        // Ein Prozess kann zwischen readdir und Lesen enden - deshalb erst
+        // fragen und den Lesefehler still lassen.
+        if (!is_readable('/proc/' . $e . '/cmdline')) {
+            continue;
+        }
+        $roh = @file_get_contents('/proc/' . $e . '/cmdline');
+        if ($roh === false || $roh === '') {
+            continue;
+        }
+        $args = explode("\0", $roh);
+        $anzahl = count($args);
+        $treffer = false;
+        for ($i = 0; $i + 1 < $anzahl; $i++) {
+            if (($args[$i] === '-c' || $args[$i] === '--config')
+                && $args[$i + 1] === $conf) {
+                $treffer = true;
+                break;
+            }
+        }
+        if (!$treffer) {
+            continue;
+        }
+        if (!is_readable('/proc/' . $e . '/comm')) {
+            continue;
+        }
+        $comm = trim((string) @file_get_contents('/proc/' . $e . '/comm'));
+        if ($comm === '' || stripos($comm, 'vzlogger') === false) {
+            continue;
+        }
+        $gefunden[] = $e;
+    }
+    closedir($dh);
+    sort($gefunden, SORT_NUMERIC);
+    return $gefunden;
+}
+
+/**
+ * PIDs unseres vzlogger als Zeichenkette, durch Leerzeichen getrennt.
  *
  * Zwischengespeichert: bis 2.3.14 lief sie je Seitenaufbau dreimal.
  */
@@ -1086,21 +1164,7 @@ function sm_vz_running()
     if ($erg !== null) {
         return $erg;
     }
-    // pgrep -f findet auch die Shell, die pgrep aufruft - ihre Befehlszeile
-    // enthaelt das Suchmuster. Deshalb jede Fundstelle gegen den echten
-    // Programmnamen pruefen.
-    list(, $roh) = sm_sh('pgrep -f -- ' . escapeshellarg('-c ' . sm_paths()['vzconf']));
-    $ok = array();
-    foreach (preg_split('/\s+/', trim($roh)) as $pid) {
-        if ($pid === '' || !preg_match('/^[0-9]+$/', $pid)) {
-            continue;
-        }
-        list(, $comm) = sm_sh('ps -p ' . (int) $pid . ' -o comm=');
-        if (preg_match('/vzlogger/i', $comm)) {
-            $ok[] = $pid;
-        }
-    }
-    $erg = implode(' ', $ok);
+    $erg = implode(' ', sm_vz_pids());
     return $erg;
 }
 
@@ -1163,16 +1227,108 @@ function sm_vz_note($text)
         date('Y-m-d H:i:s') . ' [Plugin] ' . $text . "\n", FILE_APPEND);
 }
 
+/**
+ * Die eigenen vzlogger-Prozesse beenden - gezielt, nach Nummer.
+ *
+ * BERICHTIGT MIT 2.8.3. Bis 2.8.2 stand hier eine Zeile:
+ *
+ *     sm_sh('pkill -f -- ' . escapeshellarg('-c ' . $p['vzconf']));
+ *
+ * exec() startet dafuer eine Schale, und deren eigene Befehlszeile traegt
+ * das Suchmuster - pkill hat sich also selbst mit beendet. Am 18.09.2026 in
+ * WSL gemessen (messe_pkill.vorher.txt, Fall B2): "RC=15". Mitgestorben sind
+ * ausserdem ein Koeder "nano -c <unsere vzlogger.conf>" und eine fremde
+ * Schale, die den Pfad nur ausgab (Fall B).
+ *
+ * Gesucht wird jetzt mit sm_vz_pids() - argumentweise - und signalisiert
+ * wird je Nummer. Vor JEDEM Signal wird neu gesucht (Regeln/02): zwischen
+ * zwei Durchgaengen kann eine Nummer frei werden und einem fremden Prozess
+ * gehoeren. Behandelt werden ALLE Treffer, nicht nur der erste; nach einem
+ * Upgrade kann ein verwaister vzlogger neben dem neuen stehen.
+ *
+ * Rueckgabe: array('beendet' => [...], 'uebrig' => [...]).
+ */
+function sm_vz_anhalten()
+{
+    $vorher = sm_vz_pids();
+    if (!$vorher) {
+        return array('beendet' => array(), 'uebrig' => array());
+    }
+    foreach (array('TERM' => 2, 'KILL' => 1) as $signal => $warten) {
+        $offen = sm_vz_pids();
+        if (!$offen) {
+            break;
+        }
+        foreach ($offen as $pid) {
+            // Nur die Nummer geht in die Befehlszeile, kein Suchmuster.
+            sm_sh('kill -' . $signal . ' ' . (int) $pid);
+        }
+        sleep($warten);
+    }
+    $uebrig = sm_vz_pids();
+    return array(
+        'beendet' => array_values(array_diff($vorher, $uebrig)),
+        'uebrig'  => $uebrig,
+    );
+}
+
+/** Der Pfad der Upgrade-Marke - NEBEN dem Datenordner. */
+function sm_upgrade_marke()
+{
+    $d = sm_paths()['datadir'];
+    return dirname($d) . '/' . basename($d) . '.upgrade_laeuft';
+}
+
+/**
+ * Laeuft gerade eine Aktualisierung dieses Plugins?
+ *
+ * NEU MIT 2.8.3. preupgrade.sh legt die Marke als Erstes an, postroot.sh
+ * entfernt sie ueber einen trap. Nur eine Marke, die hoechstens eine Stunde
+ * alt ist, zaehlt; aelter, aus der Zukunft oder unlesbar gilt sie nicht -
+ * eine abgebrochene Installation darf den Zaehler nicht fuer immer
+ * stilllegen. Die Uhr steht in PHP ueber time() immer zur Verfuegung; der
+ * Fall "keine lesbare Uhr", der in daemon/daemon geschlossen ausfaellt,
+ * kommt hier nicht vor.
+ */
+function sm_upgrade_laeuft()
+{
+    $m = sm_upgrade_marke();
+    if (!is_file($m)) {
+        return false;
+    }
+    $roh = trim((string) @file_get_contents($m));
+    if (!preg_match('/^[0-9]+$/', $roh)) {
+        return false;
+    }
+    $alter = time() - (int) $roh;
+    return ($alter >= 0 && $alter < 3600);
+}
+
 function sm_vz_restart($cfg)
 {
     $p = sm_paths();
     @mkdir($p['shm'], 0775, true);
-    sm_sh('pkill -f -- ' . escapeshellarg('-c ' . $p['vzconf']));
-    sleep(1);
+    $halt = sm_vz_anhalten();
     sm_cache_verwerfen();
+    if ($halt['uebrig']) {
+        sm_log('vzlogger liess sich nicht beenden (PID '
+             . implode(' ', $halt['uebrig']) . ').', 'ERROR');
+    } elseif ($halt['beendet']) {
+        sm_log('vzlogger beendet (PID ' . implode(' ', $halt['beendet']) . ').');
+    }
     if (!$cfg['enabled']) {
         sm_log('vzlogger angehalten (Betriebsart ausgeschaltet).');
         return '';
+    }
+    // Waehrend einer Aktualisierung wird nicht gestartet: der alte Prozess
+    // laeuft weiter, und ein zweiter auf derselben seriellen Schnittstelle
+    // ist der Schaden, den die Marke verhindert (Begruendung in
+    // preupgrade.sh). Angehalten wird oben trotzdem - das ist der
+    // ausdrueckliche Wunsch des Anwenders.
+    if (sm_upgrade_laeuft()) {
+        sm_vz_note('START ABGEBROCHEN: eine Aktualisierung dieses Plugins laeuft.');
+        sm_log('vzlogger nicht gestartet - eine Aktualisierung laeuft.', 'WARNING');
+        return sm_t('VZ.UPGRADE_LAEUFT');
     }
     list($bin, $warum) = sm_vz_binary();
     if ($bin === '') {
@@ -1206,17 +1362,8 @@ function sm_vz_restart($cfg)
  */
 function sm_vz_running_frisch()
 {
-    list(, $roh) = sm_sh('pgrep -f -- ' . escapeshellarg('-c ' . sm_paths()['vzconf']));
-    foreach (preg_split('/\s+/', trim($roh)) as $pid) {
-        if ($pid === '' || !preg_match('/^[0-9]+$/', $pid)) {
-            continue;
-        }
-        list(, $comm) = sm_sh('ps -p ' . (int) $pid . ' -o comm=');
-        if (preg_match('/vzlogger/i', $comm)) {
-            return $pid;
-        }
-    }
-    return '';
+    $pids = sm_vz_pids();
+    return $pids ? $pids[0] : '';
 }
 
 /** Die erkannten Lesekoepfe. */

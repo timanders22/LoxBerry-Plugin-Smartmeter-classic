@@ -970,6 +970,86 @@ Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
 * **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
   `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
 
+## Fassung 2.8.3 — vzlogger wird an seinen Argumenten erkannt, nicht an einer Zeichenkette
+
+Gemessen am 18.09.2026 in WSL/Ubuntu, nicht am Gerät (Prüfstände
+`messe_pkill.sh`, `messe_daemon.sh`, `messe_luecke.sh`, `messe_waechter.sh`
+unter `Pruefung-Smartmeter-classic-2.8.3/`). Weder ein Zähler noch vzlogger
+noch `apt` standen zur Verfügung; an ihrer Stelle liefen Attrappen.
+
+### Das Deinstallieren und der Knopf „vzlogger neu starten“ trafen Fremde
+
+Beide Stellen beendeten vzlogger mit `pkill -f -- "-c <unsere
+vzlogger.conf>"`. Das Muster vergleicht eine **Teilzeichenkette der ganzen
+Befehlszeile** und trifft damit jeden Prozess, in dem unser Pfad hinter
+einem `-c` irgendwo vorkommt. Gemessen: ein Aufruf `nano -c
+<vzlogger.conf>` — also jemand, der die Konfiguration gerade im Editor
+offen hat — war nach dem Deinstallieren tot, ebenso eine Schale, die den
+Pfad nur ausgab. In der Oberfläche kam dazu, dass `exec()` für den Aufruf
+eine eigene Schale startet und deren Befehlszeile das Muster ebenfalls
+trägt: `pkill` beendete sich selbst mit, gemessener Rückgabewert 15.
+
+Gesucht wird jetzt **argumentweise** über `/proc`: ein Treffer trägt die
+beiden Argumente `-c` (oder `--config`) und genau unsere
+Konfigurationsdatei, und der Kern nennt ihn `vzlogger`. Der Programmname
+kommt aus dem Kern (`/proc/<pid>/comm`, derselbe Wert wie `ps -o comm=`)
+und nicht aus der frei beschreibbaren Befehlszeile. Beendet werden alle
+eigenen Treffer einzeln nach Nummer, vor jedem Signal wird neu gesucht, und
+gemeldet wird die Wirkung — nicht der Rückgabewert von `kill`.
+
+### Der Systemstart konnte einen zweiten vzlogger neben den laufenden setzen
+
+`daemon/daemon` startete vzlogger, sobald die Betriebsart eingeschaltet
+war, ohne nachzusehen, ob schon einer läuft. Gemessen: lief einer, standen
+danach zwei — beide auf derselben seriellen Schnittstelle und demselben
+HTTP-Port. Vor dem Start wird jetzt argumentweise gesucht; läuft schon
+einer, steht die Prozessnummer im Protokoll und es wird keiner gestartet.
+
+### Eine Marke für die Zeit der Aktualisierung
+
+Zwischen dem Augenblick, in dem der Installer die Cron-Dateien neu anlegt,
+und dem Augenblick, in dem `postinstall.sh` die Konfiguration
+zurückspielt, vergeht auf dem Gerät fast eine Minute. Was in dieser Lücke
+anläuft, ist nachgestellt worden: der Minutentakt steigt beim
+vzLogger-Abholer sofort aus (die `vzlogger.json` ist dort gelöscht), die
+Verbrauchshistorie legt einen frischen Merker an, den `postupgrade.sh`
+danach wieder überschreibt, und die Verknüpfung des klassischen Lesers
+überlebt und liest. `daemon/daemon` startet in der Lücke selbst nichts.
+Fällt ein **Systemstart** aber in das Fenster **nach** `postinstall.sh` —
+die `vzlogger.json` ist dann wieder da, und der alte vzlogger läuft weiter,
+weil ihn nichts anhält —, standen danach zwei Prozesse.
+
+`preupgrade.sh` legt deshalb als Erstes `data/plugins/<Ordner>.upgrade_laeuft`
+mit der Unixzeit an, neben dem Datenordner, wo der Installer sie nicht
+abräumt. Solange sie jünger als 3600 Sekunden ist, startet weder der
+Systemstart noch der Minutentakt noch der Knopf im Reiter vzLogger einen
+vzlogger; ist sie älter, aus der Zukunft oder unlesbar, gilt sie nicht —
+eine abgebrochene Installation darf den Zähler nicht für immer stilllegen.
+Lässt sich die Uhr nicht lesen, fällt die Prüfung geschlossen aus: dann
+gilt die Marke. `postroot.sh` entfernt sie über einen `trap`, damit sie
+auch nach einem Abbruch fällt, und die Deinstallation räumt sie weg.
+
+### Zwei neue Zeilen im Reiter Test
+
+* **Aktualisierung** — liegt eine Marke, und gilt sie noch? Eine liegen
+  gebliebene Marke aus einer abgebrochenen Installation wird als solche
+  benannt, samt Alter und Ablageort.
+* **Dienst** — laufen mehrere vzlogger mit unserer Konfiguration, steht das
+  jetzt als Befund da, mit allen Prozessnummern. Vorher nannte die Zeile
+  nur „vzlogger läuft“.
+
+### Kleinigkeit nebenbei
+
+`daemon/daemon` schrieb „New UDEV-Rule for I/R heads created“ auch dann ins
+Protokoll, wenn sich die Regeldatei gar nicht schreiben ließ. Gemeldet wird
+jetzt, was in der Datei steht.
+
+### Was nicht gemessen ist
+
+Alles oben ist in WSL mit Attrappen gemessen, nichts am Gerät. Die echte
+Länge der Lücke, der Benutzerwechsel (`su`) und ein echter vzlogger sind
+nicht nachgebildet.
+
 ## Fassung 2.8.2 — ein Name für zwei Dinge in den Cron-Ordnern
 
 Gemessen in WSL, nicht am Gerät (Prüfstände `messe_cron_kollision.sh` und

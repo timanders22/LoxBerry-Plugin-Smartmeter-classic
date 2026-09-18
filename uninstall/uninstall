@@ -25,7 +25,7 @@ VZCONF="$ARGV5/config/plugins/$ARGV3/vzlogger.conf"
 # ---------------------------------------------------------------------------
 # REIHENFOLGE: erst systemd fragen, dann selbst nachraeumen.
 #
-# Der Einwand, systemd koenne den mit pkill beendeten Prozess sofort neu
+# Der Einwand, systemd koenne den hier beendeten Prozess sofort neu
 # starten, trifft hier NICHT zu: dieses Plugin startet vzlogger gar nicht
 # ueber systemd. daemon/daemon startet es beim Systemstart mit nohup als
 # Benutzer loxberry, und bin/vzlogger_pkg.sh MASKIERT die mitgelieferte
@@ -50,10 +50,87 @@ if command -v systemctl >/dev/null 2>&1; then
 	systemctl disable vzlogger.service >/dev/null 2>&1
 fi
 
+# ---------------------------------------------------------------------------
 # Jetzt das eigene, mit nohup gestartete vzlogger - solange die
 # Konfigurationsdatei noch da ist, denn an ihr wird es erkannt.
-pkill -f -- "-c $VZCONF" >/dev/null 2>&1
-sleep 1
+#
+# BERICHTIGT MIT 2.8.3. Bis 2.8.2 stand hier eine Zeile:
+#
+#     pkill -f -- "-c $VZCONF"
+#
+# "-f" vergleicht eine TEILZEICHENKETTE der ganzen Befehlszeile. Getroffen
+# wird damit jeder Prozess, in dem unser Pfad hinter einem "-c" irgendwo
+# vorkommt. Gemessen am 18.09.2026 in WSL/Ubuntu
+# (Pruefung-Smartmeter-classic-2.8.3/messe_pkill.vorher.txt, Fall A): ein
+# Koeder "nano -c <unsere vzlogger.conf>" und eine Schale, die den Pfad nur
+# ausgibt, waren nach dem Aufruf beide tot.
+#
+# Erkannt wird jetzt ARGUMENTWEISE: der Prozess muss die beiden Argumente
+# "-c" (oder "--config") und GENAU unsere Konfigurationsdatei tragen, und
+# der Kern muss ihn vzlogger nennen. Der Programmname aus
+# "ps -o comm=" stammt vom Kern und nicht aus der frei beschreibbaren
+# Befehlszeile. Argumentweise suchen auch daemon/daemon und
+# webfrontend/htmlauth/sm_lib.php (sm_vz_pids); bin/fetch_vzlogger.pl
+# (vz_laeuft) sucht weiter mit "pgrep -f", haelt aber jeden Treffer
+# gegen denselben Programmnamen - es beendet nichts und entscheidet nur,
+# ob nachgestartet wird.
+#
+# Gesucht wird vor JEDEM Signal neu (Regeln/02): zwischen zwei Durchgaengen
+# kann eine Nummer frei werden und einem fremden Prozess gehoeren. Behandelt
+# werden ALLE Treffer, nicht nur der erste - nach einem Upgrade kann ein
+# verwaistes vzlogger neben dem neuen stehen.
+# ---------------------------------------------------------------------------
+sm_vz_pids() {
+	# $1 = unsere vzlogger.conf (voller Pfad)
+	for sm_d in /proc/[0-9]*; do
+		[ -r "$sm_d/cmdline" ] || continue
+		# Vorfilter: ohne den Pfad irgendwo in der Befehlszeile kann es
+		# kein Treffer sein. Spart den Aufruf von tr fuer jeden Prozess.
+		grep -qaF -- "$1" "$sm_d/cmdline" 2>/dev/null || continue
+		sm_nach_c=0
+		sm_treffer=0
+		while IFS= read -r sm_arg; do
+			if [ "$sm_nach_c" = "1" ]; then
+				[ "$sm_arg" = "$1" ] && sm_treffer=1
+				sm_nach_c=0
+			elif [ "$sm_arg" = "-c" ] || [ "$sm_arg" = "--config" ]; then
+				sm_nach_c=1
+			fi
+		done <<SM_ARGUMENTE
+$(tr '\0' '\n' < "$sm_d/cmdline" 2>/dev/null)
+SM_ARGUMENTE
+		[ "$sm_treffer" = "1" ] || continue
+		case "$(ps -p "${sm_d#/proc/}" -o comm= 2>/dev/null)" in
+			*vzlogger*) echo "${sm_d#/proc/}" ;;
+		esac
+	done
+}
+
+SM_VZ_PIDS=$(sm_vz_pids "$VZCONF")
+if [ -n "$SM_VZ_PIDS" ]; then
+	echo "<INFO> Halte das eigene vzlogger an (PID $(echo $SM_VZ_PIDS))."
+	for SM_P in $SM_VZ_PIDS; do
+		kill "$SM_P" 2>/dev/null
+	done
+	sleep 2
+	SM_VZ_PIDS=$(sm_vz_pids "$VZCONF")
+	if [ -n "$SM_VZ_PIDS" ]; then
+		for SM_P in $SM_VZ_PIDS; do
+			kill -9 "$SM_P" 2>/dev/null
+		done
+		sleep 1
+		SM_VZ_PIDS=$(sm_vz_pids "$VZCONF")
+	fi
+	# Gemeldet wird die WIRKUNG, nicht der Rueckgabewert von kill.
+	if [ -n "$SM_VZ_PIDS" ]; then
+		echo "<WARNING> Ein eigenes vzlogger liess sich nicht beenden (PID $(echo $SM_VZ_PIDS))."
+		echo "<WARNING> Bitte von Hand nachsehen: ps -p $(echo $SM_VZ_PIDS) -o pid,user,args"
+	else
+		echo "<OK> Das eigene vzlogger ist beendet."
+	fi
+else
+	echo "<INFO> Es lief kein vzlogger mit der Konfiguration dieses Plugins."
+fi
 
 if [ -e "$MARKER" ] || [ -e "$MARKER_ALT" ]; then
 	echo "<INFO> vzlogger wurde von diesem Plugin installiert - es wird entfernt."
@@ -165,6 +242,16 @@ if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
 	done
 	if [ "$SM_LN" -gt 0 ]; then
 		echo "<INFO> $SM_LN liegengebliebene Sicherung(en) frueherer Upgrades entfernt."
+	fi
+	# Die Upgrade-Marke aus preupgrade.sh (NEU MIT 2.8.3). Sie liegt neben
+	# dem Datenordner und ueberlebt deshalb jedes Abraeumen des Installers.
+	# Bricht eine Aktualisierung ab, bleibt sie liegen; beim Deinstallieren
+	# geht sie mit, sonst sperrte sie den naechsten Start eine Stunde lang,
+	# ohne dass noch ein Plugin da waere, das sie erklaert.
+	rm -f "$ARGV5/data/plugins/$ARGV3.upgrade_laeuft" 2>/dev/null
+	if [ -e "$ARGV5/data/plugins/$ARGV3.upgrade_laeuft" ]; then
+		echo "<WARNING> Die Upgrade-Marke $ARGV5/data/plugins/$ARGV3.upgrade_laeuft"
+		echo "<WARNING> liess sich nicht entfernen. Bitte von Hand loeschen."
 	fi
 fi
 

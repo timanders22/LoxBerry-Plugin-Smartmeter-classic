@@ -671,7 +671,37 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_FORM'), sm_formularprobe($datei));
     $add(sm_t('PRUEF.Z_GATEWAY'), sm_gateway_probe());
     $add(sm_t('PRUEF.Z_ENDPUNKT'), sm_endpunkt_probe());
+    $add(sm_t('PRUEF.Z_MARKE'), sm_marke_probe());
     return $z;
+}
+
+/**
+ * Liegt eine Upgrade-Marke, und gilt sie noch?
+ *
+ * NEU MIT 2.8.3. Zu jeder Regel gehoert das Werkzeug, das sie findet
+ * (CLAUDE.md, Abschnitt 6). Die Marke sperrt den Start von vzlogger,
+ * solange sie juenger als eine Stunde ist; bricht eine Installation ab,
+ * bleibt sie liegen - dann soll hier stehen, dass sie nicht mehr gilt und
+ * weg darf. Gelesen wird die Datei, nicht eine zweite Liste.
+ */
+function sm_marke_probe()
+{
+    $m = sm_upgrade_marke();
+    if (!is_file($m)) {
+        return array(1, sm_t('PRUEF.MARKE_KEINE'));
+    }
+    $roh = trim((string) @file_get_contents($m));
+    if (!preg_match('/^[0-9]+$/', $roh)) {
+        return array(0, sm_t('PRUEF.MARKE_UNLESBAR'));
+    }
+    $alter = time() - (int) $roh;
+    if ($alter >= 0 && $alter < 3600) {
+        return array(2, sprintf(sm_t('PRUEF.MARKE_LAEUFT'), $alter));
+    }
+    // Ein Hinweis, kein Kreuz: eine abgelaufene Marke haelt nichts mehr auf.
+    // Sie ist der Rest einer abgebrochenen Installation und darf weg - ein
+    // rotes Kreuz dafuer waere ein Fehlalarm (CLAUDE.md, Abschnitt 6).
+    return array(2, sprintf(sm_t('PRUEF.MARKE_ALT'), $alter));
 }
 
 /** Laeuft ueberhaupt ein Leser - und nur einer? */
@@ -688,9 +718,17 @@ function sm_dienst_probe()
         return array(2, sm_t('PRUEF.DIENST_KEINER'));
     }
     if ($vz['enabled']) {
-        $pid = sm_vz_running();
-        return $pid !== ''
-            ? array(1, sprintf(sm_t('PRUEF.DIENST_VZ'), $pid))
+        // Seit 2.8.3 nach der ANZAHL, nicht nur nach "laeuft einer": in der
+        // Upgrade-Luecke konnte ein zweiter vzlogger neben dem alten
+        // entstehen (am 18.09.2026 in WSL gemessen, Fall L5 und G2). Zwei
+        // Prozesse an einer seriellen Schnittstelle sind ein Befund, und
+        // bis dahin stand hier "vzlogger laeuft, PID 111 222".
+        $pids = sm_vz_pids();
+        if (count($pids) > 1) {
+            return array(0, sprintf(sm_t('PRUEF.DIENST_VZ_MEHRFACH'), implode(' ', $pids)));
+        }
+        return $pids
+            ? array(1, sprintf(sm_t('PRUEF.DIENST_VZ'), $pids[0]))
             : array(0, sm_t('PRUEF.DIENST_VZ_TOT'));
     }
     $pid = sm_logger_pid();

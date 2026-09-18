@@ -43,6 +43,55 @@ ARGV5=$5 # Fifth argument is Base folder of LoxBerry
 
 ARGV6=$6 # Sechstes Argument ist der Arbeitsordner des Installers (absolut)
 
+# ===========================================================================
+# DIE MARKE "AKTUALISIERUNG LAEUFT" - ALS ERSTES, VOR JEDEM ANDEREN SCHRITT
+#
+# NEU MIT 2.8.3. Zwischen dem Augenblick, in dem der Installer die
+# Cron-Dateien neu anlegt, und dem Augenblick, in dem postinstall.sh die
+# Konfiguration zurueckspielt, liegt auf dem Geraet fast eine Minute
+# (an der Einspeisebremse 0.9.19 gemessen, Regeln/06).
+#
+# Was in dieser Luecke dieser Linie wirklich anlaeuft, ist am 18.09.2026 in
+# WSL/Ubuntu nachgestellt worden
+# (Pruefung-Smartmeter-classic-2.8.3/messe_luecke.vorher.txt):
+#
+#   L1  cron.01min: fetch_vzlogger.pl steigt aus (vzlogger.json ist weg),
+#       sm_historie.php legt data/plugins/<ordner>/historie_merker.json NEU
+#       an - den echten holt postupgrade.sh danach zurueck.
+#   L2b Die Verknuepfung des klassischen Lesers heisst seit 2.8.2
+#       <NAME>-legacy und ueberlebt das Abraeumen; fetch.php laeuft also in
+#       der Luecke und legt daten.lock und fetch.log auf der Ramdisk an.
+#   L3  daemon/daemon startet in der Luecke NICHTS - ohne vzlogger.json
+#       kommt es am Schalter nicht vorbei.
+#   L5  Faellt ein Systemstart aber in das Fenster NACH postinstall.sh -
+#       vzlogger.json ist dann wieder da -, standen danach ZWEI vzlogger:
+#       der aus der Zeit vor dem Update lief weiter (nichts in dieser Linie
+#       haelt ihn an). Gemessen: "L5 vzlogger-Prozesse: 2 (erwartet 1)".
+#
+# Die Marke schliesst genau dieses Fenster. Sie liegt NEBEN dem Datenordner,
+# sonst loeschte purge_installation sie mit (plugininstall.pl :1631).
+# daemon/daemon, der Waechter in bin/fetch_vzlogger.pl und der Knopf
+# "vzlogger neu starten" in der Oberflaeche achten sie, solange sie juenger
+# als 3600 s ist; postroot.sh entfernt sie ueber einen trap, uninstall
+# raeumt sie weg.
+# ===========================================================================
+if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
+	SM_MARKE="$ARGV5/data/plugins/$ARGV3.upgrade_laeuft"
+	mkdir -p "$ARGV5/data/plugins" 2>/dev/null
+	# Die Umleitung in eine Unterschale: scheitert sie (Datenordner nur
+	# lesbar), meldet die SCHALE "cannot create ..." auf die Fehlerausgabe -
+	# ein "2>/dev/null" am Befehl selbst faengt das nicht. Gemeldet wird
+	# stattdessen die Zeile darunter, die die Wirkung gemessen hat.
+	( date +%s > "$SM_MARKE" ) 2>/dev/null
+	if [ -s "$SM_MARKE" ]; then
+		echo "<OK> Der Start von vzlogger ist bis zum Ende der Installation gesperrt."
+	else
+		echo "<WARNING> Die Marke $SM_MARKE liess sich nicht anlegen."
+		echo "<WARNING> Faellt ein Systemstart in die Installation, kann ein zweites"
+		echo "<WARNING> vzlogger neben dem laufenden starten."
+	fi
+fi
+
 # ---------------------------------------------------------------------------
 # WARUM ES DIESE SICHERUNG UEBERHAUPT BRAUCHT
 #

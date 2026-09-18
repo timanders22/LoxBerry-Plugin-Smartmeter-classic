@@ -16,6 +16,46 @@ ARGV5=$5   # Basisordner von LoxBerry
 PKG="$ARGV5/bin/plugins/$ARGV3/vzlogger_pkg.sh"
 CHECK="$ARGV5/bin/plugins/$ARGV3/vz_check.sh"
 
+# ===========================================================================
+# DIE UPGRADE-MARKE FAELLT HIER - UEBER EINEN trap, NICHT AM DATEIENDE
+#
+# NEU MIT 2.8.3. preupgrade.sh legt data/plugins/<ordner>.upgrade_laeuft an;
+# solange sie gilt, startet daemon/daemon kein vzlogger (Begruendung und
+# Messung stehen dort und in preupgrade.sh). postroot.sh ist das letzte
+# Hakenskript, das LoxBerry ruft (Reihenfolge nach Regeln/06: preroot,
+# preinstall, preupgrade, postinstall, postupgrade, postroot) - hier gehoert
+# sie weg.
+#
+# Warum ein trap und nicht eine Zeile am Ende: dieses Skript steigt an zwei
+# Stellen mit "exit" aus (kein root, Paket-Helfer fehlt). Ohne trap bliebe
+# die Marke nach einer gescheiterten Installation eine Stunde lang liegen
+# und sperrte den Zaehler, ohne dass irgendwo stuende warum.
+#
+# Gemessen am 18.09.2026 (Pruefung-Smartmeter-classic-2.8.3/
+# messe_trap_exit.txt, dash und bash): eine Kommandoersetzung und eine
+# Unterschale loesen den EXIT-trap NICHT aus - die Marke faellt also nicht
+# zu frueh.
+#
+# Diese Linie startet in postroot.sh nichts: vzlogger laeuft waehrend des
+# Upgrades weiter, und faellt es aus, holt der Waechter in
+# bin/fetch_vzlogger.pl es binnen einer Minute nach. Eine Ausnahme
+# "trotz Marke starten" braucht es deshalb hier nicht.
+# ===========================================================================
+if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
+	SM_MARKE="$ARGV5/data/plugins/$ARGV3.upgrade_laeuft"
+	sm_marke_weg() {
+		rm -f "$SM_MARKE" 2>/dev/null
+		if [ -e "$SM_MARKE" ]; then
+			echo "<WARNING> Die Marke $SM_MARKE liess sich nicht entfernen."
+			echo "<WARNING> vzlogger startet dann bis zu einer Stunde lang nicht"
+			echo "<WARNING> neu. Bitte die Datei von Hand loeschen."
+		fi
+		# Der Rueckgabewert des Skripts bleibt der von vorher.
+		return 0
+	}
+	trap sm_marke_weg EXIT
+fi
+
 if [ "$(id -u)" != "0" ]; then
 	echo "<ERROR> postroot.sh muss als root laufen."
 	exit 2
