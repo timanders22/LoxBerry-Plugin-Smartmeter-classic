@@ -254,7 +254,7 @@ function sm_endpunkt_probe($alter = 300)
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
         $antwort = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
         if ($antwort === false || $code === 0) {
             // Ein Webserver, der gerade diese Seite baut, kann sich unter
             // Umstaenden nicht selbst aufrufen. Das ist kein Kreuz.
