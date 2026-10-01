@@ -364,23 +364,55 @@ fi
 NETZ_BASE="${5:-$LBHOMEDIR}"
 NETZ_PDIR="${3:-smartmeter-classic}"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
-if [ -s "$NETZ_CFG/smartmeter.cfg" ]; then
-    cp -p "$NETZ_CFG/smartmeter.cfg" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.smartmeter.cfg" 2>/dev/null \
-        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.smartmeter.cfg" 2>/dev/null
-fi
-echo "<INFO> Zweitschrift der Einstellungen angelegt."
+# ===========================================================================
+# DIE ZWEITSCHRIFT WIRD NEU GEFASST (Durchgang 01.10.2026, I5; Entscheidung 1)
+#
+# Bis 2.8.5 wurde sie nur erneuert, wenn die Konfiguration nicht leer war -
+# ohne Inhaltspruefung, an Ort und Stelle per cp -p -, und "<INFO>
+# Zweitschrift ... angelegt" stand IMMER da. Fehlte smartmeter.cfg, blieb die
+# Zweitschrift eines FRUEHEREN Vorgangs liegen und wurde eingespielt
+# (gemessen, Installerbericht I5, U3).
+#
+# Jetzt: die alte Zweitschrift geht zuerst nach .alt (eingespielt wird
+# daraus nie; uninstall raeumt sie ab). Die neue entsteht nur aus einer
+# Datei, die ihr Merkmal traegt, ueber eine temporaere Datei (0600) und mv.
+# Gemeldet wird das Ergebnis.
+# ===========================================================================
+netz_zweitschrift() {
+    # $1 = Dateiname im Konfigurationsordner, $2 = Merkmal (feste Zeichenfolge)
+    quelle="$NETZ_CFG/$1"
+    zweit="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$1"
+    if [ -e "$zweit" ] || [ -L "$zweit" ]; then
+        rm -rf "${zweit:?}.alt" 2>/dev/null
+        if mv -f "$zweit" "$zweit.alt" 2>/dev/null; then
+            echo "<INFO> Die Zweitschrift $1 aus einem frueheren Vorgang liegt jetzt unter $zweit.alt."
+        else
+            echo "<WARNING> Die alte Zweitschrift $zweit liess sich nicht beiseitelegen."
+        fi
+    fi
+    if [ ! -s "$quelle" ]; then
+        echo "<INFO> $1 fehlt oder ist leer - keine Zweitschrift angelegt."
+        return 0
+    fi
+    if ! grep -qF -- "$2" "$quelle" 2>/dev/null; then
+        echo "<WARNING> $1 traegt das Merkmal $2 nicht (beschaedigt?) - keine Zweitschrift angelegt."
+        return 0
+    fi
+    tmp="$zweit.tmp.$$"
+    if cp "$quelle" "$tmp" 2>/dev/null && chmod 0600 "$tmp" 2>/dev/null \
+       && grep -qF -- "$2" "$tmp" 2>/dev/null && mv -f "$tmp" "$zweit" 2>/dev/null; then
+        echo "<OK> Zweitschrift $1 angelegt."
+    else
+        rm -f "$tmp" 2>/dev/null
+        echo "<WARNING> Die Zweitschrift $1 liess sich nicht anlegen."
+    fi
+}
 
-
-# NICHT MITGELIEFERTE Dateien - und gerade deshalb die wichtigen.
-# Das Archiv liefert sie nie, also standen sie bis jetzt auf keiner Liste;
-# geloescht werden sie vom Installer trotzdem, samt Token und Zugangsdaten.
-if [ -s "$NETZ_CFG/vzlogger.json" ]; then
-    cp -p "$NETZ_CFG/vzlogger.json" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.json" 2>/dev/null \
-        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.json" 2>/dev/null
-fi
-if [ -s "$NETZ_CFG/vzlogger.conf" ]; then
-    cp -p "$NETZ_CFG/vzlogger.conf" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.conf" 2>/dev/null \
-        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.vzlogger.conf" 2>/dev/null
-fi
+# Die Konfiguration traegt das Zugriffstoken. NICHT MITGELIEFERT sind
+# vzlogger.json und vzlogger.conf - und gerade deshalb die wichtigen: das
+# Archiv liefert sie nie, geloescht werden sie vom Installer trotzdem.
+netz_zweitschrift smartmeter.cfg "[MAIN]"
+netz_zweitschrift vzlogger.json '"enabled"'
+netz_zweitschrift vzlogger.conf '"meters"'
 
 exit 0

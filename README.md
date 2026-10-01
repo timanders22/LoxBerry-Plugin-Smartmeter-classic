@@ -79,6 +79,25 @@ Das MQTT-Gateway ersetzt in den Themen nur `/` und `%` durch `_`; Punkte bleiben
 stehen. Der virtuelle Eingang heißt also
 `smartmeter_1234_Consumption_Total_OBIS_1.8.0`.
 
+Dazu geht in jedem Lauf das Lebenszeichen hinaus, flüchtig:
+
+    <Praefix>/status/ok        1, solange jeder eingeschaltete Lesekopf frisch ist
+    <Praefix>/status/ts        Zeit dieses Laufs (Unix-Sekunden)
+    <Praefix>/status/zaehler   umlaufender Zähler 0–999
+
+**Retained** gehen nur Zustände hinaus: `Breaker_State_Electricity_96.3.10`,
+`Tarif_Indicator_Electricity_96.14.0`, `Message_Code_96.13.1` und
+`abgleich/<n>/aktiv`. In Loxone gilt ein Zustand nur zusammen mit
+`status/ok`. Nach einem Präfixwechsel, beim Abschalten von MQTT und bei der
+Deinstallation räumt das Plugin sie ab. Gesendet wird ein Lesekopf nur, wenn
+der Lauf eine neue Messung gebracht hat; alte Werte gehen nicht erneut als
+frische hinaus.
+
+`OK` in der Zustandszeile des Endpunkts geht auf 0, sobald eine Messung älter
+ist als das Dreifache des Abfragetakts (vzLogger-Weg: 180 s), und zwar für
+jeden eingeschalteten Lesekopf einzeln; hinten in der Zeile stehen dazu
+`KOPF1_OK`, `KOPF1_ALTER` usw.
+
 ### In der vzLogger-Betriebsart abgeleitete Werte
 
 vzlogger liefert weder Zeitstempel noch die kalkulierten Leistungen. Das Plugin
@@ -970,6 +989,38 @@ Eine Zahl mit geratener Einheit wäre in einer Kostenrechnung um den Faktor
 * **Die Kostenrechnung selbst gibt es noch nicht.** Sie folgt, sobald
   `einheit_vz` belegt ist — ohne Einheit ist eine Kostenzahl keine.
 
+## Fassung 2.8.5
+
+Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/Smartmeter_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 3, 4, 8, 16, 19 und 26).
+Gemessen mit künstlichen, CRC-gültigen SML-Telegrammen durch den echten Leser, Attrappen für D0, vzlogger, Broker und Gateway, unter PHP 7.4 und 8.5 sowie im Installer-Prüfstand; nicht am Gerät, nicht an einem echten Zähler. Der SML-Weg liefert vorher = nachher dieselben Werte.
+
+* **Ausfall wird erkannt:** Ein schweigender D0-Zähler erzeugt keine frische „0 W“
+  mehr; die alten Werte bleiben stehen und altern. Ein alter vzLogger-Wert behält sein
+  Alter. Scheitert der SML-Zerleger, werden keine Altwerte erneut gesendet.
+* **`OK` mit Alter nach dem Hausmaß:** `OK=0` ab dem Dreifachen des Takts (bisher
+  Fünffach, mindestens 300 s; vzLogger 180 s). Bei mehreren Leseköpfen gilt `OK=1` nur,
+  wenn jeder frisch ist; neu `KOPFn_OK`/`KOPFn_ALTER` am Ende der Zeile, Healthcheck je
+  Kopf. **In Loxone:** Ausfall-Logik auf `OK` bzw. `status/ok` prüfen.
+* **Kosten und Abgleich:** Bei ausgefallener Preisquelle geht `quelle_ok 0` hinaus statt
+  zu schweigen; nach Mitternacht -1 statt des Werts von gestern.
+* **MQTT:** Lebenszeichen `status/ok`, `status/ts`, `status/zaehler`; Zustände
+  (Breaker_State, Tarif_Indicator, Message_Code, `abgleich/<n>/aktiv`) retained, `-` für
+  fehlende Zustände und entfernte Regeln; Abräumen bei Präfixwechsel, „MQTT aus“ und
+  Deinstallation; Abodatei für Gateway V1 wird mitgeliefert; Reiter MQTT zeigt die wirklich
+  gesendeten Themen mit Spalte „retained“. Ein Präfix mit `#`, `+`, Leerraum oder
+  Anführungszeichen wird beanstandet.
+* **Speichern:** PRG (F5 würfelt kein Token neu), bei einer Beanstandung wird nichts
+  gespeichert, die Eingaben kommen markiert zurück, nichts wird still berichtigt.
+  Zurückspielen prüft Token und Präfix, ein leeres Token behält das geltende;
+  „Einstellungen sichern“ warnt. Eine beschädigte `vzlogger.json` wird gemeldet.
+* **vzlogger:** Wächter mit Bremse; Meldungen nach Wirkung (gestartet / angehalten /
+  gescheitert); Merker erst nach erfolgreicher Paketinstallation, damit ein fremdes
+  vzlogger bei der Deinstallation nicht entfernt wird.
+* **Installer:** Neuinstallation legt alte Einstellungen nach `.alt` statt sie
+  einzuspielen; nach dem Update haben die Konfigurationsdateien 0640; die Deinstallation
+  räumt vor dem apt-Teil ab und hat Zeitgrenzen.
+* Lastgang weist ein ungültiges `stunden` ab; der Leser wird am eigenen Pfad erkannt.
+
 ## Fassung 2.8.4 — Sammelnachzug curl_close
 
 Sammelnachzug vom 30.09.2026, sonst keine Änderung: `curl_close()` wird nur
@@ -1261,6 +1312,7 @@ bekommt eine Zahl, die um den Faktor drei danebenliegt und trotzdem
 plausibel aussieht. Der Prüfstand liefert beide absichtlich weit
 auseinander und misst gegen den falschen mit.
 
+    <praefix>/kosten/quelle_ok    1 = Preisquelle erreichbar, 0 = nicht
     <praefix>/kosten/stunde_ct    die letzte VOLLE Stunde
     <praefix>/kosten/heute_ct     heute bisher, in ct
     <praefix>/kosten/heute_eur    dasselbe in Euro
@@ -1482,7 +1534,7 @@ Miniserver nicht: über eine Laufzeit hinweg Energie summieren.
 ### Die Themen
 
     <praefix>/abgleich/quelle_ok        1 = Fahrplan erreichbar
-    <praefix>/abgleich/<n>/aktiv        die Regel soll laufen
+    <praefix>/abgleich/<n>/aktiv        die Regel soll laufen (retained; "-" = Regel entfernt)
     <praefix>/abgleich/<n>/soll         kWh, Leistung mal Laufzeit
     <praefix>/abgleich/<n>/ist          kWh, gemessener Netzbezug
     <praefix>/abgleich/<n>/fehlt        kWh Fehlbetrag

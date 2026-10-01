@@ -31,6 +31,9 @@
  *            Abfragetakt liegt - und die in EINER Funktion steht
  *            (smg_alter_grenze in bin/sm_gemein.php).
  *   KOEPFE   wie viele Datendateien gelesen wurden.
+ *   KOPFn_OK, KOPFn_ALTER  (seit dem Durchgang 01.10.2026) je EINGESCHALTETEM
+ *            Lesekopf, in der Reihenfolge der Konfiguration; OK ist nur 1,
+ *            wenn jeder davon frisch ist.
  *
  * Zum Token: Er ist FREIWILLIG. Wird im Reiter "Einbindung in Loxone" keiner
  * gesetzt, verhaelt sich der Endpunkt wie bisher. Ein Pflichttoken wuerde
@@ -242,11 +245,8 @@ if ($sm_gefunden === 0) {
  * woertlich nach ihren Feldnamen, und eine neue Groesse hinten stoert sie
  * nicht. */
 $sm_vzjson = $sm_home . '/config/plugins/' . $sm_ordner . '/vzlogger.json';
-$sm_vz_an = false;
-if (is_readable($sm_vzjson)) {
-    $sm_vzd = json_decode((string) @file_get_contents($sm_vzjson), true);
-    $sm_vz_an = is_array($sm_vzd) && !empty($sm_vzd['enabled']);
-}
+$sm_vzd = smg_vz_json($sm_vzjson);
+$sm_vz_an = is_array($sm_vzd) && !empty($sm_vzd['enabled']);
 $sm_grenze = smg_alter_grenze(smg_wert($sm_cfg, 'MAIN', 'CRON', '5'), $sm_vz_an);
 $sm_zaehler = smg_zaehler_lesen($sm_shm . '/zaehler');
 
@@ -273,10 +273,28 @@ if ($sm_alter < 0) {
     $sm_ok = 0;
 }
 
+/* SEIT DEM DURCHGANG 01.10.2026 (A5): je eingeschaltetem Lesekopf ein
+ * eigenes Urteil. Bis 2.8.5 zaehlte nur die juengste Messung ueber alle
+ * Koepfe - schwieg der zweite Zaehler seit Stunden, stand trotzdem OK=1 da
+ * (gemessen, Codebericht Nr. 4: KOPF2 7200 s still, OK=1;ALTER=10). OK ist
+ * jetzt nur 1, wenn JEDER eingeschaltete Kopf frisch ist; ALTER bleibt das
+ * Alter der juengsten Messung. Die neuen Felder stehen HINTEN - bestehende
+ * Befehlserkennungen suchen woertlich nach ihren Namen. */
+$sm_je_kopf = smg_kopf_lage($sm_shm, smg_koepfe($sm_cfg, $sm_vzd), $sm_grenze);
+$sm_kopfteil = '';
+foreach ($sm_je_kopf as $sm_n => $sm_l) {
+    if (!$sm_l['ok']) {
+        $sm_ok = 0;
+    }
+    $sm_kopfteil .= ';KOPF' . ($sm_n + 1) . '_OK=' . $sm_l['ok']
+                  . ';KOPF' . ($sm_n + 1) . '_ALTER=' . $sm_l['alter'];
+}
+
 echo 'SMARTMETER;OK=' . $sm_ok
    . ';ALTER=' . $sm_alter
    . ';ZAEHLER=' . $sm_zaehler
    . ';KOEPFE=' . $sm_gefunden
-   . ';GRENZE=' . $sm_grenze . "\n";
+   . ';GRENZE=' . $sm_grenze
+   . $sm_kopfteil . "\n";
 echo "#EOF\n";
 exit(0);

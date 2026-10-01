@@ -18,6 +18,83 @@ $sm_meldung = '';
 $sm_fehler  = array();
 $sm_hinweis = '';
 $sm_notizen = array();
+/* SEIT DEM DURCHGANG 01.10.2026:
+ * O6  $sm_teilfehler - was NACH erfolgreichem Schreiben scheiterte (eigener
+ *     Kasten; bis 2.8.5 stand es unter "Nicht gespeichert:").
+ * O2  $sm_eingaben   - das beanstandete Formular samt Eingaben (X-2).
+ * O1  $sm_ist_post   - ob die Anfrage ein POST WAR, auch wenn der Wachposten
+ *     sie abweist: jeder POST endet mit einer Umleitung. */
+$sm_teilfehler = array();
+$sm_eingaben = null;
+$sm_ist_post = (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST');
+
+/** X-2: die Felder eines beanstandeten Formulars als Text (nur gueltiges
+ *  UTF-8, hoechstens 2100 Byte; eine Liste reist nicht mit). Geheimnisse hat
+ *  keines der Formulare dieser Linie. */
+function sm_eingaben_sammeln($formular, $felder, $falsch)
+{
+    $werte = array();
+    foreach ($felder as $f) {
+        if (!isset($_POST[$f]) || !is_string($_POST[$f])) {
+            continue;
+        }
+        if (strlen($_POST[$f]) <= 2100 && preg_match('//u', $_POST[$f])) {
+            $werte[$f] = $_POST[$f];
+        }
+    }
+    return array('formular' => $formular, 'werte' => $werte,
+                 'falsch' => array_values(array_unique($falsch)));
+}
+/** X-2: Ist dieses Formular das beanstandete? */
+function sm_fa($formular)
+{
+    global $sm_eingaben;
+    return is_array($sm_eingaben) && isset($sm_eingaben['formular'])
+        && $sm_eingaben['formular'] === $formular;
+}
+/** X-2: Wert eines Feldes - nach einer Beanstandung die Eingabe, sonst der gespeicherte. */
+function sm_fw($formular, $feld, $gespeichert)
+{
+    global $sm_eingaben;
+    if (sm_fa($formular) && isset($sm_eingaben['werte'][$feld])
+        && is_string($sm_eingaben['werte'][$feld])) {
+        return $sm_eingaben['werte'][$feld];
+    }
+    return (string) $gespeichert;
+}
+/** X-2: Haken - nach einer Beanstandung so, wie er abgeschickt wurde. */
+function sm_fh($formular, $feld, $gespeichert)
+{
+    global $sm_eingaben;
+    if (!sm_fa($formular)) {
+        return (bool) $gespeichert;
+    }
+    return isset($sm_eingaben['werte'][$feld]);
+}
+/** X-2: class- und aria-Attribut eines Feldes; beanstandet = rot markiert. */
+function sm_fm($feld, $klasse = '')
+{
+    global $sm_eingaben;
+    $falsch = is_array($sm_eingaben) && isset($sm_eingaben['falsch'])
+        && is_array($sm_eingaben['falsch']) && in_array($feld, $sm_eingaben['falsch'], true);
+    $k = trim($klasse . ($falsch ? ' sm-beanstandet' : ''));
+    return ($k !== '' ? ' class="' . $k . '"' : '') . ($falsch ? ' aria-invalid="true"' : '');
+}
+/** X-2: eine eingetippte Auswahl, die es nicht gibt, bleibt als markierte Option sichtbar. */
+function sm_fsel_extra($formular, $feld, $optionen)
+{
+    global $sm_eingaben;
+    if (!sm_fa($formular) || !isset($sm_eingaben['werte'][$feld])) {
+        return '';
+    }
+    $v = (string) $sm_eingaben['werte'][$feld];
+    foreach ($optionen as $o) {
+        if ((string) $o === $v) {
+            return '';
+        }
+    }
+    return '<option value="' . sm_e($v) . '" selected>' . sm_e($v) . ' (' . sm_t('ALLG.UNGUELTIG') . ')</option>';
+}
 
 /* Die Konfiguration einmal vervollstaendigen.
  *
@@ -155,6 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['laden'])) {
             $sm_fehler = array_merge($sm_fehler, $sm_mangel);
             $sm_hinweis = sm_t('SICH.ABGELEHNT');
         } else {
+            $sm_mq_alt = sm_legacy_read();
             list($sm_ok, $sm_hin) = sm_sichern_uebernehmen($sm_neu);
             $sm_notizen = array_merge($sm_notizen, $sm_hin);
             if (!$sm_ok) {
@@ -163,27 +241,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['laden'])) {
             } else {
                 $sm_cfg    = sm_vz_read();
                 $sm_legacy = sm_legacy_read();
-                // Den Dienst nachziehen UND sagen, was mit ihm geschehen ist.
+                /* Den Dienst nachziehen UND sagen, was mit ihm geschehen ist -
+                 * nach seiner WIRKUNG (C3, Durchgang 01.10.2026). */
                 $sm_was = '';
                 if ($sm_cfg['enabled']) {
-                    $sm_h = sm_vz_restart($sm_cfg);
-                    $sm_was = ($sm_h === '') ? sm_t('SICH.DIENST_NEU') : $sm_h;
+                    $sm_r = sm_vz_restart($sm_cfg);
+                    if ($sm_r['lage'] === 'gestartet') {
+                        $sm_was = sm_t('SICH.DIENST_NEU');
+                    } else {
+                        $sm_teilfehler[] = sm_e($sm_r['text']);
+                    }
                 } else {
                     $sm_was = sm_t('SICH.DIENST_AUS');
                 }
                 list($sm_cok, $sm_ctext) = sm_cron_setzen($sm_legacy['READ'] === '1',
                                                           $sm_legacy['CRON']);
-                /* $sm_cok wurde bis 2.4.2 nicht angesehen: der Fehlertext
-                 * von sm_cron_setzen() landete unveraendert in der GRUENEN
-                 * Kachel. Der Zwilling im Handler lg_speichern macht es
-                 * richtig - zwei Aufrufstellen derselben Funktion, zwei
-                 * Behandlungen. */
-                $sm_meldung = sm_t('SICH.UEBERNOMMEN') . ' ' . $sm_was;
+                /* O6 (Durchgang 01.10.2026): Erfolg und Teilfehler stehen in
+                 * ZWEI Kaesten. Bis 2.8.5 verschluckte ein gescheiterter
+                 * Cron-Eintrag die ganze Erfolgsmeldung, und unter "Nicht
+                 * gespeichert:" stand eine uebernommene Sicherung (gemessen,
+                 * Oberflaechenbericht O6 b). */
+                $sm_meldung = trim(sm_t('SICH.UEBERNOMMEN') . ' ' . $sm_was);
                 if ($sm_cok) {
                     $sm_meldung .= ' ' . $sm_ctext;
                 } else {
-                    $sm_fehler[] = $sm_ctext;
+                    $sm_teilfehler[] = $sm_ctext;
                 }
+                /* M3: ein Praefixwechsel oder "MQTT aus" aus der Sicherung
+                 * raeumt ab wie der Reiter MQTT. */
+                $sm_mq = sm_mqtt_nach_aenderung($sm_mq_alt, $sm_legacy);
+                $sm_notizen = array_merge($sm_notizen, $sm_mq['ok']);
+                $sm_teilfehler = array_merge($sm_teilfehler, $sm_mq['fehler']);
             }
         }
     }
@@ -197,11 +285,24 @@ $sm_suchvorschlag = '';
 
 /* ---------------------------------------------------------------- *
  * Formulare
+ *
+ * SEIT DEM DURCHGANG 01.10.2026 gilt fuer jedes Formular (Entscheidungen
+ * 16 und 19, Regeln/04): bei einer Beanstandung wird NICHTS gespeichert,
+ * die Eingaben kommen markiert zurueck (X-2), und nichts wird still ersetzt
+ * oder entfernt - ausser Leerraum am Rand.
  * ---------------------------------------------------------------- */
 if (isset($_POST['vz_speichern'])) {
     $neu = $sm_cfg;
+    $sm_falsch = array();
+    /* O8: eine beschaedigte vzlogger.json zeigt die Vorgaben. Speichern
+     * hiesse, die echte Einstellung mit der Vorgabe zu ueberschreiben. */
+    if (sm_vz_lage() === 'kaputt') {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.VZ_KAPUTT'),
+            '<span class="sm-mono">' . sm_e($sm_p['vzjson']) . '</span>');
+    }
     $neu['enabled'] = isset($_POST['vz_enabled']) ? 1 : 0;
-    $neu['device']  = isset($_POST['vz_device']) ? trim((string) $_POST['vz_device']) : '';
+    $neu['device']  = (isset($_POST['vz_device']) && is_string($_POST['vz_device']))
+                    ? trim($_POST['vz_device']) : '';
 
     // Zwei Leser koennen sich eine serielle Schnittstelle nicht teilen.
     // Diese Pruefung sass bis 2.3.14 NUR im Legacy-Handler; wer hier
@@ -209,58 +310,94 @@ if (isset($_POST['vz_speichern'])) {
     // einem Geraet. Die Pruefung gehoert in BEIDE Handler.
     if ($neu['enabled'] && sm_legacy_aktiv()) {
         $sm_fehler[] = sm_t('FEHLER.BEIDE_LESER_VZ');
+        $sm_falsch[] = 'vz_enabled';
     }
 
-    $prot = isset($_POST['vz_protocol']) ? (string) $_POST['vz_protocol'] : 'sml';
-    $neu['protocol'] = ($prot === 'd0') ? 'd0' : 'sml';
+    /* O3: ein unbekanntes Protokoll wurde bis 2.8.5 still zu "sml". */
+    $prot = (isset($_POST['vz_protocol']) && is_string($_POST['vz_protocol']))
+          ? trim($_POST['vz_protocol']) : '';
+    if (!in_array($prot, array('sml', 'd0'), true)) {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.PROTOKOLL'), sm_e($prot));
+        $sm_falsch[] = 'vz_protocol';
+    } else {
+        $neu['protocol'] = $prot;
+    }
 
-    $baud = isset($_POST['vz_baudrate']) ? trim((string) $_POST['vz_baudrate']) : '';
+    $baud = (isset($_POST['vz_baudrate']) && is_string($_POST['vz_baudrate']))
+          ? trim($_POST['vz_baudrate']) : '';
     if (!preg_match('/^[0-9]+$/', $baud) || (int) $baud < 300 || (int) $baud > 921600) {
         $sm_fehler[] = sm_t('FEHLER.BAUDRATE');
+        $sm_falsch[] = 'vz_baudrate';
     } else {
         $neu['baudrate'] = (int) $baud;
     }
 
-    $par = isset($_POST['vz_parity']) ? (string) $_POST['vz_parity'] : '';
+    $par = (isset($_POST['vz_parity']) && is_string($_POST['vz_parity'])) ? $_POST['vz_parity'] : '';
     if (!in_array($par, array('8n1', '7n1', '7e1', '8e1'), true)) {
         $sm_fehler[] = sm_t('FEHLER.RAHMUNG');
+        $sm_falsch[] = 'vz_parity';
     } else {
         $neu['parity'] = $par;
     }
 
-    $neu['localtime'] = (isset($_POST['vz_localtime']) && $_POST['vz_localtime'] === '0') ? 0 : 1;
+    /* O3: alles ausser "0" war bis 2.8.5 still "1". */
+    $lt = (isset($_POST['vz_localtime']) && is_string($_POST['vz_localtime'])) ? $_POST['vz_localtime'] : '';
+    if ($lt !== '0' && $lt !== '1') {
+        $sm_fehler[] = sm_t('FEHLER.ZEITSTEMPEL');
+        $sm_falsch[] = 'vz_localtime';
+    } else {
+        $neu['localtime'] = (int) $lt;
+    }
     $neu['sendudp']   = isset($_POST['vz_sendudp']) ? 1 : 0;
 
     foreach (array('udpport' => 'vz_udpport', 'httpport' => 'vz_httpport') as $k => $feld) {
-        $w = isset($_POST[$feld]) ? trim((string) $_POST[$feld]) : '';
+        $w = (isset($_POST[$feld]) && is_string($_POST[$feld])) ? trim($_POST[$feld]) : '';
         if (!preg_match('/^[0-9]+$/', $w) || (int) $w < 1 || (int) $w > 65535) {
             $sm_fehler[] = sprintf(sm_t('FEHLER.PORT'),
                                    $k === 'udpport' ? 'UDP' : 'HTTP');
+            $sm_falsch[] = $feld;
         } else {
             $neu[$k] = (int) $w;
         }
     }
 
-    // Zaehlernummer: erscheint im MQTT-Thema und im UDP-Satz. Nach der
-    // Hausregel nicht hart filtern, nur Unbrauchbares entfernen.
-    $ser = isset($_POST['vz_serial']) ? (string) $_POST['vz_serial'] : '';
-    $ser = preg_replace('/[^A-Za-z0-9_\-]/', '', $ser);
-    $neu['serial'] = ($ser !== '') ? $ser : 'vzlogger';
+    /* Zaehlernummer: erscheint im MQTT-Thema und im UDP-Satz. O3
+     * (Entscheidung 19): bis 2.8.5 wurden fremde Zeichen still entfernt
+     * ("Zaehler 1/2" -> "Zhler12") und ein leeres Feld still zu "vzlogger" -
+     * jetzt beanstandet. */
+    $ser = (isset($_POST['vz_serial']) && is_string($_POST['vz_serial'])) ? trim($_POST['vz_serial']) : '';
+    if ($ser === '') {
+        $sm_fehler[] = sm_t('FEHLER.SERIAL_LEER');
+        $sm_falsch[] = 'vz_serial';
+    } elseif (!preg_match('/^[A-Za-z0-9_\-]+$/', $ser)) {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SERIAL'), sm_e($ser));
+        $sm_falsch[] = 'vz_serial';
+    } else {
+        $neu['serial'] = $ser;
+    }
 
     // OBIS-Kanaele: einer je Zeile (oder durch Komma getrennt)
     $kanaele = array();
-    foreach (preg_split('/[\r\n,]+/', isset($_POST['vz_channels']) ? (string) $_POST['vz_channels'] : '') as $c) {
+    $kanal_falsch = false;
+    $kroh = (isset($_POST['vz_channels']) && is_string($_POST['vz_channels'])) ? $_POST['vz_channels'] : '';
+    foreach (preg_split('/[\r\n,]+/', $kroh) as $c) {
         $c = trim($c);
         if ($c === '') { continue; }
         if (!preg_match('/^[\d\.:\-\*]+$/', $c)) {
             $sm_fehler[] = sprintf(sm_t('FEHLER.OBIS'),
                                    '<span class="sm-mono">' . sm_e($c) . '</span>');
+            $kanal_falsch = true;
             continue;
         }
         $kanaele[] = $c;
     }
-    if (!$kanaele) {
-        $kanaele = sm_vz_vorgaben()['channels'];
+    /* O3: eine leere Liste wurde bis 2.8.5 still zu den drei Vorgaben. */
+    if (!$kanaele && !$kanal_falsch) {
+        $sm_fehler[] = sm_t('FEHLER.KANAELE_LEER');
+        $kanal_falsch = true;
+    }
+    if ($kanal_falsch) {
+        $sm_falsch[] = 'vz_channels';
     }
     $neu['channels'] = $kanaele;
     $neu['uuids']    = sm_vz_uuids($kanaele);
@@ -268,16 +405,31 @@ if (isset($_POST['vz_speichern'])) {
     if (!$sm_fehler) {
         if (sm_vz_write($neu)) {
             $sm_cfg = sm_vz_read();
-            sm_vz_conf_schreiben($sm_cfg);
             sm_log('vzLogger-Einstellungen gespeichert.');
-            $sm_hinweis = sm_vz_restart($sm_cfg);
-            $sm_meldung = ($sm_hinweis === '')
-                        ? sm_t('MELD.VZ_GESPEICHERT_NEUSTART')
-                        : sm_t('MELD.VZ_GESPEICHERT');
+            /* C6: ohne neue vzlogger.conf wird nicht neu gestartet - er liefe
+             * mit der alten. Bis 2.8.5 wurde der Rueckgabewert verworfen. */
+            if (!sm_vz_conf_schreiben($sm_cfg)) {
+                $sm_meldung = sm_t('MELD.VZ_GESPEICHERT');
+                $sm_teilfehler[] = sm_t('FEHLER.VZ_CONF');
+            } else {
+                $sm_r = sm_vz_restart($sm_cfg);
+                if ($sm_r['lage'] === 'gestartet') {
+                    $sm_meldung = sm_t('MELD.VZ_GESPEICHERT_NEUSTART');
+                } elseif ($sm_r['lage'] === 'angehalten') {
+                    $sm_meldung = sm_t('MELD.VZ_GESPEICHERT_ANGEHALTEN');
+                } else {
+                    $sm_meldung = sm_t('MELD.VZ_GESPEICHERT');
+                    $sm_teilfehler[] = sm_e($sm_r['text']);
+                }
+            }
         } else {
             $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_RECHTE'),
                                    '<span class="sm-mono">vzlogger.json</span>');
         }
+    } else {
+        $sm_eingaben = sm_eingaben_sammeln('vz', array('vz_enabled', 'vz_device', 'vz_protocol',
+            'vz_baudrate', 'vz_parity', 'vz_localtime', 'vz_channels', 'vz_serial', 'vz_sendudp',
+            'vz_udpport', 'vz_httpport'), $sm_falsch);
     }
     $sm_tab = 'tab-vzlogger';
 }
@@ -289,29 +441,48 @@ if (isset($_POST['vz_install'])) {
 }
 
 if (isset($_POST['vz_neustart'])) {
-    $sm_hinweis = sm_vz_restart($sm_cfg);
-    $sm_meldung = ($sm_hinweis === '') ? sm_t('MELD.VZ_NEUSTART') : '';
+    /* C3/O5: die Meldung nach der Wirkung. Bis 2.8.5 hiess es bei
+     * ausgeschalteter Betriebsart "vzlogger wurde neu gestartet". */
+    $sm_r = sm_vz_restart($sm_cfg);
+    if ($sm_r['lage'] === 'gestartet') {
+        $sm_meldung = sm_t('MELD.VZ_NEUSTART');
+    } elseif ($sm_r['lage'] === 'angehalten') {
+        $sm_meldung = sm_t('MELD.VZ_ANGEHALTEN');
+    } else {
+        $sm_teilfehler[] = sm_e($sm_r['text']);
+    }
     $sm_tab = 'tab-vzlogger';
 }
 
 if (isset($_POST['mq_speichern'])) {
-    // Hausregel: Eingaben nicht hart filtern. Nur Steuerzeichen,
-    // Anfuehrungszeichen und Leerraum entfernen - alles andere ist in einem
-    // MQTT-Thema erlaubt.
-    $t = isset($_POST['mq_topic']) ? (string) $_POST['mq_topic'] : '';
-    $t = preg_replace('/[\x00-\x1f"\x27\s]/', '', $t);
-    $t = trim($t, '/');
-    if ($t === '') { $t = 'smartmeter'; }
-    // Abschnittsbewusst schreiben: seit die Lesekoepfe eigene Abschnitte
-    // haben, darf nicht mehr zeilenweise nach dem Schluessel gesucht werden.
-    if (sm_cfg_set('MAIN', array('SENDMQTT' => isset($_POST['mq_an']) ? '1' : '0',
-                                 'MQTTTOPIC' => $t))) {
-        $sm_legacy = sm_legacy_read();
-        sm_log('MQTT-Einstellungen gespeichert (Thema ' . $t . ').');
-        $sm_meldung = sm_t('MELD.MQTT_GESPEICHERT');
+    /* M2/O3 (Entscheidung 19): bis 2.8.5 wurden Steuerzeichen,
+     * Anfuehrungszeichen und Leerraum still entfernt, ein leeres Feld still
+     * zu "smartmeter", und # und + angenommen - in einem PUBLISH-Thema
+     * unzulaessig. Jetzt EINE Regel fuer Formular und Zurueckspielen
+     * (smg_praefix_fehler); still bleibt nur Leerraum am Rand. */
+    $t = (isset($_POST['mq_topic']) && is_string($_POST['mq_topic'])) ? trim($_POST['mq_topic']) : '';
+    $sm_pf = smg_praefix_fehler($t);
+    if ($sm_pf !== '') {
+        $sm_fehler[] = sm_praefix_text($sm_pf);
+        $sm_eingaben = sm_eingaben_sammeln('mq', array('mq_an', 'mq_topic'), array('mq_topic'));
     } else {
-        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'),
-                               '<span class="sm-mono">smartmeter.cfg</span>');
+        $sm_mq_alt = sm_legacy_read();
+        // Abschnittsbewusst schreiben: seit die Lesekoepfe eigene Abschnitte
+        // haben, darf nicht mehr zeilenweise nach dem Schluessel gesucht werden.
+        if (sm_cfg_set('MAIN', array('SENDMQTT' => isset($_POST['mq_an']) ? '1' : '0',
+                                     'MQTTTOPIC' => $t))) {
+            $sm_legacy = sm_legacy_read();
+            sm_log('MQTT-Einstellungen gespeichert (Thema ' . $t . ').');
+            $sm_meldung = sm_t('MELD.MQTT_GESPEICHERT');
+            /* M3: Praefixwechsel oder "MQTT aus" - retained Zustaende unter
+             * dem bisherigen Praefix abraeumen und nachlesen. */
+            $sm_mq = sm_mqtt_nach_aenderung($sm_mq_alt, $sm_legacy);
+            $sm_notizen = array_merge($sm_notizen, $sm_mq['ok']);
+            $sm_teilfehler = array_merge($sm_teilfehler, $sm_mq['fehler']);
+        } else {
+            $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'),
+                                   '<span class="sm-mono">smartmeter.cfg</span>');
+        }
     }
     $sm_tab = 'tab-mqtt';
 }
@@ -333,9 +504,11 @@ if (isset($_POST['ab_speichern'])) {
      * beliebige Datei unterzuschieben. */
     if ($sm_ab_url !== '' && !preg_match('#^https?://#i', $sm_ab_url)) {
         $sm_fehler[] = sm_t('AB.FEHLER_URL');
+        $sm_eingaben = sm_eingaben_sammeln('ab', array('ab_aktiv', 'ab_url'), array('ab_url'));
     } elseif ($sm_ab_an && $sm_ab_url === '') {
         // Einschalten ohne Adresse waere ein Schalter ohne Wirkung.
         $sm_fehler[] = sm_t('AB.FEHLER_LEER');
+        $sm_eingaben = sm_eingaben_sammeln('ab', array('ab_aktiv', 'ab_url'), array('ab_url'));
     } elseif (!sm_cfg_set('ABGLEICH', array(
             'AKTIV' => $sm_ab_an ? '1' : '0', 'FAHRPLAN_URL' => $sm_ab_url))) {
         $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
@@ -358,11 +531,13 @@ if (isset($_POST['ko_speichern'])) {
      * unterzuschieben. */
     if ($sm_ko_url !== '' && !preg_match('#^https?://#i', $sm_ko_url)) {
         $sm_fehler[] = sm_t('KO.FEHLER_URL');
+        $sm_eingaben = sm_eingaben_sammeln('ko', array('ko_aktiv', 'ko_url'), array('ko_url'));
     } elseif ($sm_ko_an && $sm_ko_url === ''
               && trim(sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'FAHRPLAN_URL', '')) === '') {
         /* Leer heisst "nimm die Adresse des Fahrplans" - steht dort auch
          * nichts, waere das Einschalten ein Schalter ohne Wirkung. */
         $sm_fehler[] = sm_t('KO.FEHLER_LEER');
+        $sm_eingaben = sm_eingaben_sammeln('ko', array('ko_aktiv', 'ko_url'), array('ko_url'));
     } elseif (!sm_cfg_set('KOSTEN', array(
             'AKTIV' => $sm_ko_an ? '1' : '0', 'PREIS_URL' => $sm_ko_url))) {
         $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
@@ -379,67 +554,80 @@ if (isset($_POST['ko_speichern'])) {
 $sm_lg_ausgabe = '';
 
 if (isset($_POST['lg_speichern'])) {
+    /* O4 (Durchgang 01.10.2026, Entscheidung 16): ERST alles pruefen, DANN
+     * einmal schreiben. Bis 2.8.5 schrieb dieser Handler MAIN, bevor er die
+     * Profile pruefte - ein unbekanntes Profil meldete "Nicht gespeichert",
+     * waehrend CRON, UDPPORT und NAME schon in der Datei standen und der
+     * Cron-Eintrag nicht nachgezogen wurde (gemessen, Oberflaechenbericht O4). */
+    $sm_falsch = array();
     $lesen = isset($_POST['lg_read']);
-    $takt  = isset($_POST['lg_cron']) ? (string) $_POST['lg_cron'] : '5';
+    $takt  = (isset($_POST['lg_cron']) && is_string($_POST['lg_cron'])) ? $_POST['lg_cron'] : '';
     if (!array_key_exists($takt, sm_takte())) {
         $sm_fehler[] = sm_t('FEHLER.TAKT');
+        $sm_falsch[] = 'lg_cron';
     }
-    $port = isset($_POST['lg_udpport']) ? trim((string) $_POST['lg_udpport']) : '';
+    $port = (isset($_POST['lg_udpport']) && is_string($_POST['lg_udpport'])) ? trim($_POST['lg_udpport']) : '';
     if (!preg_match('/^[0-9]+$/', $port) || (int) $port < 1 || (int) $port > 65535) {
         $sm_fehler[] = sm_t('FEHLER.LG_UDPPORT');
+        $sm_falsch[] = 'lg_udpport';
     }
     // Zwei Leser koennen sich eine serielle Schnittstelle nicht teilen.
     if ($lesen && $sm_cfg['enabled']) {
         $sm_fehler[] = sm_t('FEHLER.BEIDE_LESER');
+        $sm_falsch[] = 'lg_read';
+    }
+
+    // Je Lesekopf Bezeichnung und Profil - gesammelt, nicht geschrieben.
+    $sm_alles = sm_cfg_read();
+    $profile = sm_profile();
+    $sm_felder = array('lg_read', 'lg_cron', 'lg_sendudp', 'lg_udpport');
+    foreach (sm_koepfe() as $k) {
+        $s = $k['ABSCHNITT'];
+        $sm_felder[] = 'lg_' . $s . '_name';
+        $sm_felder[] = 'lg_' . $s . '_meter';
+        if (isset($_POST['lg_' . $s . '_name']) && is_string($_POST['lg_' . $s . '_name'])) {
+            $sm_alles[$s]['NAME'] = trim($_POST['lg_' . $s . '_name']);
+        }
+        if (isset($_POST['lg_' . $s . '_meter'])) {
+            $m = is_string($_POST['lg_' . $s . '_meter']) ? $_POST['lg_' . $s . '_meter'] : '';
+            if (!array_key_exists($m, $profile)) {
+                $sm_fehler[] = sprintf(sm_t('FEHLER.PROFIL'), sm_e($s));
+                $sm_falsch[] = 'lg_' . $s . '_meter';
+            } else {
+                $sm_alles[$s]['METER'] = $m;
+            }
+        }
     }
 
     if (!$sm_fehler) {
-        $paare = array('READ' => $lesen ? '1' : '0', 'CRON' => $takt,
-                       'SENDUDP' => isset($_POST['lg_sendudp']) ? '1' : '0',
-                       'UDPPORT' => $port);
-        $ok = sm_cfg_set('MAIN', $paare);
-
-        // Je Lesekopf Bezeichnung und Profil
-        $profile = sm_profile();
-        foreach (sm_koepfe() as $k) {
-            $s = $k['ABSCHNITT'];
-            $neu = array();
-            if (isset($_POST['lg_' . $s . '_name'])) {
-                $neu['NAME'] = trim((string) $_POST['lg_' . $s . '_name']);
-            }
-            if (isset($_POST['lg_' . $s . '_meter'])) {
-                $m = (string) $_POST['lg_' . $s . '_meter'];
-                if (!array_key_exists($m, $profile)) {
-                    $sm_fehler[] = sprintf(sm_t('FEHLER.PROFIL'), sm_e($s));
-                } else {
-                    $neu['METER'] = $m;
-                }
-            }
-            if ($neu && !sm_cfg_set($s, $neu)) {
-                $ok = false;
-            }
+        if (!isset($sm_alles['MAIN']) || !is_array($sm_alles['MAIN'])) {
+            $sm_alles['MAIN'] = array();
         }
-
-        if (!$ok) {
-            $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
+        $sm_alles['MAIN']['READ']    = $lesen ? '1' : '0';
+        $sm_alles['MAIN']['CRON']    = $takt;
+        $sm_alles['MAIN']['SENDUDP'] = isset($_POST['lg_sendudp']) ? '1' : '0';
+        $sm_alles['MAIN']['UDPPORT'] = $port;
+        // EIN Schreibvorgang fuer MAIN und alle Koepfe.
+        if (!sm_cfg_write($sm_alles)) {
+            $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'),
                                    '<span class="sm-mono">smartmeter.cfg</span>');
-        } elseif (!$sm_fehler) {
+        } else {
             list($cron_ok, $cron_text) = sm_cron_setzen($lesen, $takt);
             $sm_legacy = sm_legacy_read();
             sm_cache_verwerfen();
+            $sm_meldung = sm_t('MELD.GESPEICHERT');
             if ($cron_ok) {
-                $sm_meldung = sm_t('MELD.GESPEICHERT') . ' ' . $cron_text;
+                $sm_meldung .= ' ' . $cron_text;
             } else {
-                /* Die Konfiguration IST geschrieben - sm_cfg_set() lief
-                 * weiter oben. Nur der Cron-Eintrag fehlt. Ohne diesen
-                 * Zusatz stand der Fehlertext unter der Ueberschrift
-                 * "Nicht gespeichert:", und das war die falsche Aussage:
-                 * der Takt steht in der Datei, nur eingerichtet ist er
-                 * nicht. Die Zeile "Cron-Eintrag" im Reiter Test zeigt
-                 * denselben Widerspruch. */
-                $sm_fehler[] = sm_t('CRON.NUR_EINTRAG') . ' ' . $cron_text;
+                /* Die Konfiguration IST geschrieben - nur der Cron-Eintrag
+                 * fehlt. O6: das steht im eigenen Kasten, nicht unter
+                 * "Nicht gespeichert:". Die Zeile "Cron-Eintrag" im Reiter
+                 * Test zeigt denselben Widerspruch. */
+                $sm_teilfehler[] = sm_t('CRON.NUR_EINTRAG') . ' ' . $cron_text;
             }
         }
+    } else {
+        $sm_eingaben = sm_eingaben_sammeln('lg', $sm_felder, $sm_falsch);
     }
     $sm_tab = 'tab-legacy';
 }
@@ -450,7 +638,7 @@ if (isset($_POST['lg_abfragen'])) {
 }
 
 if (isset($_POST['lg_suchlauf'])) {
-    $sm_dev = isset($_POST['lg_such_device']) ? (string) $_POST['lg_such_device'] : '';
+    $sm_dev = (isset($_POST['lg_such_device']) && is_string($_POST['lg_such_device'])) ? $_POST['lg_such_device'] : '';
     list($sm_suchzeilen, $sm_suchvorschlag) = sm_suchlauf($sm_dev);
     $sm_tab = 'tab-legacy';
 }
@@ -485,6 +673,59 @@ if (isset($_POST['lox_token_weg'])) {
             '<span class="sm-mono">smartmeter.cfg</span>');
     }
     $sm_tab = 'tab-loxone';
+}
+
+/* ==================================================================
+ * PRG: JEDER POST ENDET MIT EINER UMLEITUNG (O1, Durchgang 01.10.2026)
+ * ==================================================================
+ *
+ * Regeln/04, Entscheidung 19. Bis 2.8.5 antwortete jeder POST mit 200 und
+ * der fertigen Seite: F5 schickte "Token neu" ein zweites Mal und machte
+ * die Adresse im Miniserver erneut ungueltig; ebenso wiederholte es die
+ * Paketinstallation, den Neustart und die serielle Abfrage (gemessen,
+ * Oberflaechenbericht O1). Was der Handler zu sagen hat, reist in der
+ * Einmalmeldung. Die Downloads (Vorlage, Sicherung) haben ihre Datei oben
+ * schon geliefert. Laesst sich die Einmalmeldung nicht schreiben, wird wie
+ * bisher direkt gezeigt - eine verlorene Meldung waere schlimmer als ein
+ * F5-Risiko.
+ * ================================================================== */
+if ($sm_ist_post) {
+    $sm_inhalt = array('tab' => $sm_tab, 'meldung' => $sm_meldung, 'fehler' => $sm_fehler,
+                       'teilfehler' => $sm_teilfehler, 'hinweis' => $sm_hinweis,
+                       'notizen' => $sm_notizen, 'test_titel' => $sm_test_titel,
+                       'test_text' => $sm_test_text, 'installout' => $sm_installout,
+                       'lg_ausgabe' => $sm_lg_ausgabe, 'suchzeilen' => $sm_suchzeilen,
+                       'suchvorschlag' => $sm_suchvorschlag, 'eingaben' => $sm_eingaben);
+    if (sm_flash_schreiben($sm_inhalt)) {
+        header('Location: index.php?tab=' . rawurlencode(substr($sm_tab, 4)), true, 303);
+        exit;
+    }
+} else {
+    $sm_flash = sm_flash_lesen();
+    if ($sm_flash) {
+        if (isset($sm_flash['tab']) && is_string($sm_flash['tab'])
+            && in_array($sm_flash['tab'], $sm_reiter, true)) {
+            $sm_tab = $sm_flash['tab'];
+        }
+        foreach (array('meldung', 'hinweis', 'test_titel', 'test_text', 'installout',
+                       'lg_ausgabe', 'suchvorschlag') as $sm_fk) {
+            if (isset($sm_flash[$sm_fk]) && is_string($sm_flash[$sm_fk])) {
+                ${'sm_' . $sm_fk} = $sm_flash[$sm_fk];
+            }
+        }
+        foreach (array('fehler', 'teilfehler', 'notizen', 'suchzeilen') as $sm_fk) {
+            if (isset($sm_flash[$sm_fk]) && is_array($sm_flash[$sm_fk])) {
+                foreach ($sm_flash[$sm_fk] as $sm_ft) {
+                    if (is_string($sm_ft)) {
+                        ${'sm_' . $sm_fk}[] = $sm_ft;
+                    }
+                }
+            }
+        }
+        if (isset($sm_flash['eingaben']) && is_array($sm_flash['eingaben'])) {
+            $sm_eingaben = $sm_flash['eingaben'];
+        }
+    }
 }
 
 // Angesteckte Lesekoepfe eintragen, falls neu
@@ -526,15 +767,19 @@ $sm_token = $sm_legacy['TOKEN'];
 $sm_wirt = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
     ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
     : $sm_host;
+/* C1 (Durchgang 01.10.2026): das Token kodiert. Bis 2.8.5 stand es roh in
+ * der Adresse zum Abschreiben - mit "&" darin ergab sie 403 (gemessen,
+ * Codebericht Nr. 6, S2). Das Zurueckspielen nimmt solche Tokens jetzt
+ * nicht mehr an; die Kodierung haelt auch einen Altbestand abschreibbar. */
 $sm_endpunkt = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin'] . '/index.php'
-    . ($sm_token !== '' ? '?token=' . $sm_token : '');
+    . ($sm_token !== '' ? '?token=' . rawurlencode($sm_token) : '');
 $sm_endpunkt_selftest = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin']
-    . '/index.php?selftest=1' . ($sm_token !== '' ? '&token=' . $sm_token : '');
+    . '/index.php?selftest=1' . ($sm_token !== '' ? '&token=' . rawurlencode($sm_token) : '');
 /* Der Lastgang - dasselbe Bauteil, dasselbe Token. Eine Adresse, die
  * angezeigt wird, damit jemand sie abschreibt, traegt JEDEN Parameter,
  * den der eigene Endpunkt verlangt. */
 $sm_lastgang_url = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin']
-    . '/lastgang.php' . ($sm_token !== '' ? '?token=' . $sm_token : '');
+    . '/lastgang.php' . ($sm_token !== '' ? '?token=' . rawurlencode($sm_token) : '');
 $sm_lastgang = sm_lastgang_lage();
 
 $sm_version = sm_fassung();
@@ -619,6 +864,8 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 .sm-scheibe { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
   margin-right: 6px; vertical-align: middle; }
 .sm-gruen { background: #1a7f1a; }
+/* X-2 (Durchgang 01.10.2026): ein beanstandetes Feld. */
+.sm-wrap .sm-beanstandet { border: 2px solid #b00000 !important; background: #fff4f4 !important; }
 .sm-rot { background: #b00000; }
 </style>
 
@@ -630,6 +877,11 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 </ul></div>
 <?php } elseif ($sm_meldung !== '') { ?>
 <div class="sm-alert sm-ok"><?php echo $sm_meldung; ?></div>
+<?php } ?>
+<?php if ($sm_teilfehler) { ?>
+<div class="sm-alert sm-warn"><b><?php echo sm_t('ALLG.TEIL'); ?></b><ul>
+<?php foreach ($sm_teilfehler as $f) { echo '<li>' . $f . '</li>'; } ?>
+</ul></div>
 <?php } ?>
 <?php if ($sm_hinweis !== '') { ?>
 <div class="sm-alert sm-warn"><?php echo sm_e($sm_hinweis); ?></div>
@@ -724,6 +976,19 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 </div>
 <?php } ?>
 
+<?php
+/* O8 (Durchgang 01.10.2026): eine beschaedigte vzlogger.json wird gesagt,
+ * nicht still durch die Vorgaben ersetzt. */
+if (sm_vz_lage() === 'kaputt') { ?>
+<div class="sm-alert sm-warn"><?php printf(sm_t('VZ.KAPUTT'),
+  '<span class="sm-mono">' . sm_e($sm_p['vzjson']) . '</span>'); ?></div>
+<?php }
+/* X-2: nach einer Beanstandung die Eingaben, sonst die gespeicherten Werte. */
+$sm_vz_dev  = sm_fw('vz', 'vz_device', $sm_cfg['device']);
+$sm_vz_prot = sm_fw('vz', 'vz_protocol', $sm_cfg['protocol']);
+$sm_vz_par  = sm_fw('vz', 'vz_parity', $sm_cfg['parity']);
+$sm_vz_lt   = sm_fw('vz', 'vz_localtime', $sm_cfg['localtime'] ? '1' : '0');
+?>
 <form method="post" action="index.php">
 <input data-role="none" type="hidden" name="activetab" value="tab-vzlogger">
 <?php echo sm_fmt(); ?>
@@ -731,7 +996,7 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 <h2><?php echo sm_t('VZ.H_LESEWEG'); ?></h2>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="vz_enabled" value="1"<?php
-    echo $sm_cfg['enabled'] ? ' checked' : ''; ?>> <?php echo sm_t('VZ.LABEL_ENABLED'); ?></label>
+    echo sm_fm('vz_enabled'); echo sm_fh('vz', 'vz_enabled', $sm_cfg['enabled']) ? ' checked' : ''; ?>> <?php echo sm_t('VZ.LABEL_ENABLED'); ?></label>
   <p class="sm-small"><?php echo sm_t('VZ.HINT_EINLESER'); ?></p>
 </div>
 
@@ -747,15 +1012,15 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 <?php
 $gefunden = false;
 foreach ($sm_koepfe as $d) {
-    if ($d === $sm_cfg['device']) { $gefunden = true; }
+    if ($d === $sm_vz_dev) { $gefunden = true; }
     echo '<option value="' . sm_e($d) . '"'
-       . ($d === $sm_cfg['device'] ? ' selected' : '') . '>' . sm_e($d) . '</option>';
+       . ($d === $sm_vz_dev ? ' selected' : '') . '>' . sm_e($d) . '</option>';
 }
 // Ein gespeichertes, gerade nicht angestecktes Geraet nicht stillschweigend
 // verlieren.
-if (!$gefunden && $sm_cfg['device'] !== '') {
-    echo '<option value="' . sm_e($sm_cfg['device']) . '" selected>'
-       . sm_e($sm_cfg['device']) . ' (' . sm_t('VZ.NICHT_VORHANDEN') . ')</option>';
+if (!$gefunden && $sm_vz_dev !== '') {
+    echo '<option value="' . sm_e($sm_vz_dev) . '" selected>'
+       . sm_e($sm_vz_dev) . ' (' . sm_t('VZ.NICHT_VORHANDEN') . ')</option>';
 }
 ?>
   </select>
@@ -763,31 +1028,34 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 </div>
 <div class="sm-row">
   <label for="vz_protocol"><?php echo sm_t('VZ.LABEL_PROTOCOL'); ?></label>
-  <select data-role="none" class="sm-auswahl" id="vz_protocol" name="vz_protocol">
-    <option value="sml"<?php echo $sm_cfg['protocol'] === 'sml' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_SML'); ?></option>
-    <option value="d0"<?php echo $sm_cfg['protocol'] === 'd0' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_D0'); ?></option>
+  <select data-role="none"<?php echo sm_fm('vz_protocol', 'sm-auswahl'); ?> id="vz_protocol" name="vz_protocol">
+    <option value="sml"<?php echo $sm_vz_prot === 'sml' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_SML'); ?></option>
+    <option value="d0"<?php echo $sm_vz_prot === 'd0' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_D0'); ?></option>
+    <?php echo sm_fsel_extra('vz', 'vz_protocol', array('sml', 'd0')); ?>
   </select>
 </div>
 <div class="sm-row">
   <label for="vz_baudrate"><?php echo sm_t('VZ.LABEL_BAUDRATE'); ?></label>
-  <input data-role="none" type="text" id="vz_baudrate" name="vz_baudrate"
-         value="<?php echo sm_e($sm_cfg['baudrate']); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('vz_baudrate'); ?> id="vz_baudrate" name="vz_baudrate"
+         value="<?php echo sm_e(sm_fw('vz', 'vz_baudrate', $sm_cfg['baudrate'])); ?>">
   <p class="sm-small"><?php echo sm_t('VZ.HINT_BAUDRATE'); ?></p>
 </div>
 <div class="sm-row">
   <label for="vz_parity"><?php echo sm_t('VZ.LABEL_PARITY'); ?></label>
-  <select data-role="none" class="sm-auswahl" id="vz_parity" name="vz_parity">
+  <select data-role="none"<?php echo sm_fm('vz_parity', 'sm-auswahl'); ?> id="vz_parity" name="vz_parity">
 <?php foreach (array('8n1', '7n1', '7e1', '8e1') as $par) { ?>
     <option value="<?php echo $par; ?>"<?php
-      echo $sm_cfg['parity'] === $par ? ' selected' : ''; ?>><?php echo $par; ?></option>
+      echo $sm_vz_par === $par ? ' selected' : ''; ?>><?php echo $par; ?></option>
 <?php } ?>
+    <?php echo sm_fsel_extra('vz', 'vz_parity', array('8n1', '7n1', '7e1', '8e1')); ?>
   </select>
 </div>
 <div class="sm-row">
   <label for="vz_localtime"><?php echo sm_t('VZ.LABEL_LOCALTIME'); ?></label>
-  <select data-role="none" class="sm-auswahl" id="vz_localtime" name="vz_localtime">
-    <option value="1"<?php echo $sm_cfg['localtime'] ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_LOKALZEIT'); ?></option>
-    <option value="0"<?php echo !$sm_cfg['localtime'] ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_ZAEHLERZEIT'); ?></option>
+  <select data-role="none"<?php echo sm_fm('vz_localtime', 'sm-auswahl'); ?> id="vz_localtime" name="vz_localtime">
+    <option value="1"<?php echo $sm_vz_lt === '1' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_LOKALZEIT'); ?></option>
+    <option value="0"<?php echo $sm_vz_lt === '0' ? ' selected' : ''; ?>><?php echo sm_t('VZ.OPT_ZAEHLERZEIT'); ?></option>
+    <?php echo sm_fsel_extra('vz', 'vz_localtime', array('1', '0')); ?>
   </select>
   <p class="sm-small"><?php printf(sm_t('VZ.HINT_LOCALTIME'),
     '<span class="sm-mono">timestamp before 1990, IGNORING</span>'); ?></p>
@@ -796,8 +1064,8 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <h2><?php echo sm_t('VZ.H_KANAELE'); ?></h2>
 <div class="sm-row">
   <label for="vz_channels"><?php echo sm_t('VZ.LABEL_CHANNELS'); ?></label>
-  <textarea data-role="none" id="vz_channels" name="vz_channels"><?php
-    echo sm_e(implode("\n", $sm_cfg['channels'])); ?></textarea>
+  <textarea data-role="none"<?php echo sm_fm('vz_channels'); ?> id="vz_channels" name="vz_channels"><?php
+    echo sm_e(sm_fw('vz', 'vz_channels', implode("\n", $sm_cfg['channels']))); ?></textarea>
   <p class="sm-small"><?php echo sm_t('ALLG.VORGABE'); ?>:
   <span class="sm-mono">1-0:1.8.0</span> (<?php echo sm_t('OBIS.BEZUG'); ?>),
   <span class="sm-mono">1-0:2.8.0</span> (<?php echo sm_t('OBIS.EINSPEISUNG'); ?>),
@@ -807,24 +1075,24 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <h2><?php echo sm_t('VZ.H_WEITERGABE'); ?></h2>
 <div class="sm-row">
   <label for="vz_serial"><?php echo sm_t('VZ.LABEL_SERIAL'); ?></label>
-  <input data-role="none" type="text" id="vz_serial" name="vz_serial"
-         value="<?php echo sm_e($sm_cfg['serial']); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('vz_serial'); ?> id="vz_serial" name="vz_serial"
+         value="<?php echo sm_e(sm_fw('vz', 'vz_serial', $sm_cfg['serial'])); ?>">
   <p class="sm-small"><?php echo sm_t('VZ.HINT_SERIAL'); ?></p>
 </div>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="vz_sendudp" value="1"<?php
-    echo $sm_cfg['sendudp'] ? ' checked' : ''; ?>> <?php echo sm_t('ALLG.UDP_ZUSAETZLICH'); ?></label>
+    echo sm_fh('vz', 'vz_sendudp', $sm_cfg['sendudp']) ? ' checked' : ''; ?>> <?php echo sm_t('ALLG.UDP_ZUSAETZLICH'); ?></label>
   <p class="sm-small"><?php echo sm_t('VZ.HINT_UDP'); ?></p>
 </div>
 <div class="sm-row">
   <label for="vz_udpport"><?php echo sm_t('ALLG.UDPPORT'); ?></label>
-  <input data-role="none" type="text" id="vz_udpport" name="vz_udpport"
-         value="<?php echo sm_e($sm_cfg['udpport']); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('vz_udpport'); ?> id="vz_udpport" name="vz_udpport"
+         value="<?php echo sm_e(sm_fw('vz', 'vz_udpport', $sm_cfg['udpport'])); ?>">
 </div>
 <div class="sm-row">
   <label for="vz_httpport"><?php echo sm_t('VZ.LABEL_HTTPPORT'); ?></label>
-  <input data-role="none" type="text" id="vz_httpport" name="vz_httpport"
-         value="<?php echo sm_e($sm_cfg['httpport']); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('vz_httpport'); ?> id="vz_httpport" name="vz_httpport"
+         value="<?php echo sm_e(sm_fw('vz', 'vz_httpport', $sm_cfg['httpport'])); ?>">
   <p class="sm-small"><?php echo sm_t('VZ.HINT_HTTPPORT'); ?></p>
 </div>
 
@@ -839,6 +1107,15 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <h2><?php echo sm_t('EINST.H_SICHERUNG'); ?></h2>
 <div class="sm-small"><?php echo sm_t('EINST.SICHERUNG_HINT'); ?></div>
 <div class="sm-alert sm-warn"><?php echo sm_t('EINST.SICHERUNG_GEHEIM'); ?></div>
+<?php
+/* X-3 (Durchgang 01.10.2026): wuerde ein gespeicherter Wert das eigene
+ * Zurueckspielen nicht bestehen, steht das gelb am Knopf - nur Namen, nie
+ * Werte. Geliefert wird die Sicherung trotzdem, mit einer Zeile _warnung. */
+$sm_x3 = sm_sichern_selbstpruefung(sm_sichern_text(false));
+if ($sm_x3) { ?>
+<div class="sm-alert sm-warn"><?php printf(sm_t('EINST.X3_WARNUNG'),
+  '<span class="sm-mono">' . sm_e(implode(', ', $sm_x3)) . '</span>'); ?></div>
+<?php } ?>
 <!-- ZWEI getrennte Formulare. Das Sichern schickt einen Download und ruft
      exit auf; das Zurueckspielen braucht enctype="multipart/form-data". Wer
      beides in ein Formular legt, bekommt entweder keinen Upload oder einen
@@ -892,12 +1169,13 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <h2><?php echo sm_t('LG.H_ABFRAGE'); ?></h2>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="lg_read" value="1"<?php
-    echo $sm_lcfg_read === '1' ? ' checked' : ''; ?>> <?php echo sm_t('LG.LABEL_ENABLED'); ?></label>
+    echo sm_fm('lg_read'); echo sm_fh('lg', 'lg_read', $sm_lcfg_read === '1') ? ' checked' : ''; ?>> <?php echo sm_t('LG.LABEL_ENABLED'); ?></label>
 </div>
 <div class="sm-row">
   <label for="lg_cron"><?php echo sm_t('LG.LABEL_TAKT'); ?></label>
-  <select data-role="none" class="sm-auswahl" id="lg_cron" name="lg_cron">
-<?php foreach (sm_takte() as $wert => $t) { ?>
+  <select data-role="none"<?php echo sm_fm('lg_cron', 'sm-auswahl'); ?> id="lg_cron" name="lg_cron">
+<?php $sm_lg_takt = sm_fw('lg', 'lg_cron', $sm_lcfg_cron);
+      foreach (sm_takte() as $wert => $t) { ?>
     <option value="<?php echo $wert; ?>"<?php
       /* (string) auf BEIDE Seiten. PHP wandelt einen Feldschluessel, der wie
        * eine Ganzzahl aussieht, beim Anlegen des Feldes selbst in eine
@@ -908,19 +1186,20 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
        * und ein unveraendertes Absenden des Formulars schrieb genau den in
        * die Konfiguration. Gemessen am 02.09.2026 in 7.4.33 und 8.4.24:
        * CRON=30 vorher, CRON=M nachher. */
-      echo (string) $sm_lcfg_cron === (string) $wert ? ' selected' : ''; ?>><?php echo $t[1]; ?></option>
+      echo (string) $sm_lg_takt === (string) $wert ? ' selected' : ''; ?>><?php echo $t[1]; ?></option>
 <?php } ?>
+    <?php echo sm_fsel_extra('lg', 'lg_cron', array_map('strval', array_keys(sm_takte()))); ?>
   </select>
   <p class="sm-small"><?php echo sm_t('LG.HINT_TAKT'); ?></p>
 </div>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="lg_sendudp" value="1"<?php
-    echo $sm_lcfg_udp === '1' ? ' checked' : ''; ?>> <?php echo sm_t('ALLG.UDP_ZUSAETZLICH'); ?></label>
+    echo sm_fh('lg', 'lg_sendudp', $sm_lcfg_udp === '1') ? ' checked' : ''; ?>> <?php echo sm_t('ALLG.UDP_ZUSAETZLICH'); ?></label>
 </div>
 <div class="sm-row">
   <label for="lg_udpport"><?php echo sm_t('ALLG.UDPPORT'); ?></label>
-  <input data-role="none" type="text" id="lg_udpport" name="lg_udpport"
-         value="<?php echo sm_e($sm_lcfg_udpport); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('lg_udpport'); ?> id="lg_udpport" name="lg_udpport"
+         value="<?php echo sm_e(sm_fw('lg', 'lg_udpport', $sm_lcfg_udpport)); ?>">
   <p class="sm-small"><?php echo sm_t('LG.HINT_MQTT'); ?></p>
 </div>
 
@@ -936,14 +1215,14 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <?php } ?></h3>
 <div class="sm-row">
   <label for="<?php echo sm_e($sm_s); ?>_name"><?php echo sm_t('LG.LABEL_NAME'); ?></label>
-  <input data-role="none" type="text" id="<?php echo sm_e($sm_s); ?>_name"
+  <input data-role="none" type="text"<?php echo sm_fm('lg_' . $sm_s . '_name'); ?> id="<?php echo sm_e($sm_s); ?>_name"
          name="lg_<?php echo sm_e($sm_s); ?>_name"
-         value="<?php echo sm_e(isset($sm_k['NAME']) ? $sm_k['NAME'] : $sm_s); ?>">
+         value="<?php echo sm_e(sm_fw('lg', 'lg_' . $sm_s . '_name', isset($sm_k['NAME']) ? $sm_k['NAME'] : $sm_s)); ?>">
 </div>
 <div class="sm-row">
   <label for="<?php echo sm_e($sm_s); ?>_meter"><?php echo sm_t('LG.LABEL_PROFIL'); ?></label>
-  <select data-role="none" class="sm-auswahl" id="<?php echo sm_e($sm_s); ?>_meter" name="lg_<?php echo sm_e($sm_s); ?>_meter">
-<?php $sm_akt = isset($sm_k['METER']) ? $sm_k['METER'] : '0';
+  <select data-role="none"<?php echo sm_fm('lg_' . $sm_s . '_meter', 'sm-auswahl'); ?> id="<?php echo sm_e($sm_s); ?>_meter" name="lg_<?php echo sm_e($sm_s); ?>_meter">
+<?php $sm_akt = sm_fw('lg', 'lg_' . $sm_s . '_meter', isset($sm_k['METER']) ? $sm_k['METER'] : '0');
       /* Wie beim Abfragetakt: der Schluessel '0' ist im Feld eine Ganzzahl,
        * der Wert aus der Konfiguration eine Zeichenkette. Hier fiel es
        * bisher nicht auf, weil '0' zufaellig der erste Eintrag ist. */
@@ -951,6 +1230,7 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
     <option value="<?php echo sm_e($sm_pk); ?>"<?php
       echo (string) $sm_akt === (string) $sm_pk ? ' selected' : ''; ?>><?php echo $sm_pn; ?></option>
 <?php } ?>
+    <?php echo sm_fsel_extra('lg', 'lg_' . $sm_s . '_meter', array_map('strval', array_keys(sm_profile()))); ?>
   </select>
   <p class="sm-small"><?php echo sm_t('ALLG.GERAET'); ?>: <span class="sm-mono"><?php
     echo sm_e($sm_k['DEVICE']); ?></span> &middot; <?php echo sm_t('ALLG.AUSWAHLFELD'); ?></p>
@@ -1057,12 +1337,13 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 <?php echo sm_fmt(); ?>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="mq_an" value="1"<?php
-    echo $sm_legacy['SENDMQTT'] === '1' ? ' checked' : ''; ?>> <?php echo sm_t('MQ.LABEL_AN'); ?></label>
+    echo sm_fh('mq', 'mq_an', $sm_legacy['SENDMQTT'] === '1') ? ' checked' : ''; ?>> <?php echo sm_t('MQ.LABEL_AN'); ?></label>
 </div>
 <div class="sm-row">
   <label for="mq_topic"><?php echo sm_t('MQ.LABEL_TOPIC'); ?></label>
-  <input data-role="none" type="text" id="mq_topic" name="mq_topic"
-         value="<?php echo sm_e($sm_legacy['MQTTTOPIC']); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('mq_topic'); ?> id="mq_topic" name="mq_topic"
+         value="<?php echo sm_e(sm_fw('mq', 'mq_topic', $sm_legacy['MQTTTOPIC'])); ?>">
+  <p class="sm-small"><?php echo sm_t('MQ.HINT_TOPIC'); ?></p>
 </div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mq_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
@@ -1083,37 +1364,38 @@ if (!$gefunden && $sm_cfg['device'] !== '') {
 
 <h2><?php echo sm_t('MQ.H_THEMEN'); ?></h2>
 <p class="sm-small"><?php echo sm_t('MQ.THEMEN_HINT'); ?></p>
+<?php
+/* M1 (Durchgang 01.10.2026): die Themen, die WIRKLICH hinausgehen - je
+ * Leseweg, dazu Lebenszeichen, Kosten und Abgleich, mit Spalte "retained".
+ * Bis 2.8.5 zeigte diese Tabelle immer die Themen des vzLogger-Weges, auch
+ * wenn der klassische Leser unter <praefix>/<kopf>/... sendete; keines der
+ * gezeigten Themen kam an (gemessen, MQTT-Bericht Nr. 8). */
+foreach (sm_mqtt_themen() as $sm_gr) {
+    list($sm_gr_titel, $sm_gr_zeilen, $sm_gr_hinweis) = $sm_gr; ?>
+<h3 class="sm-h3"><?php echo sm_e($sm_gr_titel); ?></h3>
+<?php if ($sm_gr_hinweis !== '') { ?>
+<p class="sm-small"><?php echo sm_e($sm_gr_hinweis); ?></p>
+<?php }
+    if ($sm_gr_zeilen) { ?>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th style="width:48%"><?php echo sm_t('MQ.SP_THEMA'); ?></th>
-    <th style="width:12%"><?php echo sm_t('ALLG.EINHEIT'); ?></th>
+<tr><th style="width:44%"><?php echo sm_t('MQ.SP_THEMA'); ?></th>
+    <th style="width:10%"><?php echo sm_t('ALLG.EINHEIT'); ?></th>
+    <th style="width:10%"><?php echo sm_t('MQ.SP_RETAINED'); ?></th>
     <th><?php echo sm_t('ALLG.BEDEUTUNG'); ?></th></tr>
-<?php
-/* Die Themen kommen aus derselben Funktion wie die Vorlage und wie der
- * Dienst - bis 2.3.14 zeigte diese Tabelle die OBIS-Kennzahl, waehrend der
- * Dienst unter dem Feldnamen veroeffentlichte. Kein einziger der drei
- * Namen stimmte. */
-foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
-    $sm_md = sm_feld($sm_feld);
-    /* Die Einheit kommt aus sm_einheit_fuer() - derselben Funktion, aus
-     * der auch die Loxone-Vorlage schoepft, und mit demselben Weg 'vz'.
-     * Diese Tabelle zeigt die Themen des vzLOGGER-Weges; bis 2.4.3 nahm
-     * sie 'einheit', also die Einheit des KLASSISCHEN Weges, und stand
-     * damit im Widerspruch zu dem, was der Dienst liefert.
-     *
-     * Maskiert wird die Einheit; nur der Gedankenstrich fuer "keine
-     * Einheit" ist Auszeichnung und geht roh hinaus. */
-    list($sm_eh_roh, , , $sm_nk_vz) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
-    $sm_eh = ($sm_eh_roh !== '') ? sm_e($sm_eh_roh) : '&ndash;';
-    $sm_bd = $sm_md ? sm_t($sm_md['bed']) : $sm_feld;
-    ?>
-<tr><td class="sm-mono"><?php echo sm_e(sm_thema($sm_legacy['MQTTTOPIC'], $sm_cfg['serial'], $sm_feld)); ?></td>
-    <td><?php echo $sm_eh; ?></td>
+<?php foreach ($sm_gr_zeilen as $sm_zl) {
+        list($sm_th, $sm_eh, $sm_bd, $sm_rt, $sm_tx) = $sm_zl; ?>
+<tr><td class="sm-mono"><?php echo sm_e($sm_th); ?></td>
+    <td><?php echo $sm_eh !== '' ? sm_e($sm_eh) : '&ndash;'; ?></td>
+    <td><?php echo $sm_rt === null ? '&ndash;' : ($sm_rt ? sm_t('ALLG.JA') : sm_t('ALLG.NEIN')); ?></td>
     <td><?php echo sm_e($sm_bd); ?><?php
-      if ($sm_md && $sm_md['typ'] === 'text') { echo ' <i>(' . sm_t('ALLG.TEXTFELD') . ')</i>'; } ?></td></tr>
+      if ($sm_tx) { echo ' <i>(' . sm_t('ALLG.TEXTFELD') . ')</i>'; } ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<?php }
+} ?>
+<div class="sm-alert sm-info"><?php echo sm_t('MQ.RETAINED_HINT'); ?></div>
 <div class="sm-alert sm-info"><?php echo sm_t('MQ.EINHEIT_VZ'); ?></div>
 </div>
 
@@ -1273,7 +1555,7 @@ $sm_bl = sm_vz_felder($sm_cfg);
  * sprachplatzhalter_pruefen.py zaehlt die Argumente an den Kommata, und
  * ein Komma im Kommentar wird dort zu einem zweiten Argument. */
 $sm_zustandszeile = '<span class="sm-mono">'
-                  . 'SMARTMETER;OK=1;ALTER=42;ZAEHLER=137;KOEPFE=1;GRENZE=300'
+                  . 'SMARTMETER;OK=1;ALTER=42;ZAEHLER=137;KOEPFE=1;GRENZE=900;KOPF1_OK=1;KOPF1_ALTER=42'
                   . '</span>';
 ?>
 <p class="sm-small"><?php printf(sm_t('LOX.S8_ZEILE'), $sm_zustandszeile); ?></p>
@@ -1341,13 +1623,13 @@ printf(sm_t('LOX.S9_LAGE'), (int) $sm_lastgang['stunden_heute'],
 <?php echo sm_fmt(); ?>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="ab_aktiv" value="1"<?php
-    echo sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'AKTIV', '0') === '1' ? ' checked' : '';
+    echo sm_fh('ab', 'ab_aktiv', sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'AKTIV', '0') === '1') ? ' checked' : '';
     ?>> <?php echo sm_t('AB.LABEL_AKTIV'); ?></label>
 </div>
 <div class="sm-row">
   <label for="ab_url"><?php echo sm_t('AB.LABEL_URL'); ?></label>
-  <input data-role="none" type="text" id="ab_url" name="ab_url"
-         value="<?php echo sm_e(sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'FAHRPLAN_URL', '')); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('ab_url'); ?> id="ab_url" name="ab_url"
+         value="<?php echo sm_e(sm_fw('ab', 'ab_url', sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'FAHRPLAN_URL', ''))); ?>">
   <p class="sm-small"><?php echo sm_t('AB.HINT_URL'); ?></p>
 </div>
 <div class="sm-legende">
@@ -1380,7 +1662,17 @@ if ($sm_ab['da'] && $sm_ab['regeln']) { ?>
     <td class="sm-mono"><?php echo isset($sm_r['ist']) ? sm_e(number_format((float) $sm_r['ist'], 3, ',', '')) : '&ndash;'; ?></td>
     <td class="sm-mono"><?php echo isset($sm_r['fehlt']) ? sm_e(number_format((float) $sm_r['fehlt'], 3, ',', '')) : '&ndash;'; ?></td>
     <td style="color:<?php echo $sm_farbe; ?>"><?php
-      echo sm_e($sm_u !== '' ? sm_t('AB.U_' . strtoupper($sm_u)) : '&ndash;'); ?></td></tr>
+      /* Hinweis aus dem Durchgang 01.10.2026: ohne Urteil stand hier
+       * woertlich "&ndash;" (doppelt maskiert), ein unbekanntes Urteil
+       * erschien als Schluesselname AB.U_... - jetzt ein Strich bzw. das
+       * Wort mit dem Zusatz "unbekannt". */
+      if (!is_string($sm_u) || $sm_u === '') {
+          echo '&ndash;';
+      } elseif (sm_t('AB.U_' . strtoupper($sm_u)) !== 'AB.U_' . strtoupper($sm_u)) {
+          echo sm_e(sm_t('AB.U_' . strtoupper($sm_u)));
+      } else {
+          echo sm_e(sprintf(sm_t('AB.U_UNBEKANNT'), $sm_u));
+      } ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -1402,13 +1694,13 @@ if ($sm_ab['da'] && $sm_ab['regeln']) { ?>
 <?php echo sm_fmt(); ?>
 <div class="sm-row">
   <label><input data-role="none" type="checkbox" name="ko_aktiv" value="1"<?php
-    echo sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1' ? ' checked' : '';
+    echo sm_fh('ko', 'ko_aktiv', sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1') ? ' checked' : '';
     ?>> <?php echo sm_t('KO.LABEL_AKTIV'); ?></label>
 </div>
 <div class="sm-row">
   <label for="ko_url"><?php echo sm_t('KO.LABEL_URL'); ?></label>
-  <input data-role="none" type="text" id="ko_url" name="ko_url"
-         value="<?php echo sm_e(sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'PREIS_URL', '')); ?>">
+  <input data-role="none" type="text"<?php echo sm_fm('ko_url'); ?> id="ko_url" name="ko_url"
+         value="<?php echo sm_e(sm_fw('ko', 'ko_url', sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'PREIS_URL', ''))); ?>">
   <p class="sm-small"><?php echo sm_t('KO.HINT_URL'); ?></p>
 </div>
 <div class="sm-legende">

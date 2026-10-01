@@ -240,6 +240,30 @@ fi
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# DIE RECHTE NACH DEM ZURUECKSPIELEN (Durchgang 01.10.2026, I2)
+#
+# "cp -a" oben bringt den Modus aus der Zeit VOR dem Update zurueck - das
+# chmod 0640 aus postinstall.sh wirkte deshalb nie, sobald zurueckgespielt
+# wurde (Regeln/06: ein chmod vor cp -p ist wirkungslos). Am Geraet stand
+# smartmeter.cfg mit dem Zugriffstoken auf 644 (Geraet/2026-09-28,
+# gemessen; Installerbericht I2, U1). Gesetzt wird hier, NACH dem
+# Zurueckspielen und auch im Zweig "nichts zurueckzuspielen"; gemeldet wird,
+# was stat danach sagt.
+# ---------------------------------------------------------------------------
+for SM_D in smartmeter.cfg vzlogger.json vzlogger.conf; do
+	SM_PFAD="$ARGV5/config/plugins/$ARGV3/$SM_D"
+	[ -f "$SM_PFAD" ] || continue
+	chmod 0640 "$SM_PFAD" 2>/dev/null
+	SM_MODUS=$(stat -c %a "$SM_PFAD" 2>/dev/null)
+	if [ "$SM_MODUS" = "640" ]; then
+		echo "<OK> $SM_D: Rechte 0640."
+	else
+		echo "<WARNING> $SM_D: Rechte ${SM_MODUS:-unbekannt} statt 0640 - die Datei ist fuer"
+		echo "<WARNING> andere Benutzer lesbar. Von Hand: chmod 0640 $SM_PFAD"
+	fi
+done
+
+# ---------------------------------------------------------------------------
 # Liegengebliebene Sicherungen aus frueheren, nicht abgeschlossenen Upgrades
 # (ERGAENZT MIT 2.8.2, zweite Runde). preupgrade.sh legt sie beiseite, statt
 # sie zu ueberschreiben; hier stehen sie noch einmal am Ende des Protokolls,

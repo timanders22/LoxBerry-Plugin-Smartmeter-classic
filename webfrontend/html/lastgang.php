@@ -129,9 +129,17 @@ if ($sm_soll !== '' && !(($sm_ist !== '') && hash_equals($sm_soll, $sm_ist))) {
  * ab, ohne die Antwort aufzublaehen. Die Obergrenze steht, damit ein
  * "?tage=9999" nicht die ganze Historie durch den Webserver schiebt. */
 $sm_stunden = 48;
-if (isset($_GET['stunden']) && is_string($_GET['stunden'])
-    && preg_match('/^[0-9]{1,5}$/', $_GET['stunden'])) {
-    $sm_stunden = max(1, min(17520, (int) $_GET['stunden']));
+/* SEIT DEM DURCHGANG 01.10.2026 (C4; Regeln/03 Abschnitt 4: abweisen, nicht
+ * zurechtbiegen): "abc", "-5", eine Liste, 0 oder mehr als 17520 bekommen
+ * 400 - wie ein unbekanntes art. Bis 2.8.5 kamen still 48 h bzw. 17520 h
+ * zurueck, also eine plausible Antwort ueber einen anderen Zeitraum als
+ * erfragt (gemessen, Codebericht Nr. 9). Ohne stunden bleibt es bei 48. */
+if (isset($_GET['stunden'])) {
+    if (!is_string($_GET['stunden']) || !preg_match('/^[0-9]{1,5}$/', $_GET['stunden'])
+        || (int) $_GET['stunden'] < 1 || (int) $_GET['stunden'] > 17520) {
+        sm_lg_ende(400, 'STUNDEN_UNZULAESSIG');
+    }
+    $sm_stunden = (int) $_GET['stunden'];
 }
 
 /* Welche Groesse? Vorgabe ist der Bezug - danach fragt ein Tarifvergleich.

@@ -151,17 +151,18 @@ install_package()
 
 	# Merker: war vzlogger schon vorher da, wird es beim Deinstallieren
 	# des Plugins nicht angefasst.
+	#
+	# SEIT DEM DURCHGANG 01.10.2026 (I3): der Merker entsteht erst NACH
+	# erfolgreichem apt-get install (weiter unten). Bis 2.8.5 stand er schon
+	# hier - scheiterte die Einrichtung (kein Netz: exit 3), behauptete er
+	# trotzdem "dieses Plugin hat vzlogger installiert", und die
+	# Deinstallation entfernte spaeter ein von anderer Seite eingerichtetes
+	# vzlogger samt Paketquelle (gemessen, Installerbericht I3, P1).
 	mkdir -p "$(dirname "$MARKER")"
+	VZ_VORHER=0
 	if dpkg-query -W -f='${Status}' vzlogger 2>/dev/null | grep -q "install ok installed"; then
 		echo "<INFO> vzlogger war bereits installiert - es bleibt beim Deinstallieren erhalten."
-	else
-		touch "$MARKER" 2>/dev/null
-		# Nachgelesen statt angenommen: ohne Merker entfernt uninstall
-		# vzlogger spaeter NICHT, und niemand saehe hier, woran es lag.
-		if [ ! -e "$MARKER" ]; then
-			echo "<WARNING> Der Merker $MARKER liess sich nicht anlegen."
-			echo "<WARNING> Beim Deinstallieren des Plugins bliebe vzlogger stehen."
-		fi
+		VZ_VORHER=1
 	fi
 
 	configure_repository
@@ -183,6 +184,16 @@ install_package()
 	if [ -z "$newversion" ]; then
 		echo "<ERROR> vzlogger wurde installiert, ist aber nicht auffindbar"
 		exit 4
+	fi
+	# I3: der Merker - nur, wenn vzlogger VORHER fehlte und die Einrichtung
+	# gelang. Nachgelesen statt angenommen: ohne Merker entfernt uninstall
+	# vzlogger spaeter NICHT, und niemand saehe hier, woran es lag.
+	if [ "$VZ_VORHER" = "0" ] && [ -z "$oldversion" ]; then
+		touch "$MARKER" 2>/dev/null
+		if [ ! -e "$MARKER" ]; then
+			echo "<WARNING> Der Merker $MARKER liess sich nicht anlegen."
+			echo "<WARNING> Beim Deinstallieren des Plugins bliebe vzlogger stehen."
+		fi
 	fi
 	if [ -n "$oldversion" ] && [ "$oldversion" = "$newversion" ]; then
 		echo "<OK> vzlogger $newversion ist bereits aktuell"

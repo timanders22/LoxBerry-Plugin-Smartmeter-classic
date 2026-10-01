@@ -129,7 +129,16 @@ if [ -f "$VZJSON" ] && [ -f "$VZCONF" ] && grep -Eq '"enabled"[[:space:]]*:[[:sp
 		mkdir -p /dev/shm/REPLACEBYSUBFOLDER
 		chown loxberry:loxberry /dev/shm/REPLACEBYSUBFOLDER
 		su loxberry -s /bin/bash -c "nohup $VZBIN -c $VZCONF >/dev/null 2>&1 &"
-		echo "`date` - vzlogger started: $VZBIN " >>$logfile
+		# Nach der WIRKUNG melden (Durchgang 01.10.2026, C6; Regeln/03
+		# Abschnitt 5): bis 2.8.5 stand "vzlogger started" auch dann, wenn
+		# der Prozess sofort wieder fiel.
+		sleep 2
+		SM_NEU=$(sm_vz_pids)
+		if [ -n "$SM_NEU" ]; then
+			echo "`date` - vzlogger started: $VZBIN (PID $(echo $SM_NEU)) " >>$logfile
+		else
+			echo "`date` - WARNING: vzlogger was started ($VZBIN), but 2 s later no process is running - see /dev/shm/REPLACEBYSUBFOLDER/vzlogger.log " >>$logfile
+		fi
 	else
 		echo "`date` - vzlogger enabled but not installed - see plugin tab vzLogger " >>$logfile
 	fi

@@ -164,6 +164,39 @@ function sm_k_preise($url)
     return array($p, '');
 }
 
+/**
+ * Themen ueber das UDP-Relais des Gateways senden (Durchgang 01.10.2026:
+ * aus dem Hauptteil gezogen, damit auch der Ausfallzweig senden kann - A6).
+ * Rueckgabe: true, wenn das Relais erreichbar war. Vorgabe SENDMQTT '1' wie
+ * in sm_lib.php und fetch.php (M5; bis 2.8.5 stand hier '0').
+ */
+function sm_k_mqtt($cfg, $msgs)
+{
+    global $SM_GENERAL, $sm_verbose;
+    if (smg_wert($cfg, 'MAIN', 'SENDMQTT', '1') !== '1') {
+        return false;
+    }
+    $udp = 0;
+    $gen = @json_decode((string) @file_get_contents($SM_GENERAL), true);
+    if (isset($gen['Mqtt']['Udpinport'])) { $udp = (int) $gen['Mqtt']['Udpinport']; }
+    if (!$udp && isset($gen['mqtt']['udpinport'])) { $udp = (int) $gen['mqtt']['udpinport']; }
+    $praefix = trim(smg_wert($cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), '/');
+    if ($udp <= 0 || $udp >= 65536) {
+        return false;
+    }
+    $strom = @stream_socket_client('udp://127.0.0.1:' . $udp, $e1, $e2, 2);
+    if (!$strom) {
+        sm_k_log('Das UDP-Relais des Gateways auf Port ' . $udp . ' war nicht erreichbar.', 'WARN');
+        return false;
+    }
+    foreach ($msgs as $k => $v) {
+        @fwrite($strom, 'publish ' . $praefix . '/' . $k . ' ' . smg_wert_saeubern($v));
+    }
+    fclose($strom);
+    if ($sm_verbose) { printf("%d Thema/Themen gesendet.\n", count($msgs)); }
+    return true;
+}
+
 /* ==================================================================
  * --zeigen
  * ================================================================== */
@@ -207,6 +240,7 @@ if ($sm_url === '') {
 
 $sm_stand = sm_k_stand_lesen();
 $sm_jetzt = time();
+$sm_ts_vorher = (int) $sm_stand['ts'];
 $sm_stand['ts'] = $sm_jetzt;
 
 list($sm_preise, $sm_grund) = sm_k_preise($sm_url);
@@ -215,9 +249,29 @@ if ($sm_preise === null) {
      * Aussage; "unbekannt" ist hier die richtige. */
     $sm_stand['quelle_ok'] = 0;
     $sm_stand['grund'] = $sm_grund;
-    sm_k_log('Die Preisquelle ist nicht erreichbar (' . $sm_grund . ') - der '
-        . 'bisherige Stand bleibt stehen.', 'WARN');
+    /* SEIT DEM DURCHGANG 01.10.2026 (A6, Entscheidung 8): quelle_ok 0 geht
+     * hinaus - bis 2.8.5 endete dieser Zweig vor dem MQTT-Teil, und in
+     * Loxone blieb quelle_ok 1 stehen (gemessen: 0 Datagramme, Codebericht
+     * Nr. 5). Stammt der bisherige Stand von einem ANDEREN Tag, sind seine
+     * Tageswerte nicht die von heute: sie gehen als -1 ("unbekannt") hinaus
+     * und werden im Stand geleert. Am selben Tag bleiben sie stehen. */
+    $sm_msgs = array('kosten/quelle_ok' => 0);
+    if ($sm_ts_vorher <= 0 || date('Y-m-d', $sm_ts_vorher) !== date('Y-m-d', $sm_jetzt)) {
+        $sm_stand['stunde_ct'] = null;
+        $sm_stand['heute_ct'] = null;
+        $sm_stand['heute_kwh'] = null;
+        $sm_stand['stunden'] = 0;
+        $sm_msgs['kosten/stunde_ct'] = -1;
+        $sm_msgs['kosten/heute_ct'] = -1;
+        $sm_msgs['kosten/heute_eur'] = -1;
+        $sm_msgs['kosten/heute_kwh'] = -1;
+        $sm_msgs['kosten/stunden'] = 0;
+    }
+    sm_k_log('Die Preisquelle ist nicht erreichbar (' . $sm_grund . ') - '
+        . (count($sm_msgs) > 1 ? 'die Tageswerte eines frueheren Tages gelten nicht mehr.'
+                               : 'der bisherige Stand bleibt stehen.'), 'WARN');
     sm_k_atomar($SM_STAND, json_encode($sm_stand), 0640);
+    sm_k_mqtt($sm_cfg, $sm_msgs);
     exit(1);
 }
 $sm_stand['quelle_ok'] = 1;
@@ -294,41 +348,22 @@ if (!sm_k_atomar($SM_STAND, json_encode($sm_stand), 0640)) {
     $sm_ok = false;
 }
 
-/* ---- MQTT ueber das UDP-Relais des Gateways ---- */
-if (smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '0') === '1') {
-    $sm_udp = 0;
-    $sm_gen = @json_decode((string) @file_get_contents($SM_GENERAL), true);
-    if (isset($sm_gen['Mqtt']['Udpinport'])) { $sm_udp = (int) $sm_gen['Mqtt']['Udpinport']; }
-    if (!$sm_udp && isset($sm_gen['mqtt']['udpinport'])) { $sm_udp = (int) $sm_gen['mqtt']['udpinport']; }
-    $sm_praefix = trim(smg_wert($sm_cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), '/');
-    if ($sm_udp > 0 && $sm_udp < 65536) {
-        /* -1 heisst "unbekannt". Eine 0 waere eine Aussage: sie hiesse, es
-         * habe nichts gekostet. */
-        $sm_msgs = array(
-            'kosten/quelle_ok'  => (int) $sm_stand['quelle_ok'],
-            'kosten/stunde_ct'  => $sm_stunde_ct === null ? -1 : $sm_stunde_ct,
-            'kosten/heute_ct'   => $sm_stand['heute_ct'] === null ? -1 : $sm_stand['heute_ct'],
-            'kosten/heute_eur'  => $sm_stand['heute_ct'] === null ? -1
-                                   : round($sm_stand['heute_ct'] / 100.0, 3),
-            'kosten/heute_kwh'  => $sm_stand['heute_kwh'] === null ? -1 : $sm_stand['heute_kwh'],
-            'kosten/stunden'    => $sm_gerechnet,
-            'kosten/offen'      => $sm_offen,
-            'kosten/ohne_preis' => $sm_ohne_preis,
-        );
-        $sm_strom = @stream_socket_client('udp://127.0.0.1:' . $sm_udp, $sm_e1, $sm_e2, 2);
-        if ($sm_strom) {
-            foreach ($sm_msgs as $sm_k => $sm_v) {
-                @fwrite($sm_strom, 'publish ' . $sm_praefix . '/' . $sm_k . ' '
-                        . smg_wert_saeubern($sm_v));
-            }
-            fclose($sm_strom);
-            if ($sm_verbose) { printf("%d Thema/Themen gesendet.\n", count($sm_msgs)); }
-        } else {
-            sm_k_log('Das UDP-Relais des Gateways auf Port ' . $sm_udp
-                . ' war nicht erreichbar.', 'WARN');
-        }
-    }
-}
+/* ---- MQTT ueber das UDP-Relais des Gateways ----
+ *
+ * -1 heisst "unbekannt". Eine 0 waere eine Aussage: sie hiesse, es habe
+ * nichts gekostet. Seit dem Durchgang 01.10.2026 ueber sm_k_mqtt() - denselben
+ * Weg wie der Ausfallzweig oben. */
+sm_k_mqtt($sm_cfg, array(
+    'kosten/quelle_ok'  => (int) $sm_stand['quelle_ok'],
+    'kosten/stunde_ct'  => $sm_stunde_ct === null ? -1 : $sm_stunde_ct,
+    'kosten/heute_ct'   => $sm_stand['heute_ct'] === null ? -1 : $sm_stand['heute_ct'],
+    'kosten/heute_eur'  => $sm_stand['heute_ct'] === null ? -1
+                           : round($sm_stand['heute_ct'] / 100.0, 3),
+    'kosten/heute_kwh'  => $sm_stand['heute_kwh'] === null ? -1 : $sm_stand['heute_kwh'],
+    'kosten/stunden'    => $sm_gerechnet,
+    'kosten/offen'      => $sm_offen,
+    'kosten/ohne_preis' => $sm_ohne_preis,
+));
 
 if ($sm_verbose) {
     printf("%d Stunde(n) gerechnet, %d ohne Einheit, %d ohne Preis.\n",

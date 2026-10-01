@@ -578,6 +578,27 @@ function sm_konfig_probe()
     return array(1, sprintf(sm_t('PRUEF.CFG_OK'), $lage['anzahl']));
 }
 
+/**
+ * Ist vzlogger.json heil? (O8, Durchgang 01.10.2026) Die Zeile "Ist die
+ * Konfiguration heil?" prueft nur smartmeter.cfg; eine abgeschnittene
+ * vzlogger.json zeigte bis 2.8.5 still die Vorgaben, und der Reiter Test war
+ * gruen. Fehlt die Datei, gelten die Werkseinstellungen - das ist ein Zustand,
+ * kein Fehler.
+ */
+function sm_vzjson_probe()
+{
+    $p = sm_paths();
+    $lage = sm_vz_lage();
+    if ($lage === 'fehlt') {
+        return array(1, sm_t('PRUEF.VZJSON_FEHLT'));
+    }
+    if ($lage === 'kaputt') {
+        return array(0, sprintf(sm_t('PRUEF.VZJSON_KAPUTT'), $p['vzjson']));
+    }
+    $d = json_decode((string) @file_get_contents($p['vzjson']), true);
+    return array(1, sprintf(sm_t('PRUEF.VZJSON_OK'), is_array($d) ? count($d) : 0));
+}
+
 /** Kennt der Katalog seine Felder - und liest der Dienst dieselbe Datei? */
 function sm_katalog_probe()
 {
@@ -661,6 +682,7 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_HERZ'), sm_herzschlag_probe());
     $add(sm_t('PRUEF.Z_CRON'), sm_cron_lage());
     $add(sm_t('PRUEF.Z_KONFIG'), sm_konfig_probe());
+    $add(sm_t('PRUEF.Z_VZJSON'), sm_vzjson_probe());
     $add(sm_t('PRUEF.Z_KATALOG'), sm_katalog_probe());
     $add(sm_t('PRUEF.Z_THEMEN'), sm_themen_probe());
     $add(sm_t('PRUEF.Z_MUSTER'), sm_suchmuster_probe());

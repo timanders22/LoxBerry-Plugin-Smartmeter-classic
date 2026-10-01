@@ -154,6 +154,45 @@ function sm_ab_stand_lesen()
     return array_merge($leer, $d);
 }
 
+/**
+ * Zeilen array(verb, thema, wert) ueber das UDP-Relais des Gateways senden
+ * (Durchgang 01.10.2026: aus dem Hauptteil gezogen, damit auch der
+ * Ausfallzweig senden kann - A6). Rueckgabe: true, wenn das Relais
+ * erreichbar war und jede Zeile ganz geschrieben wurde - ob das Gateway sie
+ * annahm, sagt das nicht (Regeln/07). Vorgabe SENDMQTT '1' wie in sm_lib.php
+ * und fetch.php (M5; bis 2.8.5 stand hier '0'). Leere Werte gehen nie hinaus.
+ */
+function sm_ab_mqtt($cfg, $zeilen)
+{
+    global $SM_GENERAL, $sm_verbose;
+    if (smg_wert($cfg, 'MAIN', 'SENDMQTT', '1') !== '1') {
+        return false;
+    }
+    $udp = 0;
+    $gen = @json_decode((string) @file_get_contents($SM_GENERAL), true);
+    if (isset($gen['Mqtt']['Udpinport'])) { $udp = (int) $gen['Mqtt']['Udpinport']; }
+    if (!$udp && isset($gen['mqtt']['udpinport'])) { $udp = (int) $gen['mqtt']['udpinport']; }
+    $praefix = trim(smg_wert($cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), '/');
+    if ($udp <= 0 || $udp >= 65536) {
+        return false;
+    }
+    $strom = @stream_socket_client('udp://127.0.0.1:' . $udp, $e1, $e2, 2);
+    if (!$strom) {
+        sm_ab_log('Das UDP-Relais des Gateways auf Port ' . $udp . ' war nicht erreichbar.', 'WARN');
+        return false;
+    }
+    $alle = true;
+    foreach ($zeilen as $z) {
+        $w = smg_wert_saeubern($z[2]);
+        if ($w === '') { continue; }
+        $text = $z[0] . ' ' . $praefix . '/' . $z[1] . ' ' . $w;
+        if (@fwrite($strom, $text) !== strlen($text)) { $alle = false; }
+    }
+    fclose($strom);
+    if ($sm_verbose) { printf("%d Thema/Themen gesendet.\n", count($zeilen)); }
+    return $alle;
+}
+
 /** Die aktuellen Zaehlerstaende - Bezug und Einspeisung, summiert. */
 function sm_ab_zaehlerstaende($vz_an)
 {
@@ -283,6 +322,11 @@ if (is_readable($SM_VZJSON)) {
 
 $sm_stand = sm_ab_stand_lesen();
 $sm_jetzt = time();
+/* M4 (Durchgang 01.10.2026): die Regeln des vorigen Laufs und die noch nicht
+ * gemeldeten entfernten - fuer den einmaligen "-"-Versand weiter unten. */
+$sm_alt_regeln = is_array($sm_stand['regeln']) ? $sm_stand['regeln'] : array();
+$sm_entfernt_offen = (isset($sm_stand['entfernt_offen']) && is_array($sm_stand['entfernt_offen']))
+    ? array_values(array_map('strval', $sm_stand['entfernt_offen'])) : array();
 list($sm_regeln, $sm_grund) = sm_ab_fahrplan($sm_url);
 $sm_zaehler = sm_ab_zaehlerstaende($sm_vz_an);
 
@@ -297,6 +341,11 @@ if ($sm_regeln === null) {
     sm_ab_log('Der Fahrplan ist nicht erreichbar (' . $sm_grund . ') - der '
         . 'bisherige Stand bleibt stehen.', 'WARN');
     sm_ab_atomar($SM_STAND, json_encode($sm_stand), 0640);
+    /* SEIT DEM DURCHGANG 01.10.2026 (A6, Entscheidung 8): quelle_ok 0 geht
+     * hinaus. Bis 2.8.5 endete dieser Zweig vor dem MQTT-Teil - in Loxone
+     * blieb quelle_ok 1 stehen (gemessen: 0 Datagramme, Codebericht Nr. 5).
+     * Die retained Zustaende abgleich/<n>/aktiv bleiben, wie sie sind. */
+    sm_ab_mqtt($sm_cfg, array(array('publish', 'abgleich/quelle_ok', 0)));
     exit(1);
 }
 $sm_stand['quelle_ok'] = 1;
@@ -423,6 +472,16 @@ foreach ($sm_regeln as $sm_r) {
     $sm_neu[$sm_nr] = $sm_e;
 }
 $sm_stand['regeln'] = $sm_neu;
+/* M4: Regeln, die der Fahrplan nicht mehr fuehrt. */
+foreach (array_keys($sm_alt_regeln) as $sm_nr) {
+    $sm_nr = (string) $sm_nr;
+    if (!isset($sm_neu[$sm_nr]) && !in_array($sm_nr, $sm_entfernt_offen, true)
+        && preg_match('/^[0-9]+$/', $sm_nr)) {
+        $sm_entfernt_offen[] = $sm_nr;
+    }
+}
+$sm_entfernt_offen = array_values(array_diff($sm_entfernt_offen, array_map('strval', array_keys($sm_neu))));
+$sm_stand['entfernt_offen'] = $sm_entfernt_offen;
 
 $sm_ok = true;
 if (!sm_ab_atomar($SM_STAND, json_encode($sm_stand), 0640)) {
@@ -432,45 +491,40 @@ if (!sm_ab_atomar($SM_STAND, json_encode($sm_stand), 0640)) {
 
 /* ---- MQTT ueber das UDP-Relais des Gateways ----
  *
- * Derselbe Weg wie in bin/fetch_vzlogger.pl: "publish <thema> <wert>" an
+ * Derselbe Weg wie in bin/fetch_vzlogger.pl: "<verb> <thema> <wert>" an
  * den Udpinport aus general.json. Ein eigener Broker-Griff waere ein
- * zweiter Sendeweg neben dem, den das Plugin schon hat. */
-if (smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '0') === '1') {
-    $sm_udp = 0;
-    $sm_gen = @json_decode((string) @file_get_contents($SM_GENERAL), true);
-    if (isset($sm_gen['Mqtt']['Udpinport'])) { $sm_udp = (int) $sm_gen['Mqtt']['Udpinport']; }
-    if (!$sm_udp && isset($sm_gen['mqtt']['udpinport'])) { $sm_udp = (int) $sm_gen['mqtt']['udpinport']; }
-    $sm_praefix = trim(smg_wert($sm_cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), '/');
-    if ($sm_udp > 0 && $sm_udp < 65536) {
-        $sm_msgs = array('abgleich/quelle_ok' => (int) $sm_stand['quelle_ok']);
-        foreach ($sm_neu as $sm_nr => $sm_e) {
-            $sm_z = 'abgleich/' . $sm_nr . '/';
-            $sm_msgs[$sm_z . 'aktiv']   = (int) $sm_e['aktiv'];
-            $sm_msgs[$sm_z . 'soll']    = isset($sm_e['soll']) ? $sm_e['soll'] : 0;
-            $sm_msgs[$sm_z . 'ist']     = isset($sm_e['ist']) ? $sm_e['ist'] : 0;
-            $sm_msgs[$sm_z . 'fehlt']   = isset($sm_e['fehlt']) ? $sm_e['fehlt'] : 0;
-            $sm_msgs[$sm_z . 'dauer']   = isset($sm_e['dauer']) ? (int) $sm_e['dauer'] : 0;
-            $sm_msgs[$sm_z . 'sicher']  = isset($sm_e['sicher']) ? (int) $sm_e['sicher'] : 0;
-            /* Ein Zahlenwert fuer Loxone - Woerter kann der Miniserver
-             * nicht vergleichen. 1 = zieht, 0 = zieht nicht, -1 = kein
-             * Urteil (unsicher, zu kurz, kein Zaehler, ohne Leistung). */
-            $sm_u = isset($sm_e['urteil']) ? $sm_e['urteil'] : '';
-            $sm_msgs[$sm_z . 'ok'] = ($sm_u === 'zieht') ? 1
-                                   : (($sm_u === 'zieht_nicht') ? 0 : -1);
-        }
-        $sm_strom = @stream_socket_client('udp://127.0.0.1:' . $sm_udp, $sm_e1, $sm_e2, 2);
-        if ($sm_strom) {
-            foreach ($sm_msgs as $sm_k => $sm_v) {
-                $sm_text = 'publish ' . $sm_praefix . '/' . $sm_k . ' '
-                         . smg_wert_saeubern($sm_v);
-                @fwrite($sm_strom, $sm_text);
-            }
-            fclose($sm_strom);
-            if ($sm_verbose) { printf("%d Thema/Themen gesendet.\n", count($sm_msgs)); }
-        } else {
-            sm_ab_log('Das UDP-Relais des Gateways auf Port ' . $sm_udp
-                . ' war nicht erreichbar.', 'WARN');
-        }
+ * zweiter Sendeweg neben dem, den das Plugin schon hat.
+ * Seit dem Durchgang 01.10.2026 (M3, Entscheidung 3) geht aktiv RETAINED
+ * hinaus - es ist der Zustand der Regel; alles andere bleibt fluechtig. */
+$sm_zeilen = array(array('publish', 'abgleich/quelle_ok', (int) $sm_stand['quelle_ok']));
+foreach ($sm_neu as $sm_nr => $sm_e) {
+    $sm_z = 'abgleich/' . $sm_nr . '/';
+    $sm_zeilen[] = array('retain',  $sm_z . 'aktiv',  (int) $sm_e['aktiv']);
+    $sm_zeilen[] = array('publish', $sm_z . 'soll',   isset($sm_e['soll']) ? $sm_e['soll'] : 0);
+    $sm_zeilen[] = array('publish', $sm_z . 'ist',    isset($sm_e['ist']) ? $sm_e['ist'] : 0);
+    $sm_zeilen[] = array('publish', $sm_z . 'fehlt',  isset($sm_e['fehlt']) ? $sm_e['fehlt'] : 0);
+    $sm_zeilen[] = array('publish', $sm_z . 'dauer',  isset($sm_e['dauer']) ? (int) $sm_e['dauer'] : 0);
+    $sm_zeilen[] = array('publish', $sm_z . 'sicher', isset($sm_e['sicher']) ? (int) $sm_e['sicher'] : 0);
+    /* Ein Zahlenwert fuer Loxone - Woerter kann der Miniserver nicht
+     * vergleichen. 1 = zieht, 0 = zieht nicht, -1 = kein Urteil (unsicher,
+     * zu kurz, kein Zaehler, ohne Leistung). */
+    $sm_u = isset($sm_e['urteil']) ? $sm_e['urteil'] : '';
+    $sm_zeilen[] = array('publish', $sm_z . 'ok', ($sm_u === 'zieht') ? 1
+                                                 : (($sm_u === 'zieht_nicht') ? 0 : -1));
+}
+/* M4: eine entfernte Regel bekommt einmal aktiv "-" (retained, Entscheidung 5)
+ * und ok -1 ("kein Urteil", fluechtig). ok 0 hiesse "zieht nachweislich
+ * nicht" - fuer eine geloeschte Regel eine falsche Aussage. */
+foreach ($sm_entfernt_offen as $sm_nr) {
+    $sm_zeilen[] = array('retain', 'abgleich/' . $sm_nr . '/aktiv', '-');
+    $sm_zeilen[] = array('publish', 'abgleich/' . $sm_nr . '/ok', -1);
+}
+if (sm_ab_mqtt($sm_cfg, $sm_zeilen) && $sm_entfernt_offen) {
+    sm_ab_log('Regel(n) ' . implode(', ', $sm_entfernt_offen) . ' fuehrt der Fahrplan nicht mehr - '
+        . 'aktiv "-" und ok -1 gesendet.', 'INFO');
+    $sm_stand['entfernt_offen'] = array();
+    if (!sm_ab_atomar($SM_STAND, json_encode($sm_stand), 0640)) {
+        $sm_ok = false;
     }
 }
 

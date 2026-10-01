@@ -283,6 +283,9 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
     }
 
     sm_fetch_log($sm_serial . ': lese ueber ' . $sm_device . ' (Profil ' . $sm_meter . ')');
+    /* A3 (Durchgang 01.10.2026): der Zeitstempel der Messung VOR dem Lesen.
+     * Nur wenn er danach gewachsen ist, hat dieser Lauf etwas gemessen. */
+    $sm_ts_vorher = smg_ts_datei($sm_shm . '/' . $sm_serial . '.data');
     $sm_aus = array(); $sm_rc = 0;
     @exec('perl ' . $sm_befehl . ' 2>&1', $sm_aus, $sm_rc);
     if ($sm_rc !== 0) {
@@ -296,16 +299,29 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
         ? (array) @file($sm_datendatei, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES)
         : array();
 
+    /* SEIT DEM DURCHGANG 01.10.2026 (A3): gesendet wird nur eine NEUE
+     * Messung. Bis 2.8.5 ging die Datendatei bei jedem Lauf hinaus, auch
+     * wenn sm_logger.pl sie gar nicht erneuert hatte - scheiterte der
+     * SML-Zerleger, sendete jeder Minutenlauf die zwei Stunden alten Werte
+     * als frische Nachrichten, und das Protokoll sagte "<OK> ... mit Daten"
+     * (gemessen, MQTT-Bericht Nr. 2). */
+    $sm_ts_nachher = smg_ts_datei($sm_datendatei);
+    $sm_frisch = ($sm_zeilen && $sm_ts_nachher > $sm_ts_vorher);
+    $sm_senden = $sm_frisch ? $sm_zeilen : array();
     if (!$sm_zeilen) {
         sm_fetch_log($sm_serial . ': keine Daten gelesen.', 'WARN');
+    } elseif (!$sm_frisch) {
+        sm_fetch_log($sm_serial . ': keine neue Messung in diesem Lauf - die Werte von '
+             . ($sm_ts_nachher > 0 ? 'vor ' . max(0, time() - $sm_ts_nachher) . ' s' : 'unbekanntem Alter')
+             . ' werden nicht erneut gesendet.', 'WARN');
     } else {
         $sm_gelesen++;
     }
 
     // --- UDP an die Miniserver
     if ($sm_sendudp) {
-        $sm_text = $sm_zeilen
-            ? implode('; ', $sm_zeilen) . '; '
+        $sm_text = $sm_senden
+            ? implode('; ', $sm_senden) . '; '
             : $sm_serial . ': No data found';
         $sm_ms = sm_miniserver($sm_home);
         if (!$sm_ms) {
@@ -330,7 +346,8 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
         } else {
             $sm_anzahl = 0;
             $sm_fehl = 0;
-            foreach ($sm_zeilen as $sm_z) {
+            $sm_zustaende = array();
+            foreach ($sm_senden as $sm_z) {
                 if ($sm_z === '' || $sm_z[0] === '#') {
                     continue;
                 }
@@ -344,11 +361,47 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
                 if ($sm_k === '' || $sm_v === '') {
                     continue;
                 }
+                /* M3 (Durchgang 01.10.2026, Entscheidung 3): Zustaende
+                 * retained, alles andere fluechtig. Leer geht nie hinaus
+                 * (zwei Zeilen hoeher) - eine leere retain-Nutzlast loeschte. */
+                $sm_verb = smg_mqtt_retained($sm_k) ? 'retain' : 'publish';
+                if ($sm_verb === 'retain') {
+                    $sm_zustaende[] = $sm_k;
+                }
                 if (sm_udp('127.0.0.1', $sm_udpin,
-                           'publish ' . $sm_topic . '/' . $sm_serial . '/' . $sm_k . ' ' . $sm_v)) {
+                           $sm_verb . ' ' . $sm_topic . '/' . $sm_serial . '/' . $sm_k . ' ' . $sm_v)) {
                     $sm_anzahl++;
                 } else {
                     $sm_fehl++;
+                }
+            }
+            /* Ein frueher retained gesendetes Zustandsfeld, das diese
+             * ERFOLGREICHE Messung nicht mehr liefert, bekommt einmal "-"
+             * retained (Entscheidungen 5 und 8) - sonst stuende der alte
+             * Zustand fuer immer im Broker. Schweigt der Zaehler, bleibt er
+             * stehen; dann gilt status/ok. Der Merker liegt auf der Ramdisk. */
+            if ($sm_frisch) {
+                $sm_merker = $sm_shm . '/' . $sm_serial . '.retained';
+                $sm_vorher_r = is_file($sm_merker)
+                    ? array_filter(array_map('trim', (array) @file($sm_merker))) : array();
+                foreach (array_diff($sm_vorher_r, $sm_zustaende) as $sm_weg) {
+                    if (!smg_mqtt_retained($sm_weg)) {
+                        continue;
+                    }
+                    if (sm_udp('127.0.0.1', $sm_udpin,
+                               'retain ' . $sm_topic . '/' . $sm_serial . '/' . $sm_weg . ' -')) {
+                        $sm_anzahl++;
+                        sm_fetch_log($sm_serial . ': ' . $sm_weg . ' fehlt in dieser Messung - "-" retained gesendet.', 'INFO');
+                    } else {
+                        $sm_fehl++;
+                    }
+                }
+                $sm_zustaende = array_values(array_unique($sm_zustaende));
+                sort($sm_zustaende);
+                if ($sm_zustaende) {
+                    @file_put_contents($sm_merker, implode("\n", $sm_zustaende) . "\n");
+                } elseif (is_file($sm_merker)) {
+                    @unlink($sm_merker);
                 }
             }
             $sm_versucht += $sm_anzahl + $sm_fehl;
@@ -370,7 +423,43 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
  * zwei verschiedene Groessen. */
 $sm_stand = smg_zaehler_weiter($sm_shm . '/zaehler');
 
-sm_fetch_log('Durchlauf beendet, ' . $sm_gelesen . ' Lesekopf/Lesekoepfe mit Daten, '
+/* A7 (Durchgang 01.10.2026, Entscheidung 8): das Lebenszeichen auch ueber
+ * MQTT - bis 2.8.5 stand es nur in der Schlusszeile des Endpunkts.
+ * status/ok traegt dasselbe Urteil wie OK im Endpunkt (jeder eingeschaltete
+ * Lesekopf juenger als 3 x Takt), status/ts die Zeit dieses Laufs,
+ * status/zaehler den umlaufenden Zaehler. Alle drei fluechtig: ein
+ * zurueckbehaltenes ok=1 sagte nach einem Neustart "in Ordnung" ueber einen
+ * toten Dienst. Gesendet in JEDEM Lauf, auch wenn kein Zaehler antwortete. */
+if ($sm_sendmqtt) {
+    $sm_udpin = sm_gateway_udpin($sm_home);
+    if ($sm_udpin) {
+        $sm_lage = smg_kopf_lage($sm_shm, smg_koepfe($sm_cfg, null),
+                                 smg_alter_grenze(smg_wert($sm_cfg, 'MAIN', 'CRON', '5'), false));
+        $sm_status_ok = $sm_lage ? 1 : 0;
+        foreach ($sm_lage as $sm_l) {
+            if (!$sm_l['ok']) { $sm_status_ok = 0; }
+        }
+        $sm_st_fehl = 0;
+        foreach (array('status/ok' => $sm_status_ok, 'status/ts' => time(),
+                       'status/zaehler' => $sm_stand) as $sm_k => $sm_v) {
+            $sm_versucht++;
+            if (!sm_udp('127.0.0.1', $sm_udpin, 'publish ' . $sm_topic . '/' . $sm_k . ' ' . $sm_v)) {
+                $sm_st_fehl++;
+            }
+        }
+        $sm_gescheitert += $sm_st_fehl;
+        sm_fetch_log('MQTT: Lebenszeichen status/ok=' . $sm_status_ok . ' gesendet'
+             . ($sm_st_fehl ? ', ' . $sm_st_fehl . ' von 3 gescheitert' : '') . '.',
+             $sm_st_fehl ? 'WARN' : 'OK');
+        /* M3: die Abodatei des Gateways folgt dem Praefix (Regeln/07). */
+        list($sm_abo_pfad, , $sm_abo_neu) = smg_abo_datei($sm_home, $sm_ordner, $sm_topic, true);
+        if ($sm_abo_neu) {
+            sm_fetch_log('MQTT: Abodatei des Gateways gesetzt: ' . $sm_topic . '/# (' . $sm_abo_pfad . ').', 'INFO');
+        }
+    }
+}
+
+sm_fetch_log('Durchlauf beendet, ' . $sm_gelesen . ' Lesekopf/Lesekoepfe mit neuer Messung, '
      . 'Zaehler ' . $sm_stand
      . ($sm_gescheitert ? ', ' . $sm_gescheitert . ' von ' . $sm_versucht . ' Zustellungen gescheitert' : ''),
      $sm_gescheitert ? 'WARN' : 'OK');

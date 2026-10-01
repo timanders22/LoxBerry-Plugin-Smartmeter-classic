@@ -44,6 +44,25 @@ VZCONF="$ARGV5/config/plugins/$ARGV3/vzlogger.conf"
 # vzlogger stillschweigend lahmlegen. Deshalb wird vor dem Entfernen
 # demaskiert.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ZUERST: DIE RETAINED MQTT-ZUSTAENDE (Durchgang 01.10.2026, M3; Entscheidungen
+# 3 und 26). Seitdem gehen Breaker_State, Tarif_Indicator, Message_Code und
+# abgleich/<n>/aktiv retained hinaus. bin/sm_mqtt_leeren.php leert sie unter
+# dem eingestellten und jedem vorgemerkten frueheren Praefix ueber den
+# UDP-Eingang des Gateways und liest beim Broker nach; es legt nichts an.
+# VOR allem anderen: Praefix und Port stehen in der Konfiguration.
+# ---------------------------------------------------------------------------
+SM_LEEREN="$ARGV5/bin/plugins/$ARGV3/sm_mqtt_leeren.php"
+if [ -n "$ARGV3" ] && [ -f "$SM_LEEREN" ] && command -v php >/dev/null 2>&1; then
+	if command -v timeout >/dev/null 2>&1; then
+		LBHOMEDIR="$ARGV5" timeout 60 php "$SM_LEEREN" 2>&1
+	else
+		LBHOMEDIR="$ARGV5" php "$SM_LEEREN" 2>&1
+	fi
+else
+	echo "<INFO> sm_mqtt_leeren.php oder php fehlt - zurueckbehaltene MQTT-Zustaende wurden nicht geleert."
+fi
+
 if command -v systemctl >/dev/null 2>&1; then
 	systemctl unmask vzlogger.service >/dev/null 2>&1
 	systemctl stop vzlogger.service >/dev/null 2>&1
@@ -132,39 +151,14 @@ else
 	echo "<INFO> Es lief kein vzlogger mit der Konfiguration dieses Plugins."
 fi
 
-if [ -e "$MARKER" ] || [ -e "$MARKER_ALT" ]; then
-	echo "<INFO> vzlogger wurde von diesem Plugin installiert - es wird entfernt."
-	DEBIAN_FRONTEND=noninteractive apt-get purge -y vzlogger >/dev/null 2>&1
-	rm -f "$SOURCE_LIST" "$KEYRING"
-	apt-get update >/dev/null 2>&1
-	# Nachgelesen statt angenommen (Regeln/06): die Ausgabe von apt-get geht
-	# nach /dev/null, und bis 2.8.1 stand die Erfolgszeile unbedingt darunter.
-	# Gemeldet wird jetzt, was dpkg und das Dateisystem sagen.
-	SM_VZ_REST=""
-	if dpkg-query -W -f='${Status}' vzlogger 2>/dev/null | grep -q "install ok installed"; then
-		SM_VZ_REST="das Paket vzlogger"
-	fi
-	if [ -e "$SOURCE_LIST" ] || [ -e "$KEYRING" ]; then
-		SM_VZ_REST="${SM_VZ_REST:+$SM_VZ_REST und }die Paketquelle"
-	fi
-	if [ -z "$SM_VZ_REST" ]; then
-		echo "<INFO> vzlogger und die Paketquelle von volkszaehler.org sind entfernt."
-	else
-		echo "<WARNING> Nach dem Entfernen liegt noch $SM_VZ_REST auf dem System."
-		echo "<WARNING> Bitte von Hand nachsehen: apt-get purge vzlogger,"
-		echo "<WARNING> $SOURCE_LIST, $KEYRING"
-	fi
-	# Der Merker selbst ueberlebt als Nachbar mit Punkt jedes Abraeumen des
-	# Installers - hier wird er weggeraeumt, sonst hielte eine spaetere
-	# Neuinstallation ein fremdes vzlogger fuer ihr eigenes.
-	rm -f "$MARKER"
-else
-	echo "<INFO> vzlogger war vor diesem Plugin vorhanden - es bleibt unangetastet."
-fi
-
-rm -f /etc/udev/rules.d/99-smartmeter.rules
-command -v udevadm >/dev/null 2>&1 && udevadm control --reload-rules >/dev/null 2>&1
-
+# ---------------------------------------------------------------------------
+# REIHENFOLGE SEIT DEM DURCHGANG 01.10.2026 (I4): Zweitschriften,
+# Sicherungen und die Upgrade-Marke werden VOR dem apt-Teil abgeraeumt.
+# Bis 2.8.5 standen sie dahinter - blieb apt-get haengen oder wurde die
+# Deinstallation abgebrochen, lagen die Zweitschriften mit dem Token weiter
+# da, und die naechste Neuinstallation spielte sie ein (gemessen,
+# Installerbericht I4).
+# ---------------------------------------------------------------------------
 # ===========================================================================
 # DIE ZWEITSCHRIFTEN NEBEN DEM KONFIGURATIONSORDNER
 #
@@ -192,7 +186,10 @@ command -v udevadm >/dev/null 2>&1 && udevadm control --reload-rules >/dev/null 
 SM_CFGDIR="$ARGV5/config/plugins"
 SM_WEG=0
 SM_UEBRIG=0
-for SM_N in smartmeter.cfg vzlogger.json vzlogger.conf; do
+# Dazu die beiseitegelegten (.alt) aus preinstall.sh und preupgrade.sh
+# (Durchgang 01.10.2026, I1/I5) - sie tragen dasselbe Token.
+for SM_N in smartmeter.cfg vzlogger.json vzlogger.conf \
+            smartmeter.cfg.alt vzlogger.json.alt vzlogger.conf.alt; do
 	SM_Z="$SM_CFGDIR/$ARGV3.backup.$SM_N"
 	[ -f "$SM_Z" ] || continue
 	SM_GROESSE=$(wc -c < "$SM_Z" 2>/dev/null)
@@ -234,6 +231,7 @@ fi
 # liegen, ohne dass noch ein Plugin da waere, das sie erklaert.
 if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
 	rm -rf "$ARGV5/data/plugins/$ARGV3.upgrade_sicherung" 2>/dev/null
+	rm -rf "$ARGV5/data/plugins/$ARGV3.upgrade_sicherung.alt" 2>/dev/null
 	SM_LN=0
 	for SM_L in "$ARGV5/data/plugins/$ARGV3".upgrade_sicherung.liegengeblieben-*; do
 		[ -d "$SM_L" ] || continue
@@ -254,6 +252,54 @@ if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
 		echo "<WARNING> liess sich nicht entfernen. Bitte von Hand loeschen."
 	fi
 fi
+
+# Beide apt-Aufrufe mit Zeitgrenze (I4; Fehlerklasse 6 "uninstall ohne
+# timeout"). Fehlt timeout wider Erwarten, wird ohne Grenze aufgerufen.
+sm_mit_frist() {
+	if command -v timeout >/dev/null 2>&1; then
+		timeout 300 "$@"
+	else
+		"$@"
+	fi
+}
+
+if [ -e "$MARKER" ] || [ -e "$MARKER_ALT" ]; then
+	echo "<INFO> vzlogger wurde von diesem Plugin installiert - es wird entfernt."
+	sm_mit_frist env DEBIAN_FRONTEND=noninteractive apt-get purge -y vzlogger >/dev/null 2>&1
+	SM_APT1=$?
+	rm -f "$SOURCE_LIST" "$KEYRING"
+	sm_mit_frist apt-get update >/dev/null 2>&1
+	SM_APT2=$?
+	if [ "$SM_APT1" = "124" ] || [ "$SM_APT2" = "124" ]; then
+		echo "<WARNING> apt-get brach nach 300 s ab (Zeitgrenze) - der Paketstand unten ist nachgelesen."
+	fi
+	# Nachgelesen statt angenommen (Regeln/06): die Ausgabe von apt-get geht
+	# nach /dev/null, und bis 2.8.1 stand die Erfolgszeile unbedingt darunter.
+	# Gemeldet wird jetzt, was dpkg und das Dateisystem sagen.
+	SM_VZ_REST=""
+	if dpkg-query -W -f='${Status}' vzlogger 2>/dev/null | grep -q "install ok installed"; then
+		SM_VZ_REST="das Paket vzlogger"
+	fi
+	if [ -e "$SOURCE_LIST" ] || [ -e "$KEYRING" ]; then
+		SM_VZ_REST="${SM_VZ_REST:+$SM_VZ_REST und }die Paketquelle"
+	fi
+	if [ -z "$SM_VZ_REST" ]; then
+		echo "<INFO> vzlogger und die Paketquelle von volkszaehler.org sind entfernt."
+	else
+		echo "<WARNING> Nach dem Entfernen liegt noch $SM_VZ_REST auf dem System."
+		echo "<WARNING> Bitte von Hand nachsehen: apt-get purge vzlogger,"
+		echo "<WARNING> $SOURCE_LIST, $KEYRING"
+	fi
+	# Der Merker selbst ueberlebt als Nachbar mit Punkt jedes Abraeumen des
+	# Installers - hier wird er weggeraeumt, sonst hielte eine spaetere
+	# Neuinstallation ein fremdes vzlogger fuer ihr eigenes.
+	rm -f "$MARKER"
+else
+	echo "<INFO> vzlogger war vor diesem Plugin vorhanden - es bleibt unangetastet."
+fi
+
+rm -f /etc/udev/rules.d/99-smartmeter.rules
+command -v udevadm >/dev/null 2>&1 && udevadm control --reload-rules >/dev/null 2>&1
 
 # Erst pruefen, dann loeschen: ein leeres $3 traefe /dev/shm SELBST.
 if [ -n "$ARGV3" ]; then

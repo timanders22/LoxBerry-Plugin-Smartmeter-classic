@@ -614,6 +614,32 @@ function sm_vz_read()
     return $cfg;
 }
 
+/**
+ * Ist vzlogger.json heil? 'fehlt' | 'ok' | 'kaputt' (O8, Durchgang 01.10.2026).
+ *
+ * sm_vz_read() faellt bei einer abgeschnittenen Datei still auf die Vorgaben
+ * zurueck - gemessen: Haken "vzLogger" aus, Reiter Test gruen, und das naechste
+ * Speichern haette die echte Einstellung mit der Vorgabe ueberschrieben
+ * (Oberflaechenbericht O8). Leer oder unlesbar ist ebenfalls kaputt - es ist
+ * der Abbruch eines Schreibvorgangs, kein leerer Zustand.
+ */
+function sm_vz_lage()
+{
+    $datei = sm_paths()['vzjson'];
+    clearstatcache(true, $datei);
+    if (!file_exists($datei)) {
+        return 'fehlt';
+    }
+    if (!is_readable($datei)) {
+        return 'kaputt';
+    }
+    $roh = (string) @file_get_contents($datei);
+    if (trim($roh) === '') {
+        return 'kaputt';
+    }
+    return is_array(json_decode($roh, true)) ? 'ok' : 'kaputt';
+}
+
 function sm_vz_write($cfg)
 {
     return sm_json_schreiben(sm_paths()['vzjson'], $cfg, 0640);
@@ -1304,21 +1330,38 @@ function sm_upgrade_laeuft()
     return ($alter >= 0 && $alter < 3600);
 }
 
+/**
+ * vzlogger anhalten und - bei eingeschalteter Betriebsart - wieder starten.
+ *
+ * SEIT DEM DURCHGANG 01.10.2026 (C3, O5): die Rueckgabe sagt, was GESCHAH:
+ *     array('lage' => 'gestartet' | 'angehalten' | 'gescheitert', 'text' => ...)
+ * 'text' ist bei gescheitert der Grund (fuer den Anwender), sonst leer.
+ * Bis 2.8.5 kam bei ausgeschalteter Betriebsart '' zurueck, und die
+ * Oberflaeche meldete "vzlogger wurde neu gestartet", obwohl er angehalten
+ * war; blieb ein Prozess uebrig, ebenso (gemessen, Oberflaechenbericht O5,
+ * Codebericht Nr. 8). Der Ablauf selbst ist unveraendert: auch wenn ein alter
+ * Prozess stehen bleibt, wird wie bisher ein Start versucht - das Urteil ist
+ * dann trotzdem "gescheitert" (Frage im Baubericht).
+ */
 function sm_vz_restart($cfg)
 {
     $p = sm_paths();
     @mkdir($p['shm'], 0775, true);
     $halt = sm_vz_anhalten();
     sm_cache_verwerfen();
+    $uebrig = '';
     if ($halt['uebrig']) {
-        sm_log('vzlogger liess sich nicht beenden (PID '
-             . implode(' ', $halt['uebrig']) . ').', 'ERROR');
+        $uebrig = implode(' ', $halt['uebrig']);
+        sm_log('vzlogger liess sich nicht beenden (PID ' . $uebrig . ').', 'ERROR');
     } elseif ($halt['beendet']) {
         sm_log('vzlogger beendet (PID ' . implode(' ', $halt['beendet']) . ').');
     }
     if (!$cfg['enabled']) {
+        if ($uebrig !== '') {
+            return array('lage' => 'gescheitert', 'text' => sprintf(sm_t('VZ.NICHT_BEENDET'), $uebrig));
+        }
         sm_log('vzlogger angehalten (Betriebsart ausgeschaltet).');
-        return '';
+        return array('lage' => 'angehalten', 'text' => '');
     }
     // Waehrend einer Aktualisierung wird nicht gestartet: der alte Prozess
     // laeuft weiter, und ein zweiter auf derselben seriellen Schnittstelle
@@ -1328,13 +1371,13 @@ function sm_vz_restart($cfg)
     if (sm_upgrade_laeuft()) {
         sm_vz_note('START ABGEBROCHEN: eine Aktualisierung dieses Plugins laeuft.');
         sm_log('vzlogger nicht gestartet - eine Aktualisierung laeuft.', 'WARNING');
-        return sm_t('VZ.UPGRADE_LAEUFT');
+        return array('lage' => 'gescheitert', 'text' => sm_t('VZ.UPGRADE_LAEUFT'));
     }
     list($bin, $warum) = sm_vz_binary();
     if ($bin === '') {
         sm_vz_note('START ABGEBROCHEN: ' . $warum);
         sm_log('vzlogger liess sich nicht starten: ' . $warum, 'ERROR');
-        return $warum;
+        return array('lage' => 'gescheitert', 'text' => $warum);
     }
     // Startfehler landen im Protokoll statt in /dev/null.
     sm_sh('nohup ' . escapeshellarg($bin) . ' -c ' . escapeshellarg($p['vzconf'])
@@ -1346,11 +1389,14 @@ function sm_vz_restart($cfg)
         sm_vz_note('START FEHLGESCHLAGEN: ' . $bin . ' -c ' . $p['vzconf']
                  . ' lief nach 2 Sekunden nicht mehr. Ursache siehe Zeilen darueber.');
         sm_log('vzlogger startete und fiel binnen zwei Sekunden aus.', 'ERROR');
-        return sm_t('VZ.START_GEFALLEN');
+        return array('lage' => 'gescheitert', 'text' => sm_t('VZ.START_GEFALLEN'));
     }
     sm_vz_note('gestartet: ' . $bin . ' (PID ' . $pid . ')');
     sm_log('vzlogger gestartet, PID ' . $pid . '.');
-    return '';
+    if ($uebrig !== '') {
+        return array('lage' => 'gescheitert', 'text' => sprintf(sm_t('VZ.NICHT_BEENDET'), $uebrig));
+    }
+    return array('lage' => 'gestartet', 'text' => '');
 }
 
 /**
@@ -1692,7 +1738,12 @@ function sm_xml_virtual_in($titel, $kommentar, $eintraege, $weg = 'legacy')
         $sig  = (!$md || $md['signed']) ? 'true' : 'false';
         // Der Kommentar wird in Loxone Config zum ANZEIGENAMEN, nicht zur
         // Dokumentation. Eine knappe Zeile, kein Fliesstext.
-        $bed  = $md ? sm_t($md['bed']) : $feld;
+        // A7 (Durchgang 01.10.2026): ein Eintrag darf Kommentar und Anzeige
+        // selbst mitbringen (die Lebenszeichen-Themen stehen nicht im Katalog).
+        $bed  = isset($e[2]) ? $e[2] : ($md ? sm_t($md['bed']) : $feld);
+        if (isset($e[3])) {
+            $einheit = (string) $e[3];
+        }
         $o .= "\t" . '<VirtualInHttpCmd Title="' . $x($t) . '" ';
         $o .= 'Comment="' . $x($bed) . '" Check=" " ';
         $o .= 'Signed="' . $sig . '" Analog="true" SourceValLow="0" DestValLow="0" '
@@ -1728,6 +1779,7 @@ function sm_vorlage()
         }
         $eintraege[] = array(sm_ve_name($praefix, $serial, $feld), $feld);
     }
+    $eintraege = array_merge($eintraege, sm_vorlage_status($praefix));
     $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR'), date('d.m.Y'), $praefix)
         . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
     return array('VI_smartmeter_mqtt.xml',
@@ -1772,6 +1824,7 @@ function sm_vorlage_legacy()
     if (!$eintraege) {
         return array('', '');
     }
+    $eintraege = array_merge($eintraege, sm_vorlage_status($praefix));
     $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR_LG'), date('d.m.Y'), $koepfe)
         . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
     return array('VI_smartmeter_klassisch.xml',
@@ -1807,8 +1860,16 @@ function sm_sichern_tabu()
     return array('FORMKEY', 'SUBFOLDER', 'SCRIPTNAME');
 }
 
-/** Die Konfiguration als Text - dieselbe Schreibweise wie smartmeter.cfg. */
-function sm_sichern_text()
+/**
+ * Die Konfiguration als Text - dieselbe Schreibweise wie smartmeter.cfg.
+ *
+ * X-3 (Durchgang 01.10.2026): wuerde ein gespeicherter Wert das eigene
+ * Zurueckspielen nicht bestehen, traegt die Datei eine Zeile
+ * "; _warnung: <Namen>" - nur Namen, nie Werte. Geliefert wird sie trotzdem;
+ * die Oberflaeche warnt gelb am Knopf. $pruefen = false fuer die Pruefung
+ * selbst (sonst rief sie sich im Kreis).
+ */
+function sm_sichern_text($pruefen = true)
 {
     $tabu = sm_sichern_tabu();
     $main = sm_legacy_read();
@@ -1846,7 +1907,30 @@ function sm_sichern_text()
             $t .= $f . '=' . sm_wert_saeubern($w) . "\n";
         }
     }
+    if ($pruefen) {
+        $sm_x3 = sm_sichern_selbstpruefung($t);
+        if ($sm_x3) {
+            $sm_kopfende = strpos($t, "\n\n");
+            $t = substr($t, 0, $sm_kopfende + 1)
+               . '; _warnung: ' . implode(', ', $sm_x3)
+               . " wuerde(n) beim Zurueckspielen abgewiesen - vorher berichtigen.\n"
+               . substr($t, $sm_kopfende + 1);
+        }
+    }
     return $t;
+}
+
+/**
+ * Welche Werte des Textes $t wuerde das Zurueckspielen abweisen? Liste der
+ * NAMEN (X-3) - dieselbe Pruefung wie beim Zurueckspielen, keine zweite.
+ */
+function sm_sichern_selbstpruefung($t)
+{
+    $r = array_pad(sm_sichern_einlesen($t), 4, array());
+    if ($r[0] !== null) {
+        return array();
+    }
+    return $r[3] ? array_values(array_unique($r[3])) : array('Aufbau');
 }
 
 /**
@@ -1951,49 +2035,55 @@ function sm_sichern_einlesen($roh)
         $mangel[] = sm_t('SICH.LEER');
     }
 
-    // Werte pruefen - dieselben Grenzen wie in den Formularen. Eine
-    // Sicherung ist eine Eingabe wie jede andere.
+    /* Werte pruefen - dieselben Grenzen wie in den Formularen. Eine
+     * Sicherung ist eine Eingabe wie jede andere.
+     *
+     * Seit dem Durchgang 01.10.2026 sammelt $namen zu jeder Beanstandung den
+     * NAMEN des Wertes - fuer die Warnung beim Sichern (X-3), die nie Werte
+     * nennt. Die Meldungen selbst sind unveraendert. */
+    $namen = array();
+    $wert = function ($name_html, $anzeige, $name) use (&$mangel, &$namen) {
+        $mangel[] = sprintf(sm_t('SICH.WERT'), $name_html, sm_e($anzeige));
+        $namen[] = $name;
+    };
     if (isset($main['CRON']) && !array_key_exists($main['CRON'], sm_takte())) {
-        $mangel[] = sprintf(sm_t('SICH.WERT'), 'CRON', sm_e($main['CRON']));
+        $wert('CRON', $main['CRON'], 'CRON');
     }
     foreach (array('UDPPORT') as $k) {
         if (isset($main[$k]) && (!preg_match('/^[0-9]+$/', $main[$k])
             || (int) $main[$k] < 1 || (int) $main[$k] > 65535)) {
-            $mangel[] = sprintf(sm_t('SICH.WERT'), $k, sm_e($main[$k]));
+            $wert($k, $main[$k], $k);
         }
     }
     foreach (array('udpport', 'httpport') as $k) {
         if (isset($vz[$k]) && (!preg_match('/^[0-9]+$/', $vz[$k])
             || (int) $vz[$k] < 1 || (int) $vz[$k] > 65535)) {
-            $mangel[] = sprintf(sm_t('SICH.WERT'), $k, sm_e($vz[$k]));
+            $wert($k, $vz[$k], $k);
         }
     }
     if (isset($vz['baudrate']) && (!preg_match('/^[0-9]+$/', $vz['baudrate'])
         || (int) $vz['baudrate'] < 300 || (int) $vz['baudrate'] > 921600)) {
-        $mangel[] = sprintf(sm_t('SICH.WERT'), 'baudrate', sm_e($vz['baudrate']));
+        $wert('baudrate', $vz['baudrate'], 'baudrate');
     }
     if (isset($vz['parity']) && !in_array($vz['parity'], array('8n1', '7n1', '7e1', '8e1'), true)) {
-        $mangel[] = sprintf(sm_t('SICH.WERT'), 'parity', sm_e($vz['parity']));
+        $wert('parity', $vz['parity'], 'parity');
     }
     if (isset($vz['protocol']) && !in_array($vz['protocol'], array('sml', 'd0'), true)) {
-        $mangel[] = sprintf(sm_t('SICH.WERT'), 'protocol', sm_e($vz['protocol']));
+        $wert('protocol', $vz['protocol'], 'protocol');
     }
-    /* Die Zaehlernummer. Das Formular saeubert sie mit genau dieser
-     * Regel (index.php), bin/fetch_vzlogger.pl ebenso - der
-     * Rueckspielweg tat es bis 2.4.2 nicht. Ein Zeichen ausserhalb
-     * dieses Vorrats laesst Dienst und Themen-Tabelle auseinanderlaufen:
-     * der Dienst veroeffentlicht unter der gesaeuberten Nummer, die
-     * Oberflaeche zeigt die ungesaeuberte an. Abgewiesen wird sie, nicht
-     * zurechtgebogen - eine Sicherung ist eine Eingabe wie jede andere. */
+    /* Die Zaehlernummer. Das Formular weist sie seit dem Durchgang
+     * 01.10.2026 ab (vorher saeuberte es sie); bin/fetch_vzlogger.pl
+     * saeubert sie. Ein Zeichen ausserhalb dieses Vorrats liesse Dienst und
+     * Themen-Tabelle auseinanderlaufen. */
     if (isset($vz['serial']) && $vz['serial'] !== ''
         && !preg_match('/^[A-Za-z0-9_\-]+$/', $vz['serial'])) {
-        $mangel[] = sprintf(sm_t('SICH.WERT'), 'serial', sm_e($vz['serial']));
+        $wert('serial', $vz['serial'], 'serial');
     }
     /* Die Kanaele - dieselbe Regel wie im Formular. */
     if (isset($vz['channels'])) {
         foreach (preg_split('/[\s,]+/', trim((string) $vz['channels'])) as $sm_c) {
             if ($sm_c !== '' && !preg_match('/^[\d\.:\-\*]+$/', $sm_c)) {
-                $mangel[] = sprintf(sm_t('SICH.WERT'), 'channels', sm_e($sm_c));
+                $wert('channels', $sm_c, 'channels');
             }
         }
     }
@@ -2001,13 +2091,29 @@ function sm_sichern_einlesen($roh)
      * je nach Lesestelle verschieden ausgelegt. */
     foreach (array('READ', 'SENDMQTT', 'SENDUDP') as $k) {
         if (isset($main[$k]) && $main[$k] !== '0' && $main[$k] !== '1') {
-            $mangel[] = sprintf(sm_t('SICH.WERT'), $k, sm_e($main[$k]));
+            $wert($k, $main[$k], $k);
         }
     }
     foreach (array('enabled', 'localtime', 'sendudp') as $k) {
         if (isset($vz[$k]) && (string) $vz[$k] !== '0' && (string) $vz[$k] !== '1') {
-            $mangel[] = sprintf(sm_t('SICH.WERT'), $k, sm_e((string) $vz[$k]));
+            $wert($k, (string) $vz[$k], $k);
         }
+    }
+    /* C1 (Durchgang 01.10.2026, Klasse 12): das Themenpraefix mit DERSELBEN
+     * Regel wie das Formular. Bis 2.8.5 nahm der Rueckspielweg jeden Wert -
+     * "smart meter" landete im Gateway unter "smart/..." (gemessen,
+     * Codebericht Nr. 6, S4). */
+    if (isset($main['MQTTTOPIC']) && smg_praefix_fehler($main['MQTTTOPIC']) !== '') {
+        $wert('MQTTTOPIC', $main['MQTTTOPIC'], 'MQTTTOPIC');
+    }
+    /* C1: das Token nur als Zufallsmuster. Leer ist zulaessig und behaelt
+     * das geltende (sm_sichern_uebernehmen). Der Wert wird NICHT angezeigt -
+     * er ist ein Geheimnis. "ab&cd" machte die angezeigte Adresse bis 2.8.5
+     * unbrauchbar (403, gemessen S2). */
+    if (isset($main['TOKEN']) && $main['TOKEN'] !== ''
+        && !preg_match('/^[A-Za-z0-9_\-]{8,128}$/', $main['TOKEN'])) {
+        $mangel[] = sm_t('SICH.TOKEN_WERT');
+        $namen[] = 'TOKEN';
     }
     /* Zwei Leser koennen sich eine serielle Schnittstelle nicht teilen.
      * Beide Formular-Handler weisen das ab; der Rueckspielweg ist der
@@ -2020,20 +2126,21 @@ function sm_sichern_einlesen($roh)
         ? ((string) $vz['enabled'] === '1') : (bool) sm_vz_read()['enabled'];
     if ($sm_read_neu && $sm_vz_neu) {
         $mangel[] = sm_t('FEHLER.BEIDE_LESER');
+        $namen[] = 'READ/enabled';
     }
     $profile = sm_profile();
     foreach ($koepfe as $s => $w) {
         if (isset($w['METER']) && $w['METER'] !== ''
             && !array_key_exists($w['METER'], $profile)) {
-            $mangel[] = sprintf(sm_t('SICH.WERT'), 'METER ' . sm_e($s), sm_e($w['METER']));
+            $wert('METER ' . sm_e($s), $w['METER'], 'METER');
         }
     }
 
     if ($mangel) {
-        return array(null, $mangel, $hinweis);
+        return array(null, $mangel, $hinweis, $namen);
     }
     return array(array('MAIN' => $main, 'VZLOGGER' => $vz, 'KOEPFE' => $koepfe),
-                 array(), $hinweis);
+                 array(), $hinweis, array());
 }
 
 /**
@@ -2046,6 +2153,17 @@ function sm_sichern_uebernehmen($neu)
 {
     $hinweis = array();
     $ok = true;
+
+    /* C1 (Durchgang 01.10.2026): ein LEERES Token in der Sicherung loescht
+     * das geltende nicht mehr. Bis 2.8.5 stand der Endpunkt danach ohne
+     * Hinweis offen (gemessen, Codebericht Nr. 6, S3). Wer ihn oeffnen will,
+     * tut es mit dem Knopf im Reiter Einbindung in Loxone. */
+    if (isset($neu['MAIN']['TOKEN']) && $neu['MAIN']['TOKEN'] === '') {
+        unset($neu['MAIN']['TOKEN']);
+        if (sm_legacy_read()['TOKEN'] !== '') {
+            $hinweis[] = sm_t('SICH.TOKEN_BEHALTEN');
+        }
+    }
 
     if ($neu['MAIN']) {
         $ok = sm_cfg_set('MAIN', $neu['MAIN']) && $ok;
@@ -2098,14 +2216,260 @@ function sm_sichern_uebernehmen($neu)
          * trug: zwei Wahrheiten, und der naechste Neustart nahm die
          * alte. */
         $vzok = sm_vz_write($cfg);
-        if ($vzok) {
-            sm_vz_conf_schreiben(sm_vz_read());
+        /* Den Rueckgabewert ansehen (C6, Durchgang 01.10.2026): bis 2.8.5
+         * wurde er verworfen, und der Dienst lief mit der alten conf. */
+        if ($vzok && !sm_vz_conf_schreiben(sm_vz_read())) {
+            $hinweis[] = sm_t('FEHLER.VZ_CONF');
+            $vzok = false;
         }
         $ok = $vzok && $ok;
     }
     sm_cache_verwerfen();
     sm_log('Einstellungen aus einer Sicherung zurueckgespielt.');
     return array($ok, $hinweis);
+}
+
+/* ==================================================================
+ * SEIT DEM DURCHGANG 01.10.2026: Einmalmeldung (PRG), MQTT-Themen und
+ * Abraeumen, Praefix-Texte, Lebenszeichen in der Vorlage
+ * ================================================================== */
+
+/**
+ * Die Einmalmeldung fuer PRG (O1; Regeln/04, Entscheidung 19).
+ *
+ * Jeder POST-Handler endet mit einer Umleitung (303). Was er zu sagen hat,
+ * reist in dieser Datei: 0600 im Datenordner, hoechstens 120 s gueltig,
+ * gelesen und geloescht nur beim folgenden GET. Bis 2.8.5 wurde nach jedem
+ * POST unmittelbar gerendert - F5 wuerfelte das Token neu und machte damit
+ * die Adresse im Miniserver ungueltig (gemessen, Oberflaechenbericht O1).
+ */
+function sm_flash_datei()
+{
+    return sm_paths()['datadir'] . '/einmalmeldung.json';
+}
+
+function sm_flash_schreiben($inhalt)
+{
+    $inhalt['zeit'] = time();
+    $d = dirname(sm_flash_datei());
+    if (!is_dir($d)) {
+        @mkdir($d, 0775, true);
+    }
+    return sm_json_schreiben(sm_flash_datei(), $inhalt, 0600);
+}
+
+function sm_flash_lesen()
+{
+    $f = sm_flash_datei();
+    clearstatcache(true, $f);
+    if (!is_file($f)) {
+        return array();
+    }
+    $d = json_decode((string) @file_get_contents($f), true);
+    @unlink($f);
+    if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) {
+        return array();
+    }
+    return $d;
+}
+
+/** Der Text zu einem Grundwort aus smg_praefix_fehler() - die Schluessel
+ *  stehen ausgeschrieben, damit die Pruefung der Sprachschluessel sie findet. */
+function sm_praefix_text($grund)
+{
+    $t = array(
+        'leer'          => sm_t('FEHLER.PRAEFIX_LEER'),
+        'steuerzeichen' => sm_t('FEHLER.PRAEFIX_STEUERZEICHEN'),
+        'leerraum'      => sm_t('FEHLER.PRAEFIX_LEERRAUM'),
+        'anfuehrung'    => sm_t('FEHLER.PRAEFIX_ANFUEHRUNG'),
+        'platzhalter'   => sm_t('FEHLER.PRAEFIX_PLATZHALTER'),
+        'schraegstrich' => sm_t('FEHLER.PRAEFIX_SCHRAEGSTRICH'),
+        'lang'          => sm_t('FEHLER.PRAEFIX_LANG'),
+    );
+    return isset($t[$grund]) ? $t[$grund] : sm_t('FEHLER.PRAEFIX_LEER');
+}
+
+/**
+ * Was nach einer Aenderung von "MQTT an" oder Praefix zu tun ist - aus dem
+ * Reiter MQTT und nach dem Zurueckspielen einer Sicherung (M3; Entscheidungen
+ * 3 und 26; Bauart mo_mqtt_nach_aenderung(), Robonect 1.1.15).
+ *
+ * War MQTT an und wechselt das Praefix oder wird MQTT abgeschaltet, werden
+ * die retained Zustaende unter dem BISHERIGEN Praefix sofort geleert und
+ * beim Broker nachgelesen. Ein gewechseltes Praefix wird vorgemerkt, bis der
+ * Broker bestaetigt, dass nichts mehr darunter steht - die Deinstallation
+ * leert vorgemerkte mit. Die Abodatei des Gateways folgt dem Praefix.
+ *
+ * Rueckgabe array('ok' => Meldungen, 'fehler' => Meldungen), maskiert.
+ */
+function sm_mqtt_nach_aenderung(array $alt, array $neu)
+{
+    $aus = array('ok' => array(), 'fehler' => array());
+    if (!function_exists('smg_mqtt_raeumen')) {
+        return $aus;
+    }
+    $p = sm_paths();
+    $pa = trim((string) $alt['MQTTTOPIC']);
+    $pn = trim((string) $neu['MQTTTOPIC']);
+    $an_alt = ((string) $alt['SENDMQTT'] === '1');
+    $an_neu = ((string) $neu['SENDMQTT'] === '1');
+    $pa_gilt = (smg_praefix_fehler($pa) === '');
+    if ($pa !== $pn) {
+        smg_mqtt_vormerken($p['home'], $p['plugin'], $pn, true);
+        if ($pa_gilt) {
+            smg_mqtt_vormerken($p['home'], $p['plugin'], $pa);
+        }
+    }
+    if ($an_alt && $pa_gilt && ($pa !== $pn || !$an_neu)) {
+        $koepfe = smg_mqtt_koepfe($p['plugin'], smg_cfg_lesen($p['legacy']), smg_vz_json($p['vzjson']));
+        $e = smg_mqtt_raeumen($p['home'], $pa, $koepfe,
+                 smg_mqtt_ersatz($p['home'], $p['plugin'], $koepfe, $pa));
+        foreach ($e['zeilen'] as $z) {
+            sm_log('MQTT nach Aenderung: ' . preg_replace('/^<[A-Z]+> /', '', $z));
+        }
+        if (!$e['eingang']) {
+            $aus['fehler'][] = sprintf(sm_t('MQ.RAEUMEN_KEIN_EINGANG'), sm_e($pa));
+        } elseif ($e['nachgelesen'] && !$e['offen']) {
+            $aus['ok'][] = sprintf(sm_t('MQ.RAEUMEN_OK'), sm_e($pa));
+            if ($pa !== $pn) {
+                smg_mqtt_vormerken($p['home'], $p['plugin'], $pa, true);
+            }
+        } elseif ($e['nachgelesen']) {
+            $aus['fehler'][] = sprintf(sm_t('MQ.RAEUMEN_OFFEN'), count($e['offen']), sm_e($pa),
+                sm_e(implode(', ', array_slice($e['offen'], 0, 5))));
+        } else {
+            $aus['fehler'][] = sprintf(sm_t('MQ.RAEUMEN_UNGEPRUEFT'), sm_e($pa));
+        }
+    }
+    if ($an_neu) {
+        list($pfad, , $neu_geschrieben) = smg_abo_datei($p['home'], $p['plugin'], $pn, true);
+        if ($neu_geschrieben) {
+            sm_log('MQTT: Abodatei des Gateways gesetzt: ' . $pn . '/# (' . $pfad . ').');
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Die Themen, die dieses Plugin WIRKLICH sendet - je Leseweg, mit Spalte
+ * retained (M1; Entscheidung 3).
+ *
+ * Bis 2.8.5 zeigte der Reiter MQTT immer die Themen des vzLogger-Weges
+ * (smartmeter/vzlogger/...), auch wenn der klassische Leser unter
+ * smartmeter/<kopf>/... sendete - keines der gezeigten Themen kam an; Kosten,
+ * Abgleich und Lebenszeichen standen nirgends (gemessen, MQTT-Bericht Nr. 8).
+ * Der klassische Weg zeigt je Lesekopf die Felder der letzten Messung
+ * (dieselbe Quelle wie sm_vorlage_legacy()).
+ *
+ * Rueckgabe: Liste von array(ueberschrift, zeilen, hinweis); eine Zeile ist
+ * array(thema, einheit, bedeutung, retained, textfeld).
+ */
+function sm_mqtt_themen()
+{
+    $legacy = sm_legacy_read();
+    $vz = sm_vz_read();
+    $alles = sm_cfg_read();
+    $pr = trim((string) $legacy['MQTTTOPIC'], '/');
+    $gruppen = array();
+    $leser = false;
+
+    if ($legacy['READ'] === '1') {
+        $leser = true;
+        $z = array();
+        foreach (sm_koepfe() as $k) {
+            $s = $k['ABSCHNITT'];
+            $m = isset($k['METER']) ? (string) $k['METER'] : '0';
+            if ($m === '' || $m === '0') {
+                continue;
+            }
+            $werte = sm_werte($s);
+            if (!$werte) {
+                $z[] = array($pr . '/' . $s . '/...', '', sm_t('MQ.T_NOCH_KEINE'), null, false);
+                continue;
+            }
+            foreach ($werte as $pv) {
+                $md = sm_feld($pv[0]);
+                list($eh) = sm_einheit_fuer($md, 'legacy', $pv[0]);
+                $z[] = array(sm_thema($pr, $s, $pv[0]), $eh, $md ? sm_t($md['bed']) : $pv[0],
+                             smg_mqtt_retained($pv[0]), $md && $md['typ'] === 'text');
+            }
+        }
+        $gruppen[] = array(sm_t('MQ.G_KLASSISCH'), $z, $z ? '' : sm_t('MQ.KEIN_KOPF'));
+    } else {
+        $gruppen[] = array(sm_t('MQ.G_KLASSISCH'), array(), sm_t('MQ.AUS_KLASSISCH'));
+    }
+
+    if (!empty($vz['enabled'])) {
+        $leser = true;
+        $z = array();
+        foreach (sm_vz_felder($vz) as $feld) {
+            $md = sm_feld($feld);
+            list($eh) = sm_einheit_fuer($md, 'vz', $feld);
+            $z[] = array(sm_thema($pr, $vz['serial'], $feld), $eh, $md ? sm_t($md['bed']) : $feld,
+                         smg_mqtt_retained($feld), $md && $md['typ'] === 'text');
+        }
+        $gruppen[] = array(sm_t('MQ.G_VZ'), $z, '');
+    } else {
+        $gruppen[] = array(sm_t('MQ.G_VZ'), array(), sm_t('MQ.AUS_VZ'));
+    }
+
+    if ($leser) {
+        $gruppen[] = array(sm_t('MQ.G_STATUS'), array(
+            array($pr . '/status/ok', '', sm_t('MQ.B_STATUS_OK'), false, false),
+            array($pr . '/status/ts', 's', sm_t('MQ.B_STATUS_TS'), false, false),
+            array($pr . '/status/zaehler', '', sm_t('MQ.B_STATUS_ZAEHLER'), false, false),
+        ), '');
+    }
+
+    if (sm_cfg_get($alles, 'KOSTEN', 'AKTIV', '0') === '1') {
+        // Die Schluessel ausgeschrieben - die Pruefung der Sprachschluessel
+        // findet nur, was woertlich dasteht.
+        $z = array();
+        foreach (array('quelle_ok'  => array('', sm_t('MQ.B_K_QUELLE_OK')),
+                       'stunde_ct'  => array('ct', sm_t('MQ.B_K_STUNDE_CT')),
+                       'heute_ct'   => array('ct', sm_t('MQ.B_K_HEUTE_CT')),
+                       'heute_eur'  => array('EUR', sm_t('MQ.B_K_HEUTE_EUR')),
+                       'heute_kwh'  => array('kWh', sm_t('MQ.B_K_HEUTE_KWH')),
+                       'stunden'    => array('', sm_t('MQ.B_K_STUNDEN')),
+                       'offen'      => array('', sm_t('MQ.B_K_OFFEN')),
+                       'ohne_preis' => array('', sm_t('MQ.B_K_OHNE_PREIS'))) as $t => $eb) {
+            $z[] = array($pr . '/kosten/' . $t, $eb[0], $eb[1], false, false);
+        }
+        $gruppen[] = array(sm_t('MQ.G_KOSTEN'), $z, '');
+    }
+
+    if (sm_cfg_get($alles, 'ABGLEICH', 'AKTIV', '0') === '1') {
+        $z = array(array($pr . '/abgleich/quelle_ok', '', sm_t('MQ.B_A_QUELLE_OK'), false, false));
+        foreach (array('aktiv'  => array('', sm_t('MQ.B_A_AKTIV')),
+                       'soll'   => array('kWh', sm_t('MQ.B_A_SOLL')),
+                       'ist'    => array('kWh', sm_t('MQ.B_A_IST')),
+                       'fehlt'  => array('kWh', sm_t('MQ.B_A_FEHLT')),
+                       'dauer'  => array('s', sm_t('MQ.B_A_DAUER')),
+                       'sicher' => array('', sm_t('MQ.B_A_SICHER')),
+                       'ok'     => array('', sm_t('MQ.B_A_OK'))) as $t => $eb) {
+            $z[] = array($pr . '/abgleich/<n>/' . $t, $eb[0], $eb[1], $t === 'aktiv', false);
+        }
+        $gruppen[] = array(sm_t('MQ.G_ABGLEICH'), $z, '');
+    }
+    return $gruppen;
+}
+
+/**
+ * Die Lebenszeichen-Themen fuer die Loxone-Vorlagen (A7): Titel = Name des
+ * virtuellen Eingangs, wie ihn das Gateway bildet; ohne Katalogeintrag, also
+ * ohne erfundene Einheit, mit eigenem knappen Kommentar.
+ */
+function sm_vorlage_status($praefix)
+{
+    $aus = array();
+    foreach (array('ok' => sm_t('LOX.VE_STATUS_OK'), 'ts' => sm_t('LOX.VE_STATUS_TS'),
+                   'zaehler' => sm_t('LOX.VE_STATUS_ZAEHLER')) as $t => $kommentar) {
+        // Anzeige "<v>": eine ganze Zahl ohne Einheit (ok 0/1, Unix-Sekunden,
+        // Zaehler 0-999) - eine erfundene Einheit waere schlimmer als keine.
+        $aus[] = array(str_replace(array('/', '%'), '_', trim((string) $praefix, '/') . '/status/' . $t),
+                       'status_' . $t, $kommentar, '<v>');
+    }
+    return $aus;
 }
 
 /* ==================================================================

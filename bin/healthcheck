@@ -102,11 +102,8 @@ if (!$sm_cfg) {
         'Die Konfiguration ist nicht lesbar: ' . $sm_cfgdatei);
 }
 
-$sm_vz_an = false;
-if (is_readable($sm_vzjson)) {
-    $sm_d = json_decode((string) @file_get_contents($sm_vzjson), true);
-    $sm_vz_an = is_array($sm_d) && !empty($sm_d['enabled']);
-}
+$sm_vzd = smg_vz_json($sm_vzjson);
+$sm_vz_an = is_array($sm_vzd) && !empty($sm_vzd['enabled']);
 $sm_lg_an = (smg_wert($sm_cfg, 'MAIN', 'READ', '0') === '1');
 
 /* Ueber eine leere Menge wird nicht geurteilt. Laeuft kein Leser, ist das
@@ -191,8 +188,32 @@ if ($sm_alter > $sm_grenze) {
         array('logfile' => $sm_log));
 }
 
+/* SEIT DEM DURCHGANG 01.10.2026 (A5): jeder eingeschaltete Lesekopf
+ * einzeln. Bis 2.8.5 war der Healthcheck mit einem frischen und einem seit
+ * zwei Stunden stummen Kopf gruen (gemessen, MQTT-Bericht Nr. 5). Dieselbe
+ * Rechnung wie im Endpunkt (smg_kopf_lage in bin/sm_gemein.php). */
+$sm_je_kopf = smg_kopf_lage($sm_shm, smg_koepfe($sm_cfg, $sm_vzd), $sm_grenze);
+$sm_stumm = array();
+$sm_teile = array();
+foreach ($sm_je_kopf as $sm_n => $sm_l) {
+    $sm_teile[] = 'KOPF' . ($sm_n + 1) . ' (' . $sm_l['serial'] . ') '
+                . ($sm_l['alter'] < 0 ? 'ohne Messung' : $sm_l['alter'] . ' s');
+    if (!$sm_l['ok']) {
+        $sm_stumm[] = $sm_l['serial'] . ($sm_l['alter'] < 0 ? ' (noch keine Messung)'
+                                                            : ' (' . $sm_l['alter'] . ' s)');
+    }
+}
+if ($sm_stumm) {
+    sm_hc_antwort($sm_titel, 3,
+        'Ein Lesekopf schweigt: ' . implode(', ', $sm_stumm) . ' - erlaubt sind ' . $sm_grenze
+        . ' s. Die juengste Messung ueber alle Koepfe ist ' . $sm_alter . ' s alt. In Loxone '
+        . 'behalten die virtuellen Eingaenge dieses Kopfes ihren letzten Wert.',
+        array('logfile' => $sm_log));
+}
+
 sm_hc_antwort($sm_titel, 5,
     'Der Zaehler wird gelesen. Letzte Messung vor ' . $sm_alter . ' s (erlaubt '
     . $sm_grenze . ' s), ' . count($sm_dateien) . ' Datendatei(en), umlaufender '
-    . 'Zaehler ' . $sm_zaehler . '.',
+    . 'Zaehler ' . $sm_zaehler . '.'
+    . ($sm_teile ? ' Je Lesekopf: ' . implode(', ', $sm_teile) . '.' : ''),
     array('logfile' => $sm_log));

@@ -292,32 +292,61 @@ if ( -e $vzconf && !&vz_laeuft($vzconf) ) {
 	elsif ( !$bin ) {
 		&LOG("vzlogger ist eingeschaltet, aber es ist kein lauffaehiges vzlogger installiert.", "WARN");
 	} else {
+		# DIE BREMSE (Durchgang 01.10.2026, C2; Regeln/03 Abschnitt 5: hilft der
+		# Neustart nicht, darf der Waechter nicht im Minutentakt nachsetzen).
+		# Bis 2.8.5 gab es jede Minute einen Startversuch samt WARN-Zeile -
+		# 1440 am Tag, jedes Mal mit Oeffnen der seriellen Schnittstelle
+		# (gemessen, Codebericht Nr. 7, V3). Jetzt: nach drei Fehlstarts in
+		# Folge nur noch ein Versuch je 10 Minuten. WARN nur beim ersten
+		# Fehlstart und beim Uebergang in die Bremse; der Merker liegt auf
+		# der Ramdisk und beginnt nach einem Neustart von vorn.
+		my ($fehl, $letzter) = &BREMSE_LESEN();
+		my $jetzt = time();
+		if ( $fehl >= 3 && $jetzt >= $letzter && $jetzt - $letzter < 600 ) {
+			&LAUF_ENDE();
+			exit 0;
+		}
 		my $log = "/dev/shm/$psubfolder/vzlogger.log";
 		system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
 		system("nohup \"$bin\" -c \"$vzconf\" >> \"$log\" 2>&1 &");
 		sleep 2;
 		if ( &vz_laeuft($vzconf) ) {
-			&LOG("vzlogger lief nicht und wurde vom Waechter gestartet ($bin).", "OK");
+			&LOG("vzlogger lief nicht und wurde vom Waechter gestartet ($bin)."
+			   . ($fehl ? " Vorher $fehl Fehlstart(s) in Folge." : ""), "OK");
+			&BREMSE_SCHREIBEN(0, 0);
 		} else {
-			&LOG("vzlogger lief nicht und liess sich auch nicht starten. Einzelheiten im vzlogger-Protokoll.", "WARN");
-			&ZAEHLER_WEITER();
+			$fehl++;
+			&BREMSE_SCHREIBEN($fehl, $jetzt);
+			if ( $fehl == 1 ) {
+				&LOG("vzlogger lief nicht und liess sich auch nicht starten. Einzelheiten im vzlogger-Protokoll.", "WARN");
+			} elsif ( $fehl == 3 ) {
+				&LOG("vzlogger liess sich dreimal in Folge nicht starten - der Waechter versucht es jetzt nur noch alle 10 Minuten.", "WARN");
+			} else {
+				&LOG("vzlogger liess sich wieder nicht starten ($fehl. Fehlstart in Folge).", "INFO");
+			}
+			&LAUF_ENDE();
 			exit 0;
 		}
 	}
+}
+# Laeuft vzlogger (wieder), gilt die Bremse nicht mehr.
+if ( -e "/dev/shm/$psubfolder/vz_waechter" && -e $vzconf && &vz_laeuft($vzconf) ) {
+	&BREMSE_SCHREIBEN(0, 0);
+	&LOG("vzlogger laeuft wieder - die Bremse des Waechters ist aufgehoben.", "OK");
 }
 
 # Poll local vzlogger HTTP API
 my $raw = `curl -s -m 5 http://127.0.0.1:$httpport/ 2>/dev/null`;
 if ( !$raw ) {
 	&LOG("Could not read from vzlogger HTTP API on port $httpport. Is vzlogger running?", "WARN");
-	&ZAEHLER_WEITER();
+	&LAUF_ENDE();
 	exit 0;
 }
 
 my $data = eval { JSON::PP::decode_json($raw) };
 if ( !$data || !$data->{data} ) {
 	&LOG("Invalid JSON from vzlogger HTTP API.", "WARN");
-	&ZAEHLER_WEITER();
+	&LAUF_ENDE();
 	exit 0;
 }
 
@@ -329,16 +358,20 @@ if ( $cfg->{uuids} ) {
 
 # Collect latest value per channel
 my %werte;
+my $tupel_ms = 0;
 foreach my $ch ( @{$data->{data}} ) {
 	my $obis = $obis_by_uuid{$ch->{uuid}} // $ch->{uuid};
 	next if !$ch->{tuples} || !@{$ch->{tuples}};
 	# Latest tuple: [ timestamp_ms, value, quality ]
 	my @sorted = sort { $b->[0] <=> $a->[0] } @{$ch->{tuples}};
 	$werte{&feldname($obis)} = $sorted[0][1];
+	# A2 (Durchgang 01.10.2026): den Zeitstempel des juengsten Tupels merken.
+	my $t = $sorted[0][0];
+	$tupel_ms = $t if defined $t && $t =~ /^\d+(?:\.\d+)?$/ && $t > $tupel_ms;
 }
 if ( !%werte ) {
 	&LOG("No readings available (yet).", "INFO");
-	&ZAEHLER_WEITER();
+	&LAUF_ENDE();
 	exit 0;
 }
 
@@ -351,14 +384,39 @@ if ( !%werte ) {
 # unterscheiden. Geschrieben wird er nur hier, also nur nach einer
 # erfolgreichen Messung - der Zeitstempel gehoert zur Messung, nicht zum
 # Schreibvorgang.
-my @lt = localtime(time());
+#
+# SEIT DEM DURCHGANG 01.10.2026 (A2): der Zeitpunkt ist der des juengsten
+# TUPELS, nicht der Abrufzeit. vzlogger haelt mit "buffer": -1 den letzten
+# Wert vor; bis 2.8.5 stempelte dieses Skript ihn bei jedem Abruf mit time()
+# - ein zwei Stunden alter Wert stand als OK=1;ALTER=0 da, und die Historie
+# buchte je Minute 0 Wh statt einer Luecke (gemessen, Codebericht Nr. 2, V1).
+# Ist der juengste Wert nicht neuer als der zuletzt geschriebene, wird nichts
+# neu geschrieben und nichts gesendet: der alte Wert bleibt alt.
+# Mit use_local_time ist der Zeitstempel die Lesezeit des LoxBerry. Einer aus
+# der Zukunft (Zaehleruhr vor) wird auf die Abrufzeit begrenzt - eine Messung
+# kann nicht spaeter sein als ihr Abruf. Ein Tupel ohne Zeitstempel nimmt wie
+# bisher die Abrufzeit.
+my $jetzt = time();
+my $ts = int($tupel_ms / 1000);
+if ( $ts <= 0 ) {
+	&LOG("Die Tupel von vzlogger tragen keinen Zeitstempel - es gilt die Abrufzeit.", "INFO");
+	$ts = $jetzt;
+}
+$ts = $jetzt if $ts > $jetzt;
+my $ts_alt = &TS_DATEI("/dev/shm/$psubfolder/$serial.data");
+if ( $ts <= $ts_alt ) {
+	&LOG("Kein neuer Wert von vzlogger: der juengste ist " . ($jetzt - $ts) . " s alt und schon gemeldet - nichts erneut gesendet, das Alter waechst.", "INFO");
+	&LAUF_ENDE();
+	exit 0;
+}
+my @lt = localtime($ts);
 my $datereadable = sprintf("%02d.%02d.%04d %02d:%02d:%02d",
 	$lt[3], $lt[4]+1, $lt[5]+1900, $lt[2], $lt[1], $lt[0]);
 use Time::Local;
-my $offset = timegm(localtime(time())) - time();
-my $epoche_lox = time() - 1230768000 + $offset;
+my $offset = timegm(localtime($ts)) - $ts;
+my $epoche_lox = $ts - 1230768000 + $offset;
 $werte{Last_Update}          = $datereadable;
-$werte{Last_UpdateUnix}      = time();
+$werte{Last_UpdateUnix}      = $ts;
 $werte{Last_UpdateLoxEpoche} = $epoche_lox;
 
 # Die beiden kalkulierten Leistungen kennt vzlogger nicht. Der klassische
@@ -384,8 +442,15 @@ my $ziel = "/dev/shm/$psubfolder/$serial.data";
 my $tmp  = "$ziel.tmp.$$";
 if ( open(my $fh, ">", $tmp) ) {
 	print $fh join("\n", @zeilen) . "\n";
-	close($fh);
-	rename($tmp, $ziel) or do { &LOG("Datendatei liess sich nicht umbenennen: $tmp", "ERROR"); unlink($tmp); };
+	# close() beurteilen (Durchgang 01.10.2026, C6) - wie sm_logger.pl: auf
+	# einer vollen Ramdisk meldet erst close den Schreibfehler, und eine
+	# abgeschnittene Datei ersetzte sonst die gute.
+	if ( !close($fh) ) {
+		&LOG("Die Datendatei liess sich nicht schliessen - sie wird verworfen: $tmp", "ERROR");
+		unlink($tmp);
+	} else {
+		rename($tmp, $ziel) or do { &LOG("Datendatei liess sich nicht umbenennen: $tmp", "ERROR"); unlink($tmp); };
+	}
 } else {
 	&LOG("Datendatei nicht schreibbar: $tmp", "ERROR");
 }
@@ -395,26 +460,14 @@ if ( open(my $fh, ">", $tmp) ) {
 # Werte per MQTT veroeffentlichen (Hausstandard).
 # Eingestellt wird MQTT an genau einer Stelle - im Reiter MQTT, der in die
 # allgemeine Plugin-Konfiguration schreibt. Hier wird nur gelesen.
-my ($sendmqtt, $mqtttopic) = (1, "smartmeter");
-if ( -e "$lbpconfigdir/smartmeter.cfg" ) {
-	if ( open(my $c, "<", "$lbpconfigdir/smartmeter.cfg") ) {
-		while ( my $z = <$c> ) {
-			$sendmqtt  = ($1 ? 1 : 0) if $z =~ /^\s*SENDMQTT\s*=\s*(\S+)/;
-			$mqtttopic = $1           if $z =~ /^\s*MQTTTOPIC\s*=\s*(\S+)/;
-		}
-		close($c);
-	}
-}
-$mqtttopic =~ s/^["']|["']$//g;
-$mqtttopic =~ s{^/+|/+$}{}g;
-$mqtttopic = "smartmeter" if $mqtttopic eq "";
+my ($sendmqtt, $mqtttopic) = &MQTT_EINSTELLUNG();
 if ( $sendmqtt ) {
 	my @paare = map { [ $_, $werte{$_} ] } sort keys %werte;
-	&SEND_MQTT("$mqtttopic/$serial", \@paare);
+	&SEND_MQTT("$mqtttopic/$serial", \@paare, "/dev/shm/$psubfolder/$serial.retained");
 }
 
 # Das Lebenszeichen eine Stelle weiter - bei JEDEM abgeschlossenen Durchlauf.
-&ZAEHLER_WEITER();
+&LAUF_ENDE();
 
 # Send via UDP to all Miniservers
 exit 0 if !$cfg->{sendudp};
@@ -433,8 +486,13 @@ foreach my $msno ( sort keys %ms ) {
 		&LOG("Could not create UDP socket for " . $ms{$msno}{Name} . ": $!", "WARN");
 		next;
 	}
-	$sock->send($udpstring);
-	&LOG("Send OK to " . $ms{$msno}{Name} . " (" . $ms{$msno}{IPAddress} . ":$udpport)", "OK");
+	# Den Rueckgabewert ansehen (Durchgang 01.10.2026, C6) - wie fetch.php.
+	my $gesendet = $sock->send($udpstring);
+	if ( defined $gesendet && $gesendet >= length($udpstring) ) {
+		&LOG("Send OK to " . $ms{$msno}{Name} . " (" . $ms{$msno}{IPAddress} . ":$udpport)", "OK");
+	} else {
+		&LOG("Senden an " . $ms{$msno}{Name} . " (" . $ms{$msno}{IPAddress} . ":$udpport) gescheitert: $!", "WARN");
+	}
 }
 
 exit 0;
@@ -516,7 +574,7 @@ sub ZAEHLER_WEITER
 # Kein zusaetzliches Perl-Modul noetig.
 sub SEND_MQTT {
 
-	my ($prefix, $paare) = @_;
+	my ($prefix, $paare, $merker) = @_;
 
 	return if !$prefix;
 
@@ -546,6 +604,7 @@ sub SEND_MQTT {
 
 	my $anzahl = 0;
 	my $fehl = 0;
+	my @zustaende;
 	foreach my $p ( @{$paare} ) {
 		my ($key, $value) = @{$p};
 		next if !defined $key || $key eq "";
@@ -558,8 +617,37 @@ sub SEND_MQTT {
 		# behandeln sie gleich.
 		$value = &SAEUBERN($value);
 		next if $value eq "";
-		if ( $sock->send("publish $prefix/$key $value") ) { $anzahl++; }
+		# M3 (Durchgang 01.10.2026, Entscheidung 3): Zustaende retained,
+		# alles andere fluechtig. Leer geht nie hinaus (eine Zeile hoeher).
+		my $verb = &IST_ZUSTAND($key) ? "retain" : "publish";
+		push @zustaende, $key if $verb eq "retain";
+		if ( $sock->send("$verb $prefix/$key $value") ) { $anzahl++; }
 		else { $fehl++; }
+	}
+	# Ein frueher retained gesendetes Zustandsfeld, das diese erfolgreiche
+	# Messung nicht mehr liefert, bekommt einmal "-" retained (Entscheidungen
+	# 5 und 8). Merker auf der Ramdisk, wie in bin/fetch.php.
+	if ( defined $merker ) {
+		my %jetzt = map { $_ => 1 } @zustaende;
+		if ( open(my $r, "<", $merker) ) {
+			while ( my $z = <$r> ) {
+				$z =~ s/\s+$//;
+				next if $z eq "" || $jetzt{$z} || !&IST_ZUSTAND($z);
+				if ( $sock->send("retain $prefix/$z -") ) {
+					$anzahl++;
+					&LOG("$z fehlt in dieser Messung - \"-\" retained gesendet.", "INFO");
+				} else { $fehl++; }
+			}
+			close($r);
+		}
+		if ( @zustaende ) {
+			if ( open(my $w, ">", "$merker.tmp.$$") ) {
+				print $w join("\n", sort keys %jetzt) . "\n";
+				close($w) ? rename("$merker.tmp.$$", $merker) : unlink("$merker.tmp.$$");
+			}
+		} else {
+			unlink($merker);
+		}
 	}
 	close($sock);
 	# Ein Zaehler zaehlt Zustellungen, nicht Schleifendurchlaeufe.
@@ -569,6 +657,126 @@ sub SEND_MQTT {
 
 	return;
 
+}
+
+################################
+### SEIT DEM DURCHGANG 01.10.2026: Lauf-Ende, Lebenszeichen, Bremse
+################################
+
+# Die Zustandsfelder, die retained hinausgehen - Gegenstueck zu
+# smg_mqtt_zustaende() in bin/sm_gemein.php.
+sub IST_ZUSTAND
+{
+	my ($k) = @_;
+	return 0 if !defined $k;
+	return scalar grep { $_ eq $k } ("Breaker_State_Electricity_96.3.10",
+		"Tarif_Indicator_Electricity_96.14.0", "Message_Code_96.13.1");
+}
+
+# MQTT-Einstellung aus smartmeter.cfg - eingestellt wird sie im Reiter MQTT,
+# hier wird nur gelesen.
+sub MQTT_EINSTELLUNG
+{
+	my ($sendmqtt, $mqtttopic) = (1, "smartmeter");
+	if ( -e "$lbpconfigdir/smartmeter.cfg" ) {
+		if ( open(my $c, "<", "$lbpconfigdir/smartmeter.cfg") ) {
+			while ( my $z = <$c> ) {
+				$sendmqtt  = ($1 ? 1 : 0) if $z =~ /^\s*SENDMQTT\s*=\s*(\S+)/;
+				$mqtttopic = $1           if $z =~ /^\s*MQTTTOPIC\s*=\s*(\S+)/;
+			}
+			close($c);
+		}
+	}
+	$mqtttopic =~ s/^["']|["']$//g;
+	$mqtttopic =~ s{^/+|/+$}{}g;
+	$mqtttopic = "smartmeter" if $mqtttopic eq "";
+	return ($sendmqtt, $mqtttopic);
+}
+
+# Last_UpdateUnix einer Datendatei - Gegenstueck zu smg_ts_datei(); 0 = keiner.
+sub TS_DATEI
+{
+	my ($datei) = @_;
+	my $ts = 0;
+	if ( -e $datei && open(my $r, "<", $datei) ) {
+		while ( my $z = <$r> ) {
+			$ts = $1 if $z =~ /:Last_UpdateUnix:(\d+)/ && $1 > $ts;
+		}
+		close($r);
+	}
+	return $ts;
+}
+
+# Am Ende JEDES Laufs nach der Sperre: der umlaufende Zaehler, dann das
+# Lebenszeichen ueber MQTT (A7, Entscheidung 8): status/ok (1, wenn die
+# letzte Messung hoechstens 3 x 60 s alt ist - dieselbe Grenze wie
+# smg_alter_grenze() fuer den vzLogger-Weg), status/ts (Zeit dieses Laufs),
+# status/zaehler. Alle drei fluechtig. Dazu folgt die Abodatei des
+# Gateways dem Praefix (M3).
+sub LAUF_ENDE
+{
+	my $stand = ZAEHLER_WEITER();
+	my ($sendmqtt, $mqtttopic) = &MQTT_EINSTELLUNG();
+	return if !$sendmqtt;
+	my $ts = &TS_DATEI("/dev/shm/$psubfolder/$serial.data");
+	my $alter = $ts > 0 ? time() - $ts : -1;
+	my $ok = ($ts > 0 && $alter >= 0 && $alter <= 180) ? 1 : 0;
+	my @paare = ( [ "ok", $ok ], [ "ts", time() ], [ "zaehler", $stand ] );
+	&SEND_MQTT("$mqtttopic/status", \@paare);
+	&ABO_DATEI($mqtttopic);
+	return;
+}
+
+# config/plugins/<ordner>/mqtt_subscriptions.cfg mit "<praefix>/#" - nur,
+# wenn sie abweicht. Gegenstueck zu smg_abo_datei().
+sub ABO_DATEI
+{
+	my ($praefix) = @_;
+	return if !defined $praefix || $praefix eq "";
+	return if $praefix =~ /[\s#+"'\x00-\x1f\x7f]/ || $praefix =~ m{^/|/$|//};
+	my $pfad = "$lbpconfigdir/mqtt_subscriptions.cfg";
+	my $soll = "$praefix/#\n";
+	my $ist = "";
+	if ( -e $pfad && open(my $r, "<", $pfad) ) { local $/; $ist = <$r> // ""; close($r); }
+	return if $ist eq $soll || !-d $lbpconfigdir;
+	if ( open(my $w, ">", "$pfad.tmp.$$") ) {
+		print $w $soll;
+		if ( close($w) && chmod(0644, "$pfad.tmp.$$") && rename("$pfad.tmp.$$", $pfad) ) {
+			&LOG("MQTT: Abodatei des Gateways gesetzt: $praefix/# ($pfad).", "INFO");
+		} else {
+			unlink("$pfad.tmp.$$");
+		}
+	}
+	return;
+}
+
+# Der Merker der Waechter-Bremse: "<Fehlstarts in Folge> <Zeit des letzten>".
+sub BREMSE_LESEN
+{
+	my $datei = "/dev/shm/$psubfolder/vz_waechter";
+	my ($fehl, $letzter) = (0, 0);
+	if ( -e $datei && open(my $r, "<", $datei) ) {
+		my $z = <$r> // "";
+		close($r);
+		($fehl, $letzter) = ($1, $2) if $z =~ /^(\d+) (\d+)/;
+	}
+	return ($fehl + 0, $letzter + 0);
+}
+
+sub BREMSE_SCHREIBEN
+{
+	my ($fehl, $letzter) = @_;
+	my $datei = "/dev/shm/$psubfolder/vz_waechter";
+	if ( !$fehl ) {
+		unlink($datei) if -e $datei;
+		return;
+	}
+	system("mkdir -p /dev/shm/$psubfolder > /dev/null 2>&1");
+	if ( open(my $w, ">", "$datei.tmp.$$") ) {
+		print $w "$fehl $letzter\n";
+		close($w) ? rename("$datei.tmp.$$", $datei) : unlink("$datei.tmp.$$");
+	}
+	return;
 }
 
 # Gegenstueck zu smg_wert_saeubern() in bin/sm_gemein.php.

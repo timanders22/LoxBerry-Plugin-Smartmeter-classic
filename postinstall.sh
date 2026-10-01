@@ -98,9 +98,20 @@ netz_ohne_vorgabe() {
     fi
 }
 
-netz_zurueck_cfg
-netz_ohne_vorgabe "vzlogger.json"
-netz_ohne_vorgabe "vzlogger.conf"
+# NUR BEI EINER AKTUALISIERUNG (Durchgang 01.10.2026, I1; Entscheidung 1):
+# die Upgrade-Marke von preupgrade.sh muss liegen - ohne Altersvergleich.
+# Bis 2.8.5 lief das Zurueckspielen auch bei einer Neuinstallation und holte
+# Token und Einstellungen einer frueheren Installation zurueck (gemessen,
+# Installerbericht I1, F1). preinstall.sh hat Liegengebliebenes dann schon
+# nach .alt gelegt; diese Zeile ist die zweite Sicherung derselben Regel.
+NETZ_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
+if [ -f "$NETZ_MARKE" ]; then
+    netz_zurueck_cfg
+    netz_ohne_vorgabe "vzlogger.json"
+    netz_ohne_vorgabe "vzlogger.conf"
+else
+    echo "<INFO> Neuinstallation (keine Upgrade-Marke): aus Zweitschriften wird nichts zurueckgespielt."
+fi
 
 # ===========================================================================
 # Platzhalter ersetzen

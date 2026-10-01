@@ -1257,7 +1257,14 @@ sub DATA_WERT
 	# Zeitstempel, aus dem Endpunkt und Healthcheck das Alter der Messung
 	# ableiten. Ein Zeitstempel ohne Messung dahinter ist die stille
 	# Falschaussage in Reinform; der Kommentar dort sagt das selbst.
-	$sm_gemessen++ if print F "$serial:$name:$wert" . "\n";
+	#
+	# SEIT DEM DURCHGANG 01.10.2026 (A1): die beiden BERECHNETEN Leistungen
+	# (Consumption_/Delivery_CalculatedPower) zaehlen nicht als Messwert. Bis
+	# 2.8.5 machte genau ihre 0 aus einem leeren Mitschnitt eine "frische
+	# Messung": OK=1, ALTER=0, und an Loxone ging "0 W" (gemessen,
+	# Codebericht Nr. 1, Fall A/B). Geschrieben werden sie weiter.
+	my $sm_geschrieben = print F "$serial:$name:$wert" . "\n";
+	$sm_gemessen++ if $sm_geschrieben && $name !~ /_CalculatedPower_/;
 	return 1;
 }
 
@@ -1282,7 +1289,15 @@ sub DATA_SCHLIESSEN
 	if ( $sm_gemessen > 0 ) {
 		print F "$serial:Last_UpdateUnix:" . time() . "\n";
 	} else {
-		&LOG("Kein einziger Messwert in diesem Durchlauf - Last_UpdateUnix wird NICHT geschrieben.", "WARN");
+		# SEIT DEM DURCHGANG 01.10.2026 (A1): die Nebendatei wird VERWORFEN.
+		# Bis 2.8.5 ersetzte sie trotzdem die vorige Datendatei - die guten
+		# Zaehlerstaende waren weg, und ohne Zeitstempel stand ALTER=-1
+		# ("noch nie gemessen") statt eines wachsenden Alters. Jetzt bleibt
+		# die vorige Datei stehen, und die Zusage darueber stimmt.
+		close(F);
+		unlink($sm_datentmp);
+		&LOG("Kein einziger gelesener Zaehlerwert in diesem Durchlauf - die Werte werden verworfen. Die vorige Datendatei bleibt stehen, ihr Alter waechst.", "WARN");
+		return 0;
 	}
 
 	# close ZUERST beurteilen. Auf einer Ramdisk meldet erst close den
@@ -1753,7 +1768,9 @@ sub CALCULATE_POWER
 	# Zaehlerstand wird beim Interpolieren zu "".
 	if ( !defined $reading || $reading !~ /^-?[\d.]+$/ || $reading == 0 ) {
 		&LOG ("No current meter reading. Calculation not possible,", "WARNING");
-		return (0);
+		# undef statt 0 (Durchgang 01.10.2026, A1): ohne Zaehlerstand gibt
+		# es keine Leistung - eine 0 hiesse "kein Verbrauch".
+		return undef;
 	}
 	$reading = sprintf("%.3f", $reading);
 
@@ -1786,7 +1803,7 @@ sub CALCULATE_POWER
 		if ( !defined $lasttime || !defined $lastreading
 		     || $lasttime !~ /^\d+$/ || $lastreading !~ /^-?[\d.]+$/ ) {
 			&LOG ("Last meter reading unreadable. Calculation not possible,", "WARNING");
-			return (0);
+			return undef;
 		}
 		if ( $reading < $lastreading ) {
 			$lastreading = $reading;
@@ -1797,7 +1814,7 @@ sub CALCULATE_POWER
 		# Laufzeitfehler, keine Warnung - der Leser waere weg.
 		if ( $period <= 0 ) {
 			&LOG ("Last reading is not older than this one. Calculation not possible,", "WARNING");
-			return (0);
+			return undef;
 		}
 		$energy = $reading - $lastreading;
 		$power = $energy / $period;

@@ -488,13 +488,33 @@ function sm_cron_lage()
     return array(1, sprintf(sm_t('CRON.LAGE_OK'), $gefunden[0]));
 }
 
-/** Laeuft der Legacy-Leser gerade? */
+/**
+ * Laeuft der Legacy-Leser DIESES Plugins gerade?
+ *
+ * SEIT DEM DURCHGANG 01.10.2026 (C5): argumentweise, wie sm_vz_pids(). Bis
+ * 2.8.5 stand hier "pgrep -f sm_logger.pl" - das traf auch den Leser des
+ * Originalplugins (bin/plugins/smartmeter/sm_logger.pl), und die Reiter
+ * Legacy und Test zeigten gruen "Leser laeuft" fuer einen fremden Prozess
+ * (gemessen, Codebericht Nr. 10). Ein Treffer traegt GENAU unseren Pfad als
+ * Argument, und das Programm ist perl (oder das Skript selbst).
+ */
 function sm_logger_pid()
 {
-    list(, $roh) = sm_sh('pgrep -f sm_logger.pl');
-    foreach (preg_split('/\s+/', trim($roh)) as $pid) {
-        if ($pid !== '' && preg_match('/^[0-9]+$/', $pid) && is_dir('/proc/' . $pid)) {
-            return $pid;
+    $soll = sm_paths()['bin'] . '/sm_logger.pl';
+    $liste = @glob('/proc/[0-9]*', GLOB_ONLYDIR);
+    if (!is_array($liste)) {
+        return null;
+    }
+    foreach ($liste as $d) {
+        $roh = @file_get_contents($d . '/cmdline');
+        if (!is_string($roh) || $roh === '' || strpos($roh, $soll) === false) {
+            continue;
+        }
+        $args = explode("\0", rtrim($roh, "\0"));
+        $prog = basename((string) $args[0]);
+        if ((strncmp($prog, 'perl', 4) === 0 && in_array($soll, array_slice($args, 1), true))
+            || $args[0] === $soll) {
+            return basename($d);
         }
     }
     return null;
