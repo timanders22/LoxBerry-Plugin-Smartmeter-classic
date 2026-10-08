@@ -10,6 +10,16 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.6
+
+Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.
+
+* **Statusübersicht über den Reitern:** ob vzlogger und der klassische Leser eingeschaltet sind und
+  laufen (mit PID), Zahl der erkannten Leseköpfe und wie viele Stunden des heutigen Lastgangs belegt
+  sind – aus Werten, die die Seite ohnehin liest, ohne Netzabfrage und ohne Prozessstart.
+* **Zusammenfassung** des Plugins in einem grünen Kasten oben im Reiter vzLogger.
+* Nur Oberfläche; gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Warum zwei Lesewege
 
 vzlogger ist der modernere Weg und für die meisten Zähler die bessere Wahl.

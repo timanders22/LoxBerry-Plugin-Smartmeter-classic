@@ -896,6 +896,42 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
   sm_e(implode(', ', $sm_ergaenzt))); ?></div>
 <?php } ?>
 
+<?php /* Kopf (Entscheidung Nr. 43, seit 2.8.6): Statusuebersicht ueber den
+   Reitern, immer sichtbar. Keine Netzabfrage und kein Prozessstart: beide
+   Prozessfragen lesen /proc, die uebrigen Werte stehen oben schon fest. */
+$sm_k_vz = $sm_cfg['enabled'] ? sm_vz_running() : '';
+$sm_k_lg = $sm_lcfg_read === '1' ? sm_logger_pid() : null;
+?>
+<table class="sm-tbl" style="max-width:620px">
+<tr><th><?php echo sm_e(sm_t('KOPF.EIGENSCHAFT')); ?></th><th><?php echo sm_e(sm_t('KOPF.WERT')); ?></th></tr>
+<tr><td><?php echo sm_e(sm_t('KOPF.VZ')); ?></td>
+    <td><?php
+/* Abgeschaltet ist kein Fehler (der andere Leseweg kann der gewaehlte
+   sein) - deshalb ohne Scheibe. */
+if (!$sm_cfg['enabled']) {
+    echo sm_e(sm_t('KOPF.AUS'));
+} elseif ($sm_k_vz !== '') {
+    echo '<span class="sm-scheibe sm-gruen"></span>' . sm_e(sprintf(sm_t('KOPF.LAEUFT'), $sm_k_vz));
+} else {
+    echo '<span class="sm-scheibe sm-rot"></span>' . sm_e(sm_t('KOPF.LAEUFT_NICHT'));
+}
+?></td></tr>
+<tr><td><?php echo sm_e(sm_t('KOPF.LEGACY')); ?></td>
+    <td><?php
+if ($sm_lcfg_read !== '1') {
+    echo sm_e(sm_t('KOPF.AUS'));
+} elseif ($sm_k_lg !== null) {
+    echo '<span class="sm-scheibe sm-gruen"></span>' . sm_e(sprintf(sm_t('KOPF.LAEUFT'), $sm_k_lg));
+} else {
+    echo '<span class="sm-scheibe sm-rot"></span>' . sm_e(sm_t('KOPF.LAEUFT_NICHT'));
+}
+?></td></tr>
+<tr><td><?php echo sm_e(sm_t('KOPF.KOEPFE')); ?></td>
+    <td><?php echo count($sm_koepfe); ?></td></tr>
+<tr><td><?php echo sm_e(sm_t('KOPF.LASTGANG')); ?></td>
+    <td><?php echo sm_e(sprintf(sm_t('KOPF.LASTGANG_WERT'), (int) $sm_lastgang['stunden_heute'])); ?></td></tr>
+</table>
+
 <!-- Reiterleiste: echte Verweise, das JavaScript spart nur den Seitenaufbau.
      Welcher Reiter offen ist, entscheidet der SERVER - sm-active steht schon
      im ausgelieferten HTML, an der Leiste und an jeder Flaeche. Ohne das
@@ -932,6 +968,7 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 
 <!-- ============================== vzLogger ============================== -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-vzlogger' ? ' sm-active' : ''; ?>" id="tab-vzlogger">
+<div class="sm-hinweis"><?php echo sm_t('KOPF.WAS_IST_DAS'); ?></div>
 
 <?php if ($sm_installout !== '') { ?>
 <h2><?php echo sm_t('VZ.H_INSTALLAUSGABE'); ?></h2>
