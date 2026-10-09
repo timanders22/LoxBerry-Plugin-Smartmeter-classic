@@ -10,6 +10,18 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.7
+
+Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
+
+* **Baustein-Liste (Reiter Einbindung in Loxone, Schritt 6):** Die Spalte „Eingänge verbinden mit“
+  nennt die Quellen in fester Form: `Eingang = #1` statt „Eingang ← #1“, an der Ausfallmeldung #10
+  `Eingang = #9 (negiert)` statt „Eingang ← #9 = 0“ (der Eingang ist ein, solange sich das Zählwerk
+  nicht ändert), am ODER #11 `I1 = #10, I2 = weitere eigene Meldungen …`. Die virtuellen Eingänge
+  #1 bis #4 haben keinen Eingang aus der Liste; ihre Quelle steht dahinter in Klammern.
+  Gleiche Bausteine, gleiche Verbindungen.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 2.8.6
 
 Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.

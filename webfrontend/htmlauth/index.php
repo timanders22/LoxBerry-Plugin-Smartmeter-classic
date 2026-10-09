@@ -1543,24 +1543,24 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
  * nie einen Wert traegt. */
 $sm_bl = sm_vz_felder($sm_cfg);
 ?>
-<tr><td>1</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_BEZUG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td><?php echo sm_quelle_mqtt('1-0:1.8.0', $sm_bl); ?></td></tr>
-<tr><td>2</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td><?php echo sm_quelle_mqtt('1-0:2.8.0', $sm_bl); ?></td></tr>
-<tr><td>3</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_LEISTUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kW</span></td><td><?php echo sm_quelle_mqtt('1-0:16.7.0', $sm_bl); ?></td></tr>
+<tr><td>1</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_BEZUG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>&mdash; (<?php echo sm_quelle_mqtt('1-0:1.8.0', $sm_bl); ?>)</td></tr>
+<tr><td>2</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>&mdash; (<?php echo sm_quelle_mqtt('1-0:2.8.0', $sm_bl); ?>)</td></tr>
+<tr><td>3</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_LEISTUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kW</span></td><td>&mdash; (<?php echo sm_quelle_mqtt('1-0:16.7.0', $sm_bl); ?>)</td></tr>
 <!-- ZAEHLER ist KEIN MQTT-Thema. Er steht ausschliesslich in der
      Schlusszeile des Endpunkts (Schritt 8); bis 2.4.2 stand hier "MQTT
      ZAEHLER", und weder der Dienst noch die Vorlage kennen ein solches
      Thema. Baustein #4 blieb damit ohne Wert - und mit ihm die ganze
      Kette #8 bis #12, also genau die Ausfallerkennung, fuer die dieser
      Schritt da ist. -->
-<tr><td>4</td><td><?php echo sm_t('BAUSTEIN.VE_HTTP'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLWERK')); ?></td><td><?php echo sm_t('LOX.P_ZAEHLER'); ?></td><td><?php echo sm_t('LOX.Q_ENDPUNKT'); ?></td></tr>
-<tr><td>5</td><td><?php echo sm_t('BAUSTEIN.ZAEHLER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERBRAUCH_TAG')); ?></td><td><?php echo sm_t('LOX.P_MITTERNACHT'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #1</td></tr>
-<tr><td>6</td><td><?php echo sm_t('BAUSTEIN.STATISTIK'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERLAUF')); ?></td><td><?php echo sm_t('LOX.P_ANALOG'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
-<tr><td>7</td><td><?php echo sm_t('BAUSTEIN.VERGLEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG_AKTIV')); ?></td><td><?php echo sm_t('LOX.P_SCHWELLE0'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #3</td></tr>
-<tr><td>8</td><td><?php echo sm_t('BAUSTEIN.ANALOGSPEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VORWERT')); ?></td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #4</td></tr>
+<tr><td>4</td><td><?php echo sm_t('BAUSTEIN.VE_HTTP'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLWERK')); ?></td><td><?php echo sm_t('LOX.P_ZAEHLER'); ?></td><td>&mdash; (<?php echo sm_t('LOX.Q_ENDPUNKT'); ?>)</td></tr>
+<tr><td>5</td><td><?php echo sm_t('BAUSTEIN.ZAEHLER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERBRAUCH_TAG')); ?></td><td><?php echo sm_t('LOX.P_MITTERNACHT'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #1</td></tr>
+<tr><td>6</td><td><?php echo sm_t('BAUSTEIN.STATISTIK'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERLAUF')); ?></td><td><?php echo sm_t('LOX.P_ANALOG'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #3</td></tr>
+<tr><td>7</td><td><?php echo sm_t('BAUSTEIN.VERGLEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG_AKTIV')); ?></td><td><?php echo sm_t('LOX.P_SCHWELLE0'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #3</td></tr>
+<tr><td>8</td><td><?php echo sm_t('BAUSTEIN.ANALOGSPEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VORWERT')); ?></td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGANG'); ?> = #4</td></tr>
 <tr><td>9</td><td><?php echo sm_t('BAUSTEIN.FORMEL'); ?></td><td><?php echo sm_e(sm_t('LOX.N_AENDERUNG')); ?></td><td><span class="sm-mono">ABS(I1-I2)</span></td><td>I1 = #4, I2 = #8</td></tr>
-<tr><td>10</td><td><?php echo sm_t('BAUSTEIN.EVZ'); ?></td><td><?php echo sm_e(sm_t('LOX.N_SCHWEIGT')); ?></td><td><?php echo sm_t('LOX.P_VERZOEGERUNG'); ?> <b><?php echo (int) max(600, sm_alter_grenze() * 2); ?></b> s</td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #9 = 0</td></tr>
-<tr><td>11</td><td><?php echo sm_t('BAUSTEIN.ODER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_MELDUNGEN')); ?></td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGAENGE'); ?> &larr; #10 &hellip;</td></tr>
-<tr><td>12</td><td><?php echo sm_t('BAUSTEIN.BENACHRICHTIGUNG'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLER_PRUEFEN')); ?></td><td><?php echo sm_t('LOX.P_TEXT_FREI'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> &larr; #11</td></tr>
+<tr><td>10</td><td><?php echo sm_t('BAUSTEIN.EVZ'); ?></td><td><?php echo sm_e(sm_t('LOX.N_SCHWEIGT')); ?></td><td><?php echo sm_t('LOX.P_VERZOEGERUNG'); ?> <b><?php echo (int) max(600, sm_alter_grenze() * 2); ?></b> s</td><td><?php echo sm_t('LOX.EINGANG'); ?> = #9 (negiert)</td></tr>
+<tr><td>11</td><td><?php echo sm_t('BAUSTEIN.ODER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_MELDUNGEN')); ?></td><td>&mdash;</td><td>I1 = #10, I2 = <?php echo sm_t('LOX.WEITERE'); ?> &hellip;</td></tr>
+<tr><td>12</td><td><?php echo sm_t('BAUSTEIN.BENACHRICHTIGUNG'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLER_PRUEFEN')); ?></td><td><?php echo sm_t('LOX.P_TEXT_FREI'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #11</td></tr>
 <tr><td>13 <i>(<?php echo sm_t('ALLG.OPTIONAL'); ?>)</i></td><td><?php echo sm_t('BAUSTEIN.STATUS'); ?></td><td><?php echo sm_e(sm_t('LOX.N_AKTUELL')); ?></td><td><?php echo sm_t('LOX.P_STATUSTEXT'); ?></td><td>v1 = #3, v2 = #1</td></tr>
 </table>
 </div>
