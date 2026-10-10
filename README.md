@@ -10,6 +10,12 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.8
+
+Der Reiter *Einbindung in Loxone* zeigt in Schritt 6 zwei Baustein-Listen, je Leseweg (klassisch
+und vzLogger) eine, mit dem Bild der passenden Seite aus dem
+[LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt).
+
 ## Neu in 2.8.7
 
 Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
@@ -148,6 +154,11 @@ Satz, der auf diese Anlage zutrifft. Der Reiter *Einbindung in Loxone* zeigt
 die vollständigen Themen und die Namen der virtuellen Eingänge.
 
 UDP steht weiterhin zur Verfügung, wo es gebraucht wird.
+
+Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig
+verbunden auf den Seiten „Smartmeter klassisch“ und „Smartmeter vzLogger“ im
+[LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt), einer gemeinsamen
+Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ## Zähler ohne gestellte Uhr
 

@@ -867,6 +867,10 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 /* X-2 (Durchgang 01.10.2026): ein beanstandetes Feld. */
 .sm-wrap .sm-beanstandet { border: 2px solid #b00000 !important; background: #fff4f4 !important; }
 .sm-rot { background: #b00000; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 </style>
 
 <div class="sm-wrap">
@@ -1528,48 +1532,125 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 <div class="sm-step">
 <b><?php echo sm_t('LOX.S6_TITEL'); ?></b><br><br>
 <?php echo sm_t('LOX.S6_TEXT'); ?>
+<?php
+/* Welle Bild 7 (2.8.8, Musterprojekt): zwei Baustein-Listen, je Leseweg eine, beide immer
+ * sichtbar. Sie sind im LoxBerry-Plugins Musterprojekt in Loxone Config gebaut und mit
+ * leitungen_setzen.py verbunden (Musterprojekt/baustein_listen.txt, Abschnitte "Smartmeter
+ * klassisch" und "Smartmeter vzLogger") - eine Zeile = ein Baustein, nur die Hauptvariante.
+ *
+ * Die Namen #1 bis #4 kommen aus derselben Quelle wie die Vorlagen, die der Knopf in
+ * Schritt 3 erzeugt: sm_ve_name() mit dem Themenpraefix und der Zaehlernummer und die
+ * Lebenszeichen aus sm_vorlage_status(). Zaehlernummer: auf dem vzLogger-Weg die
+ * Einstellung serial (wie sm_vorlage()), auf dem klassischen Weg der erste Lesekopf (wie
+ * sm_vorlage_legacy()); ist nichts eingerichtet, steht der Platzhalter. Der Vorlagentitel im
+ * Typ ist der Titel der Vorlage. Bausteinnamen #5 bis #14 in beiden Sprachen wie im
+ * Musterprojekt. Was die beiden Wege unterscheidet (Vorlage, kWh/Wh, kW/W), steht in
+ * $sm_bl_wege; alle Zellen sind Klartext und gehen durch sm_e(), '' wird ein Strich. */
+$sm_bl_praefix = $sm_legacy['MQTTTOPIC'];
+$sm_bl_koepfe  = sm_koepfe();
+$sm_bl_status  = sm_vorlage_status($sm_bl_praefix);
+$sm_bl_wege = array(
+    array('titel'    => sm_t('LOX.BL_KLASSISCH'),
+          'seite'    => 'Smartmeter klassisch',
+          'bild'     => 'einbindung_loxone_klassisch.png',
+          'vorlage'  => sm_t('LOX.VORLAGE_TITEL_LG'),
+          'nummer'   => $sm_bl_koepfe ? (string) $sm_bl_koepfe[0]['ABSCHNITT'] : '',
+          'energie'  => 'kWh',
+          'leistung' => 'kW'),
+    array('titel'    => sm_t('LOX.BL_VZLOGGER'),
+          'seite'    => 'Smartmeter vzLogger',
+          'bild'     => 'einbindung_loxone_vzlogger.png',
+          'vorlage'  => sm_t('LOX.VORLAGE_TITEL'),
+          'nummer'   => (string) $sm_cfg['serial'],
+          'energie'  => 'Wh',
+          'leistung' => 'W'),
+);
+foreach ($sm_bl_wege as $sm_bl_w) {
+    $sm_bl_nr = ($sm_bl_w['nummer'] !== '') ? $sm_bl_w['nummer'] : sm_t('LOX.BL_ZAEHLERNUMMER');
+    $sm_bl_e  = $sm_bl_w['energie'];
+    $sm_bl_p  = $sm_bl_w['leistung'];
+    $sm_bl_vh = sprintf(sm_t('BAUSTEIN.VHTTP_TYP'), $sm_bl_w['vorlage']);
+    /* Je Zeile: Typ, Name, Parameter, Eingaenge verbinden mit. */
+    $sm_bl_zeilen = array(
+        1   => array($sm_bl_vh,
+                     sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:1.8.0')),
+                     sprintf(sm_t('BAUSTEIN.B1_PARAM'), $sm_bl_e, $sm_bl_nr),
+                     ''),
+        2   => array($sm_bl_vh,
+                     sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:16.7.0')),
+                     sprintf(sm_t('BAUSTEIN.B2_PARAM'), $sm_bl_p),
+                     ''),
+        3   => array($sm_bl_vh,
+                     $sm_bl_status[0][0],
+                     sm_t('BAUSTEIN.B3_PARAM'),
+                     ''),
+        4   => array($sm_bl_vh,
+                     $sm_bl_status[2][0],
+                     sm_t('BAUSTEIN.B4_PARAM'),
+                     ''),
+        5   => array(sm_t('BAUSTEIN.B5_TYP'),
+                     sm_t('BAUSTEIN.B5_NAME'),
+                     sm_t('BAUSTEIN.B5_PARAM'),
+                     ''),
+        6   => array(sm_t('BAUSTEIN.B6_TYP'),
+                     sm_t('BAUSTEIN.B6_NAME'),
+                     sm_t('BAUSTEIN.B6_PARAM'),
+                     ''),
+        7   => array(sm_t('BAUSTEIN.B7_TYP'),
+                     sprintf(sm_t('BAUSTEIN.B7_NAME'), $sm_bl_e),
+                     '',
+                     sm_t('BAUSTEIN.B7_VERB')),
+        8   => array(sm_t('BAUSTEIN.B8_TYP'),
+                     sprintf(sm_t('BAUSTEIN.B8_NAME'), $sm_bl_e),
+                     sm_t('BAUSTEIN.B8_PARAM'),
+                     sm_t('BAUSTEIN.B8_VERB')),
+        9   => array(sm_t('BAUSTEIN.B9_TYP'),
+                     sm_t('BAUSTEIN.B9_NAME'),
+                     sm_t('BAUSTEIN.B9_PARAM'),
+                     sm_t('BAUSTEIN.B9_VERB')),
+        10  => array(sm_t('BAUSTEIN.B10_TYP'),
+                     sm_t('BAUSTEIN.B10_NAME'),
+                     '',
+                     sm_t('BAUSTEIN.B10_VERB')),
+        11  => array(sm_t('BAUSTEIN.B11_TYP'),
+                     sm_t('BAUSTEIN.B11_NAME'),
+                     sm_t('BAUSTEIN.B11_PARAM'),
+                     sm_t('BAUSTEIN.B11_VERB')),
+        12  => array(sm_t('BAUSTEIN.B12_TYP'),
+                     sm_t('BAUSTEIN.B12_NAME'),
+                     '',
+                     sm_t('BAUSTEIN.B12_VERB')),
+        13  => array(sm_t('BAUSTEIN.B13_TYP'),
+                     sm_t('BAUSTEIN.B13_NAME'),
+                     sm_t('BAUSTEIN.B13_PARAM'),
+                     sm_t('BAUSTEIN.B13_VERB')),
+        14  => array(sm_t('BAUSTEIN.B14_TYP'),
+                     sm_t('BAUSTEIN.B14_NAME'),
+                     sprintf(sm_t('BAUSTEIN.B14_PARAM'), $sm_bl_p, $sm_bl_e),
+                     sm_t('BAUSTEIN.B14_VERB')),
+    ); ?>
+<h3 class="sm-h3"><?php echo sm_e($sm_bl_w['titel']); ?></h3>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?php echo sm_t('LOX.SP_BAUSTEIN'); ?></th><th><?php echo sm_t('LOX.SP_NAME'); ?></th><th><?php echo sm_t('LOX.SP_PARAMETER'); ?></th><th><?php echo sm_t('LOX.SP_EINGAENGE'); ?></th></tr>
-<?php
-/* Die drei Feldnamen der Zeilen 1 bis 3 kommen aus sm_obis_feld() - also
- * aus bin/sm_felder.json, derselben Datei, aus der auch die Tabelle in
- * Schritt 3 und der Dienst schoepfen. Bis 2.4.2 standen sie hier als
- * Literale und wichen bei jedem anderen Kanalsatz von der Tabelle
- * darueber ab, auf derselben Seite.
- *
- * Dazu die Gegenprobe, ob der Kanal ueberhaupt eingestellt ist: ein
- * Tarifzaehler ohne 16.7.0 bekommt sonst eine Zeile zum Nachbauen, die
- * nie einen Wert traegt. */
-$sm_bl = sm_vz_felder($sm_cfg);
-?>
-<tr><td>1</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_BEZUG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>&mdash; (<?php echo sm_quelle_mqtt('1-0:1.8.0', $sm_bl); ?>)</td></tr>
-<tr><td>2</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kWh</span></td><td>&mdash; (<?php echo sm_quelle_mqtt('1-0:2.8.0', $sm_bl); ?>)</td></tr>
-<tr><td>3</td><td><?php echo sm_t('BAUSTEIN.VE'); ?></td><td><?php echo sm_e(sm_t('LOX.N_LEISTUNG')); ?></td><td><?php echo sm_t('ALLG.EINHEIT'); ?> <span class="sm-mono">&lt;v.3&gt; kW</span></td><td>&mdash; (<?php echo sm_quelle_mqtt('1-0:16.7.0', $sm_bl); ?>)</td></tr>
-<!-- ZAEHLER ist KEIN MQTT-Thema. Er steht ausschliesslich in der
-     Schlusszeile des Endpunkts (Schritt 8); bis 2.4.2 stand hier "MQTT
-     ZAEHLER", und weder der Dienst noch die Vorlage kennen ein solches
-     Thema. Baustein #4 blieb damit ohne Wert - und mit ihm die ganze
-     Kette #8 bis #12, also genau die Ausfallerkennung, fuer die dieser
-     Schritt da ist. -->
-<tr><td>4</td><td><?php echo sm_t('BAUSTEIN.VE_HTTP'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLWERK')); ?></td><td><?php echo sm_t('LOX.P_ZAEHLER'); ?></td><td>&mdash; (<?php echo sm_t('LOX.Q_ENDPUNKT'); ?>)</td></tr>
-<tr><td>5</td><td><?php echo sm_t('BAUSTEIN.ZAEHLER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERBRAUCH_TAG')); ?></td><td><?php echo sm_t('LOX.P_MITTERNACHT'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #1</td></tr>
-<tr><td>6</td><td><?php echo sm_t('BAUSTEIN.STATISTIK'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VERLAUF')); ?></td><td><?php echo sm_t('LOX.P_ANALOG'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #3</td></tr>
-<tr><td>7</td><td><?php echo sm_t('BAUSTEIN.VERGLEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_EINSPEISUNG_AKTIV')); ?></td><td><?php echo sm_t('LOX.P_SCHWELLE0'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #3</td></tr>
-<tr><td>8</td><td><?php echo sm_t('BAUSTEIN.ANALOGSPEICHER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_VORWERT')); ?></td><td>&mdash;</td><td><?php echo sm_t('LOX.EINGANG'); ?> = #4</td></tr>
-<tr><td>9</td><td><?php echo sm_t('BAUSTEIN.FORMEL'); ?></td><td><?php echo sm_e(sm_t('LOX.N_AENDERUNG')); ?></td><td><span class="sm-mono">ABS(I1-I2)</span></td><td>I1 = #4, I2 = #8</td></tr>
-<tr><td>10</td><td><?php echo sm_t('BAUSTEIN.EVZ'); ?></td><td><?php echo sm_e(sm_t('LOX.N_SCHWEIGT')); ?></td><td><?php echo sm_t('LOX.P_VERZOEGERUNG'); ?> <b><?php echo (int) max(600, sm_alter_grenze() * 2); ?></b> s</td><td><?php echo sm_t('LOX.EINGANG'); ?> = #9 (negiert)</td></tr>
-<tr><td>11</td><td><?php echo sm_t('BAUSTEIN.ODER'); ?></td><td><?php echo sm_e(sm_t('LOX.N_MELDUNGEN')); ?></td><td>&mdash;</td><td>I1 = #10, I2 = <?php echo sm_t('LOX.WEITERE'); ?> &hellip;</td></tr>
-<tr><td>12</td><td><?php echo sm_t('BAUSTEIN.BENACHRICHTIGUNG'); ?></td><td><?php echo sm_e(sm_t('LOX.N_ZAEHLER_PRUEFEN')); ?></td><td><?php echo sm_t('LOX.P_TEXT_FREI'); ?></td><td><?php echo sm_t('LOX.EINGANG'); ?> = #11</td></tr>
-<tr><td>13 <i>(<?php echo sm_t('ALLG.OPTIONAL'); ?>)</i></td><td><?php echo sm_t('BAUSTEIN.STATUS'); ?></td><td><?php echo sm_e(sm_t('LOX.N_AKTUELL')); ?></td><td><?php echo sm_t('LOX.P_STATUSTEXT'); ?></td><td>v1 = #3, v2 = #1</td></tr>
+<?php foreach ($sm_bl_zeilen as $sm_bl_n => $sm_bl_z) { ?>
+<tr><td><?php echo (int) $sm_bl_n; ?></td><td><?php echo sm_e($sm_bl_z[0]); ?></td><td<?php echo $sm_bl_n <= 4 ? ' class="sm-mono"' : ''; ?>><?php echo sm_e($sm_bl_z[1]); ?></td><td><?php echo $sm_bl_z[2] !== '' ? sm_e($sm_bl_z[2]) : '&mdash;'; ?></td><td><?php echo $sm_bl_z[3] !== '' ? sm_e($sm_bl_z[3]) : '&mdash;'; ?></td></tr>
+<?php } ?>
 </table>
 </div>
-<br>
-<b><?php echo sm_t('LOX.S6_STATUSTEXT'); ?></b>
-<pre class="sm-pre">&lt;v1.3&gt; kW &middot; <?php echo sm_t('OBIS.ZAEHLERSTAND'); ?> &lt;v2.3&gt; kWh</pre>
-<b><?php echo sm_t('LOX.S6_ZU4'); ?></b> <?php echo sm_t('LOX.S6_ZU4_TEXT'); ?><br>
-<b><?php echo sm_t('LOX.S6_ZU10'); ?></b> <?php echo sm_t('LOX.S6_ZU10_TEXT'); ?><br>
-<b><?php echo sm_t('LOX.S6_ZU1112'); ?></b> <?php echo sm_t('LOX.S6_ZU1112_TEXT'); ?>
+<figure class="sm-bild">
+<img src="<?php echo sm_e($sm_bl_w['bild']); ?>" alt="<?php echo sm_e(sprintf(sm_t('LOX.BILD_ALT'), $sm_bl_w['titel'])); ?>" loading="lazy">
+<figcaption><?php echo sm_e(sprintf(sm_t('LOX.BILD_UNTERSCHRIFT'), $sm_bl_w['seite'])); ?></figcaption>
+</figure>
+<p class="sm-small"><?php echo sm_t('LOX.MUSTERPROJEKT'); ?></p>
+<?php } ?>
+<div class="sm-alert sm-info">
+<?php echo sm_t('BAUSTEIN.H_TAGESVERBRAUCH'); ?><br>
+<?php echo sm_t('BAUSTEIN.H_STATISTIK'); ?><br>
+<?php echo sm_t('BAUSTEIN.H_EINHEITEN'); ?><br>
+<?php echo sm_t('BAUSTEIN.H_BENACHRICHTIGUNG'); ?><br>
+<?php echo sm_t('BAUSTEIN.H_ODER'); ?>
+</div>
 </div>
 
 <div class="sm-step">
