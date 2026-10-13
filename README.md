@@ -10,6 +10,14 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.9
+
+Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt): Der Reiter
+*Einbindung in Loxone* zeigt in Schritt 6 drei Seiten (Leseweg klassisch, Leseweg vzLogger,
+Kosten und Fahrplan-Abgleich) mit drei Bildern und Schritt-für-Schritt-Anleitung, und der neue
+Knopf „Vorlage für Kosten und Fahrplan erzeugen“ in Schritt 11 legt die 16 Eingänge der
+Kostenrechnung und des Fahrplan-Abgleichs in Loxone Config an.
+
 ## Neu in 2.8.8
 
 Der Reiter *Einbindung in Loxone* zeigt in Schritt 6 zwei Baustein-Listen, je Leseweg (klassisch
@@ -63,7 +71,7 @@ wählt, was funktioniert.
 | **Smartmeter (vzLogger)** | Einstellungen und eine achtstufige Diagnose |
 | **Smartmeter (Legacy)** | der klassische Leser mit Zählerprofilen |
 | **MQTT** | die einzige Stelle, an der MQTT eingestellt wird |
-| **Einbindung in Loxone** | MQTT-Themen, UDP-Port, HTTP-Adresse — mit den gespeicherten Werten |
+| **Einbindung in Loxone** | MQTT-Themen, UDP-Port, HTTP-Adresse — mit den gespeicherten Werten; drei Vorlagen für Loxone Config und drei Baustein-Seiten aus dem Musterprojekt |
 | **Test** | Knopfreihen nach Farbregel |
 | **Logdateien** | vzlogger- und Abholprotokoll |
 
@@ -155,8 +163,9 @@ die vollständigen Themen und die Namen der virtuellen Eingänge.
 
 UDP steht weiterhin zur Verfügung, wo es gebraucht wird.
 
-Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig
-verbunden auf den Seiten „Smartmeter klassisch“ und „Smartmeter vzLogger“ im
+Die Bausteine der drei Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig
+verbunden auf den Seiten „Smartmeter klassisch“, „Smartmeter vzLogger“ und „Smartmeter Kosten
+und Fahrplan“ im
 [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt), einer gemeinsamen
 Projektdatei mit allen Plugin-Seiten und Vorlagen.
 

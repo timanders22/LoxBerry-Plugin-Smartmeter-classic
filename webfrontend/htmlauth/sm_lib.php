@@ -1736,6 +1736,14 @@ function sm_xml_virtual_in($titel, $kommentar, $eintraege, $weg = 'legacy')
          * fuer jeden unbekannten Kanal ein OBIS_<kurz>, und ein negativer
          * Wert wuerde durch Signed="false" auf 0 gekappt. */
         $sig  = (!$md || $md['signed']) ? 'true' : 'false';
+        /* Welle Bild 11 VOLL (2.8.9): ein Eintrag darf Vorzeichen, Vorgabewert und Grenzen
+         * selbst mitbringen (e[4]) - die Kosten- und Fahrplan-Themen stehen nicht im Katalog,
+         * und -1 heisst dort "unbekannt". Ohne e[4] bleibt alles wie bisher (DefVal 0). */
+        $def  = 0;
+        if (isset($e[4])) {
+            list($sm_vz, $def, $min, $max) = $e[4];
+            $sig = $sm_vz ? 'true' : 'false';
+        }
         // Der Kommentar wird in Loxone Config zum ANZEIGENAMEN, nicht zur
         // Dokumentation. Eine knappe Zeile, kein Fliesstext.
         // A7 (Durchgang 01.10.2026): ein Eintrag darf Kommentar und Anzeige
@@ -1747,7 +1755,7 @@ function sm_xml_virtual_in($titel, $kommentar, $eintraege, $weg = 'legacy')
         $o .= "\t" . '<VirtualInHttpCmd Title="' . $x($t) . '" ';
         $o .= 'Comment="' . $x($bed) . '" Check=" " ';
         $o .= 'Signed="' . $sig . '" Analog="true" SourceValLow="0" DestValLow="0" '
-            . 'SourceValHigh="1" DestValHigh="1" DefVal="0" MinVal="' . $min
+            . 'SourceValHigh="1" DestValHigh="1" DefVal="' . $def . '" MinVal="' . $min
             . '" MaxVal="' . $max . '" Unit="' . $x($einheit) . '" HintText=""/>' . $crlf;
     }
     $o .= '</VirtualInHttp>' . $crlf;
@@ -1829,6 +1837,66 @@ function sm_vorlage_legacy()
         . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
     return array('VI_smartmeter_klassisch.xml',
         sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL_LG'), $kommentar, $eintraege, 'legacy'));
+}
+
+/**
+ * Die Eingaenge der Vorlage "Kosten und Fahrplan" (Welle Bild 11 VOLL, 2.8.9).
+ *
+ * EINE Quelle fuer die Vorlage (sm_vorlage_kosten()) und die Baustein-Liste der Seite
+ * "Kosten und Fahrplan-Abgleich" im Reiter Einbindung in Loxone. Inhalt wie im LoxBerry-Plugins
+ * Musterprojekt (Musterprojekt/vorlagen/VI_smartmeter_kosten.xml): die acht Kostenthemen, das
+ * Lebenszeichen des Abgleichs und die sieben Themen einer Regel. Titel = Name, unter dem das
+ * MQTT-Gateway den Eingang anlegt (wie sm_ve_name(): nur / und % werden zu _). Die Themen selbst
+ * senden bin/sm_kosten.php und bin/sm_abgleich.php - hier aendert sich nichts daran.
+ *
+ * Rueckgabe: Liste array(Titel, Thema unter dem Praefix, Kommentar, Anzeige,
+ * array(Vorzeichen, Vorgabewert, Min, Max)); -1 heisst bei den Kosten und beim Urteil "unbekannt".
+ */
+function sm_vorlage_kosten_eintraege($praefix, $regel = 1)
+{
+    $pr = trim((string) $praefix, '/');
+    $r  = (string) (int) $regel;
+    // Die Schluessel ausgeschrieben - die Pruefung der Sprachschluessel findet nur, was
+    // woertlich dasteht.
+    $themen = array(
+        array('kosten/quelle_ok',  sm_t('LOX.VE_K_QUELLE_OK'),  '<v>',       array(false, 0, 0, 1)),
+        array('kosten/stunde_ct',  sm_t('LOX.VE_K_STUNDE_CT'),  '<v.1> ct',  array(true, -1, -1, 100000)),
+        array('kosten/heute_ct',   sm_t('LOX.VE_K_HEUTE'),      '<v.1> ct',  array(true, -1, -1, 1000000)),
+        array('kosten/heute_eur',  sm_t('LOX.VE_K_HEUTE'),      '<v.2> EUR', array(true, -1, -1, 10000)),
+        array('kosten/heute_kwh',  sm_t('LOX.VE_K_HEUTE_KWH'),  '<v.2> kWh', array(true, -1, -1, 100000)),
+        array('kosten/stunden',    sm_t('LOX.VE_K_STUNDEN'),    '<v> h',     array(false, 0, 0, 24)),
+        array('kosten/offen',      sm_t('LOX.VE_K_OFFEN'),      '<v> h',     array(false, 0, 0, 24)),
+        array('kosten/ohne_preis', sm_t('LOX.VE_K_OHNE_PREIS'), '<v> h',     array(false, 0, 0, 24)),
+        array('abgleich/quelle_ok', sm_t('LOX.VE_A_QUELLE_OK'), '<v>',       array(false, 0, 0, 1)),
+        array('abgleich/' . $r . '/aktiv',  sprintf(sm_t('LOX.VE_A_AKTIV'), $r), '<v>',       array(false, 0, 0, 1)),
+        array('abgleich/' . $r . '/soll',   sprintf(sm_t('LOX.VE_A_SOLL'), $r),  '<v.2> kWh', array(false, 0, 0, 100000)),
+        array('abgleich/' . $r . '/ist',    sprintf(sm_t('LOX.VE_A_IST'), $r),   '<v.2> kWh', array(false, 0, 0, 100000)),
+        array('abgleich/' . $r . '/fehlt',  sprintf(sm_t('LOX.VE_A_FEHLT'), $r), '<v.2> kWh', array(false, 0, 0, 100000)),
+        array('abgleich/' . $r . '/dauer',  sprintf(sm_t('LOX.VE_A_DAUER'), $r), '<v> s',     array(false, 0, 0, 1000000)),
+        array('abgleich/' . $r . '/sicher', sm_t('LOX.VE_A_SICHER'),             '<v>',       array(false, 0, 0, 1)),
+        array('abgleich/' . $r . '/ok',     sm_t('LOX.VE_A_OK'),                 '<v>',       array(true, -1, -1, 1)),
+    );
+    $aus = array();
+    foreach ($themen as $t) {
+        $aus[] = array(str_replace(array('/', '%'), '_', $pr . '/' . $t[0]), $t[0], $t[1], $t[2], $t[3]);
+    }
+    return $aus;
+}
+
+/**
+ * Die Vorlage "Kosten und Fahrplan" (Welle Bild 11 VOLL, 2.8.9, neue Faehigkeit).
+ *
+ * Gleiche Bauart wie die beiden anderen Vorlagen: Dummy-Adresse http://localhost, die Werte
+ * schreibt das MQTT-Gateway. Sie entsteht immer - auch bei ausgeschalteter Kostenrechnung bzw.
+ * ausgeschaltetem Abgleich; dann kommen eben keine Werte (der Kommentar sagt das).
+ */
+function sm_vorlage_kosten()
+{
+    $legacy = sm_legacy_read();
+    $praefix = $legacy['MQTTTOPIC'];
+    $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR_KO'), $praefix);
+    return array('VI_smartmeter_kosten.xml',
+        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL_KO'), $kommentar, sm_vorlage_kosten_eintraege($praefix)));
 }
 
 /* ==================================================================

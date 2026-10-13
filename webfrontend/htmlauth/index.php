@@ -176,7 +176,13 @@ $sm_legacy = sm_legacy_read();
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])
     && is_string($_POST['vorlage'])) {
     $sm_was = $_POST['vorlage'];
-    list($sm_vname, $sm_vinhalt) = ($sm_was === 'legacy') ? sm_vorlage_legacy() : sm_vorlage();
+    /* Welle Bild 11 VOLL (2.8.9): "kosten" liefert die Vorlage fuer Kosten und Fahrplan
+     * (VI_smartmeter_kosten.xml, Knopf in Schritt 11); sonst wie bisher. */
+    if ($sm_was === 'kosten') {
+        list($sm_vname, $sm_vinhalt) = sm_vorlage_kosten();
+    } else {
+        list($sm_vname, $sm_vinhalt) = ($sm_was === 'legacy') ? sm_vorlage_legacy() : sm_vorlage();
+    }
     if ($sm_vname === '') {
         $sm_fehler[] = sm_t('LOX.VORLAGE_LEER');
         $sm_tab = 'tab-loxone';
@@ -871,6 +877,9 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
 .sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+/* Welle Bild 11 VOLL: Schritte und Hinweise je Baustein-Seite (wie Welle 9/10 VOLL). */
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
 </style>
 
 <div class="sm-wrap">
@@ -1533,124 +1542,375 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 <b><?php echo sm_t('LOX.S6_TITEL'); ?></b><br><br>
 <?php echo sm_t('LOX.S6_TEXT'); ?>
 <?php
-/* Welle Bild 7 (2.8.8, Musterprojekt): zwei Baustein-Listen, je Leseweg eine, beide immer
- * sichtbar. Sie sind im LoxBerry-Plugins Musterprojekt in Loxone Config gebaut und mit
- * leitungen_setzen.py verbunden (Musterprojekt/baustein_listen.txt, Abschnitte "Smartmeter
- * klassisch" und "Smartmeter vzLogger") - eine Zeile = ein Baustein, nur die Hauptvariante.
+/* Welle Bild 11 VOLL (2.8.9, Musterprojekt): drei Seiten, alle immer sichtbar - je Ueberschrift,
+ * Kasten "So uebernehmen Sie diese Seite", Baustein-Liste, Hinweise, Bild und Link. Die Listen
+ * sind im LoxBerry-Plugins Musterprojekt in Loxone Config gebaut und verbunden
+ * (Musterprojekt/baustein_listen.txt, Abschnitte "Smartmeter klassisch" (24 Zeilen),
+ * "Smartmeter vzLogger" (27) und "Smartmeter Kosten und Fahrplan" (25)) - Vollausstattung.
+ * Bis 2.8.8: zwei Listen zu je 14 Zeilen und ein gemeinsamer Hinweiskasten.
  *
- * Die Namen #1 bis #4 kommen aus derselben Quelle wie die Vorlagen, die der Knopf in
- * Schritt 3 erzeugt: sm_ve_name() mit dem Themenpraefix und der Zaehlernummer und die
- * Lebenszeichen aus sm_vorlage_status(). Zaehlernummer: auf dem vzLogger-Weg die
- * Einstellung serial (wie sm_vorlage()), auf dem klassischen Weg der erste Lesekopf (wie
- * sm_vorlage_legacy()); ist nichts eingerichtet, steht der Platzhalter. Der Vorlagentitel im
- * Typ ist der Titel der Vorlage. Bausteinnamen #5 bis #14 in beiden Sprachen wie im
- * Musterprojekt. Was die beiden Wege unterscheidet (Vorlage, kWh/Wh, kW/W), steht in
- * $sm_bl_wege; alle Zellen sind Klartext und gehen durch sm_e(), '' wird ein Strich. */
+ * Die Namen der Eingaenge kommen aus derselben Quelle wie die Vorlagen: sm_ve_name() mit dem
+ * Themenpraefix und der Zaehlernummer, die Lebenszeichen aus sm_vorlage_status(), die Kosten-
+ * und Fahrplan-Eingaenge aus sm_vorlage_kosten_eintraege() (Vorlage in Schritt 11).
+ * Zaehlernummer: auf dem vzLogger-Weg die Einstellung serial (wie sm_vorlage()), auf dem
+ * klassischen Weg der erste Lesekopf (wie sm_vorlage_legacy()); ist nichts eingerichtet, steht
+ * der Platzhalter. Der Vorlagentitel im Typ ist der Titel der Vorlage. Bausteinnamen in beiden
+ * Sprachen wie im Musterprojekt. Tabellenzellen und Schritte gehen durch sm_e(), '' wird ein
+ * Strich; die Hinweise sind Saetze mit Auszeichnung (wie bis 2.8.8) und gehen roh hinaus -
+ * eingesetzte Namen werden vorher maskiert. */
 $sm_bl_praefix = $sm_legacy['MQTTTOPIC'];
+$sm_bl_pr      = trim((string) $sm_bl_praefix, '/');
 $sm_bl_koepfe  = sm_koepfe();
 $sm_bl_status  = sm_vorlage_status($sm_bl_praefix);
+$sm_bl_kn = array();
+foreach (sm_vorlage_kosten_eintraege($sm_bl_praefix) as $sm_bl_x) { $sm_bl_kn[] = $sm_bl_x[0]; }
+$sm_bl_kn2 = sm_vorlage_kosten_eintraege($sm_bl_praefix, 2);
 $sm_bl_wege = array(
-    array('titel'    => sm_t('LOX.BL_KLASSISCH'),
+    array('art'      => 'K',
+          'titel'    => sm_t('LOX.BL_KLASSISCH'),
           'seite'    => 'Smartmeter klassisch',
           'bild'     => 'einbindung_loxone_klassisch.png',
           'vorlage'  => sm_t('LOX.VORLAGE_TITEL_LG'),
           'nummer'   => $sm_bl_koepfe ? (string) $sm_bl_koepfe[0]['ABSCHNITT'] : '',
           'energie'  => 'kWh',
           'leistung' => 'kW'),
-    array('titel'    => sm_t('LOX.BL_VZLOGGER'),
+    array('art'      => 'V',
+          'titel'    => sm_t('LOX.BL_VZLOGGER'),
           'seite'    => 'Smartmeter vzLogger',
           'bild'     => 'einbindung_loxone_vzlogger.png',
           'vorlage'  => sm_t('LOX.VORLAGE_TITEL'),
           'nummer'   => (string) $sm_cfg['serial'],
           'energie'  => 'Wh',
           'leistung' => 'W'),
+    array('art'      => 'P',
+          'titel'    => sm_t('LOX.BL_KOSTEN'),
+          'seite'    => 'Smartmeter Kosten und Fahrplan',
+          'bild'     => 'einbindung_loxone_kosten.png',
+          'vorlage'  => sm_t('LOX.VORLAGE_TITEL_KO'),
+          'nummer'   => '',
+          'energie'  => '',
+          'leistung' => ''),
 );
 foreach ($sm_bl_wege as $sm_bl_w) {
-    $sm_bl_nr = ($sm_bl_w['nummer'] !== '') ? $sm_bl_w['nummer'] : sm_t('LOX.BL_ZAEHLERNUMMER');
-    $sm_bl_e  = $sm_bl_w['energie'];
-    $sm_bl_p  = $sm_bl_w['leistung'];
+    $sm_bl_k  = ($sm_bl_w['art'] === 'K');
     $sm_bl_vh = sprintf(sm_t('BAUSTEIN.VHTTP_TYP'), $sm_bl_w['vorlage']);
-    /* Je Zeile: Typ, Name, Parameter, Eingaenge verbinden mit. */
-    $sm_bl_zeilen = array(
-        1   => array($sm_bl_vh,
-                     sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:1.8.0')),
-                     sprintf(sm_t('BAUSTEIN.B1_PARAM'), $sm_bl_e, $sm_bl_nr),
-                     ''),
-        2   => array($sm_bl_vh,
-                     sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:16.7.0')),
-                     sprintf(sm_t('BAUSTEIN.B2_PARAM'), $sm_bl_p),
-                     ''),
-        3   => array($sm_bl_vh,
-                     $sm_bl_status[0][0],
-                     sm_t('BAUSTEIN.B3_PARAM'),
-                     ''),
-        4   => array($sm_bl_vh,
-                     $sm_bl_status[2][0],
-                     sm_t('BAUSTEIN.B4_PARAM'),
-                     ''),
-        5   => array(sm_t('BAUSTEIN.B5_TYP'),
-                     sm_t('BAUSTEIN.B5_NAME'),
-                     sm_t('BAUSTEIN.B5_PARAM'),
-                     ''),
-        6   => array(sm_t('BAUSTEIN.B6_TYP'),
-                     sm_t('BAUSTEIN.B6_NAME'),
-                     sm_t('BAUSTEIN.B6_PARAM'),
-                     ''),
-        7   => array(sm_t('BAUSTEIN.B7_TYP'),
-                     sprintf(sm_t('BAUSTEIN.B7_NAME'), $sm_bl_e),
-                     '',
-                     sm_t('BAUSTEIN.B7_VERB')),
-        8   => array(sm_t('BAUSTEIN.B8_TYP'),
-                     sprintf(sm_t('BAUSTEIN.B8_NAME'), $sm_bl_e),
-                     sm_t('BAUSTEIN.B8_PARAM'),
-                     sm_t('BAUSTEIN.B8_VERB')),
-        9   => array(sm_t('BAUSTEIN.B9_TYP'),
-                     sm_t('BAUSTEIN.B9_NAME'),
-                     sm_t('BAUSTEIN.B9_PARAM'),
-                     sm_t('BAUSTEIN.B9_VERB')),
-        10  => array(sm_t('BAUSTEIN.B10_TYP'),
-                     sm_t('BAUSTEIN.B10_NAME'),
-                     '',
-                     sm_t('BAUSTEIN.B10_VERB')),
-        11  => array(sm_t('BAUSTEIN.B11_TYP'),
-                     sm_t('BAUSTEIN.B11_NAME'),
-                     sm_t('BAUSTEIN.B11_PARAM'),
-                     sm_t('BAUSTEIN.B11_VERB')),
-        12  => array(sm_t('BAUSTEIN.B12_TYP'),
-                     sm_t('BAUSTEIN.B12_NAME'),
-                     '',
-                     sm_t('BAUSTEIN.B12_VERB')),
-        13  => array(sm_t('BAUSTEIN.B13_TYP'),
-                     sm_t('BAUSTEIN.B13_NAME'),
-                     sm_t('BAUSTEIN.B13_PARAM'),
-                     sm_t('BAUSTEIN.B13_VERB')),
-        14  => array(sm_t('BAUSTEIN.B14_TYP'),
-                     sm_t('BAUSTEIN.B14_NAME'),
-                     sprintf(sm_t('BAUSTEIN.B14_PARAM'), $sm_bl_p, $sm_bl_e),
-                     sm_t('BAUSTEIN.B14_VERB')),
-    ); ?>
+    /* Je Zeile: Typ, Name, Parameter, Eingaenge verbinden mit. $sm_bl_mono: Zeilen, deren Name
+     * ein Eingang aus der Vorlage ist (Schreibmaschinenschrift). */
+    if ($sm_bl_w['art'] === 'P') {
+        $sm_bl_mono = array(1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21);
+        $sm_bl_zeilen = array(
+            1   => array($sm_bl_vh,
+                   $sm_bl_kn[0],
+                   sm_t('BAUSTEIN.P1_PARAM'),
+                   ''),
+            2   => array($sm_bl_vh,
+                   $sm_bl_kn[1],
+                   sm_t('BAUSTEIN.P2_PARAM'),
+                   ''),
+            3   => array($sm_bl_vh,
+                   $sm_bl_kn[2],
+                   sm_t('BAUSTEIN.P3_PARAM'),
+                   ''),
+            4   => array($sm_bl_vh,
+                   $sm_bl_kn[3],
+                   sm_t('BAUSTEIN.P4_PARAM'),
+                   ''),
+            5   => array($sm_bl_vh,
+                   $sm_bl_kn[4],
+                   sm_t('BAUSTEIN.P5_PARAM'),
+                   ''),
+            6   => array($sm_bl_vh,
+                   $sm_bl_kn[5],
+                   sm_t('BAUSTEIN.P6_PARAM'),
+                   ''),
+            7   => array($sm_bl_vh,
+                   $sm_bl_kn[6],
+                   sm_t('BAUSTEIN.P7_PARAM'),
+                   ''),
+            8   => array($sm_bl_vh,
+                   $sm_bl_kn[7],
+                   sm_t('BAUSTEIN.P8_PARAM'),
+                   ''),
+            9   => array(sm_t('BAUSTEIN.T_FORMEL'),
+                   sm_t('BAUSTEIN.P9_NAME'),
+                   sm_t('BAUSTEIN.P9_PARAM'),
+                   sm_t('BAUSTEIN.P9_VERB')),
+            10  => array(sm_t('BAUSTEIN.T_STATUS'),
+                   sm_t('BAUSTEIN.P10_NAME'),
+                   sm_t('BAUSTEIN.P10_PARAM'),
+                   sm_t('BAUSTEIN.P10_VERB')),
+            11  => array(sm_t('BAUSTEIN.T_NICHT'),
+                   sm_t('BAUSTEIN.P11_NAME'),
+                   '',
+                   sm_t('BAUSTEIN.P11_VERB')),
+            12  => array(sm_t('BAUSTEIN.T_EVZ'),
+                   sm_t('BAUSTEIN.P12_NAME'),
+                   sm_t('BAUSTEIN.P12_PARAM'),
+                   sm_t('BAUSTEIN.P12_VERB')),
+            13  => array(sm_t('BAUSTEIN.T_BENACHRICHTIGUNG'),
+                   sm_t('BAUSTEIN.P13_NAME'),
+                   sm_t('BAUSTEIN.P13_PARAM'),
+                   sm_t('BAUSTEIN.P13_VERB')),
+            14  => array($sm_bl_vh,
+                   $sm_bl_kn[8],
+                   sm_t('BAUSTEIN.P14_PARAM'),
+                   ''),
+            15  => array($sm_bl_vh,
+                   $sm_bl_kn[9],
+                   sm_t('BAUSTEIN.P15_PARAM'),
+                   ''),
+            16  => array($sm_bl_vh,
+                   $sm_bl_kn[10],
+                   sm_t('BAUSTEIN.P16_PARAM'),
+                   ''),
+            17  => array($sm_bl_vh,
+                   $sm_bl_kn[11],
+                   sm_t('BAUSTEIN.P17_PARAM'),
+                   ''),
+            18  => array($sm_bl_vh,
+                   $sm_bl_kn[12],
+                   sm_t('BAUSTEIN.P18_PARAM'),
+                   ''),
+            19  => array($sm_bl_vh,
+                   $sm_bl_kn[13],
+                   sm_t('BAUSTEIN.P19_PARAM'),
+                   ''),
+            20  => array($sm_bl_vh,
+                   $sm_bl_kn[14],
+                   sm_t('BAUSTEIN.P20_PARAM'),
+                   ''),
+            21  => array($sm_bl_vh,
+                   $sm_bl_kn[15],
+                   sm_t('BAUSTEIN.P21_PARAM'),
+                   ''),
+            22  => array(sm_t('BAUSTEIN.T_STATUS'),
+                   sm_t('BAUSTEIN.P22_NAME'),
+                   sm_t('BAUSTEIN.P22_PARAM'),
+                   sm_t('BAUSTEIN.P22_VERB')),
+            23  => array(sm_t('BAUSTEIN.T_GLEICH'),
+                   sm_t('BAUSTEIN.P23_NAME'),
+                   sm_t('BAUSTEIN.P23_PARAM'),
+                   sm_t('BAUSTEIN.P23_VERB')),
+            24  => array(sm_t('BAUSTEIN.T_UND'),
+                   sm_t('BAUSTEIN.P24_NAME'),
+                   sm_t('BAUSTEIN.P24_PARAM'),
+                   sm_t('BAUSTEIN.P24_VERB')),
+            25  => array(sm_t('BAUSTEIN.T_BENACHRICHTIGUNG'),
+                   sm_t('BAUSTEIN.P25_NAME'),
+                   sm_t('BAUSTEIN.P25_PARAM'),
+                   sm_t('BAUSTEIN.P25_VERB')),
+        );
+        $sm_bl_schritte = array(
+            sm_t('BAUSTEIN.P_S1'),
+            sprintf(sm_t('BAUSTEIN.P_S2'), sm_t('TAB.LOXONE'), sm_t('AB.LABEL_AKTIV'), sm_t('KO.LABEL_AKTIV')),
+            sprintf(sm_t('BAUSTEIN.P_S3'), sm_t('LOX.K_VORLAGE_KO')),
+            sprintf(sm_t('BAUSTEIN.P_S4'), $sm_bl_w['vorlage']),
+            sm_t('BAUSTEIN.P_S5'),
+            sm_t('BAUSTEIN.P_S6'),
+        );
+        $sm_bl_hinweise = array(
+            sprintf(sm_t('BAUSTEIN.P_H_AUS'), sm_e($sm_bl_kn[0])),
+            sm_t('BAUSTEIN.P_H_HEUTE'),
+            sprintf(sm_t('BAUSTEIN.P_H_REGELN'), sm_e($sm_bl_kn2[15][0]), sm_e($sm_bl_kn[8])),
+            sm_t('BAUSTEIN.P_H_URTEIL'),
+        );
+    } else {
+        $sm_bl_nr = ($sm_bl_w['nummer'] !== '') ? $sm_bl_w['nummer'] : sm_t('LOX.BL_ZAEHLERNUMMER');
+        $sm_bl_e  = $sm_bl_w['energie'];
+        $sm_bl_p  = $sm_bl_w['leistung'];
+        $sm_bl_mono = array(1, 2, 3, 4, 15, 18, 19);
+        $sm_bl_zeilen = array(
+            1   => array($sm_bl_vh,
+                   sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:1.8.0')),
+                   sprintf(sm_t('BAUSTEIN.B1_PARAM'), $sm_bl_e, $sm_bl_nr),
+                   ''),
+            2   => array($sm_bl_vh,
+                   sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:16.7.0')),
+                   sprintf(sm_t('BAUSTEIN.B2_PARAM'), $sm_bl_p),
+                   ''),
+            3   => array($sm_bl_vh,
+                   $sm_bl_status[0][0],
+                   sm_t('BAUSTEIN.B3_PARAM'),
+                   ''),
+            4   => array($sm_bl_vh,
+                   $sm_bl_status[2][0],
+                   sm_t('BAUSTEIN.B4_PARAM'),
+                   ''),
+            5   => array(sm_t('BAUSTEIN.B5_TYP'),
+                   sm_t('BAUSTEIN.B5_NAME'),
+                   sm_t('BAUSTEIN.B5_PARAM'),
+                   ''),
+            6   => array(sm_t('BAUSTEIN.B6_TYP'),
+                   sm_t('BAUSTEIN.B6_NAME'),
+                   sm_t('BAUSTEIN.B6_PARAM'),
+                   ''),
+            7   => array(sm_t('BAUSTEIN.B7_TYP'),
+                   sprintf(sm_t('BAUSTEIN.B7_NAME'), $sm_bl_e),
+                   sm_t('BAUSTEIN.B7_PARAM'),
+                   sm_t('BAUSTEIN.B7_VERB')),
+            8   => array(sm_t('BAUSTEIN.B8_TYP'),
+                   sprintf(sm_t('BAUSTEIN.B8_NAME'), $sm_bl_e),
+                   sm_t('BAUSTEIN.B8_PARAM'),
+                   sm_t('BAUSTEIN.B8_VERB')),
+            9   => array(sm_t('BAUSTEIN.B9_TYP'),
+                   sm_t('BAUSTEIN.B9_NAME'),
+                   sm_t('BAUSTEIN.B9_PARAM'),
+                   sm_t('BAUSTEIN.B9_VERB')),
+            10  => array(sm_t('BAUSTEIN.B10_TYP'),
+                   sm_t('BAUSTEIN.B10_NAME'),
+                   '',
+                   sm_t('BAUSTEIN.B10_VERB')),
+            11  => array(sm_t('BAUSTEIN.B11_TYP'),
+                   sm_t('BAUSTEIN.B11_NAME'),
+                   sm_t('BAUSTEIN.B11_PARAM'),
+                   sm_t('BAUSTEIN.B11_VERB')),
+            12  => array(sm_t('BAUSTEIN.B12_TYP'),
+                   sm_t('BAUSTEIN.B12_NAME'),
+                   '',
+                   sm_t('BAUSTEIN.B12_VERB')),
+            13  => array(sm_t('BAUSTEIN.B13_TYP'),
+                   sm_t('BAUSTEIN.B13_NAME'),
+                   sm_t('BAUSTEIN.B13_PARAM'),
+                   sm_t('BAUSTEIN.B13_VERB')),
+            14  => array(sm_t('BAUSTEIN.B14_TYP'),
+                   sm_t('BAUSTEIN.B14_NAME'),
+                   sprintf(sm_t('BAUSTEIN.B14_PARAM'), $sm_bl_p, $sm_bl_e),
+                   sm_t('BAUSTEIN.B14_VERB')),
+            15  => array($sm_bl_vh,
+                   sm_ve_name($sm_bl_praefix, $sm_bl_nr, sm_obis_feld('1-0:2.8.0')),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B15_PARAM_K') : sm_t('BAUSTEIN.B15_PARAM_V')),
+                   ''),
+            16  => array(sm_t('BAUSTEIN.T_ANALOGSPEICHER'),
+                   sprintf(sm_t('BAUSTEIN.B16_NAME'), $sm_bl_e),
+                   sm_t('BAUSTEIN.B7_PARAM'),
+                   sm_t('BAUSTEIN.B16_VERB')),
+            17  => array(sm_t('BAUSTEIN.T_FORMEL'),
+                   sprintf(sm_t('BAUSTEIN.B17_NAME'), $sm_bl_e),
+                   sm_t('BAUSTEIN.B17_PARAM'),
+                   sm_t('BAUSTEIN.B17_VERB')),
+            18  => array($sm_bl_vh,
+                   sm_ve_name($sm_bl_praefix, $sm_bl_nr, 'Consumption_CalculatedPower_OBIS_1.99.0'),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B18_PARAM_K') : sm_t('BAUSTEIN.B18_PARAM_V')),
+                   ''),
+            19  => array($sm_bl_vh,
+                   sm_ve_name($sm_bl_praefix, $sm_bl_nr, 'Delivery_CalculatedPower_OBIS_2.99.0'),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B19_PARAM_K') : sm_t('BAUSTEIN.B19_PARAM_V')),
+                   ''),
+            20  => array(sm_t('BAUSTEIN.T_STATUS'),
+                   sm_t('BAUSTEIN.B20_NAME'),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B20_PARAM_K') : sm_t('BAUSTEIN.B20_PARAM_V')),
+                   sm_t('BAUSTEIN.B20_VERB')),
+            21  => array(sm_t('BAUSTEIN.T_SCHWELLWERT'),
+                   sm_t('BAUSTEIN.B21_NAME'),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B21_PARAM_K') : sm_t('BAUSTEIN.B21_PARAM_V')),
+                   sm_t('BAUSTEIN.B21_VERB')),
+            22  => array(sm_t('BAUSTEIN.T_EVZ'),
+                   sm_t('BAUSTEIN.B22_NAME'),
+                   sm_t('BAUSTEIN.B22_PARAM'),
+                   sm_t('BAUSTEIN.B22_VERB')),
+            23  => array(sm_t('BAUSTEIN.T_STATUS'),
+                   sm_t('BAUSTEIN.B23_NAME'),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B23_PARAM_K') : sm_t('BAUSTEIN.B23_PARAM_V')),
+                   sm_t('BAUSTEIN.B23_VERB')),
+        );
+        if ($sm_bl_k) {
+            $sm_bl_zeilen += array(
+                24  => array(sm_t('BAUSTEIN.T_ZAEHLER_BI'),
+                       sm_t('BAUSTEIN.ZB_NAME'),
+                       sm_t('BAUSTEIN.ZB_PARAM'),
+                       sm_t('BAUSTEIN.ZB_VERB_K')),
+            );
+        } else {
+            $sm_bl_zeilen += array(
+                24  => array(sm_t('BAUSTEIN.T_FORMEL'),
+                       sm_t('BAUSTEIN.V24_NAME'),
+                       sm_t('BAUSTEIN.V24_PARAM'),
+                       sm_t('BAUSTEIN.V24_VERB')),
+                25  => array(sm_t('BAUSTEIN.T_FORMEL'),
+                       sm_t('BAUSTEIN.V25_NAME'),
+                       sm_t('BAUSTEIN.V25_PARAM'),
+                       sm_t('BAUSTEIN.V25_VERB')),
+                26  => array(sm_t('BAUSTEIN.T_FORMEL'),
+                       sm_t('BAUSTEIN.V26_NAME'),
+                       sm_t('BAUSTEIN.V26_PARAM'),
+                       sm_t('BAUSTEIN.V26_VERB')),
+                27  => array(sm_t('BAUSTEIN.T_ZAEHLER_BI'),
+                       sm_t('BAUSTEIN.ZB_NAME'),
+                       sm_t('BAUSTEIN.ZB_PARAM'),
+                       sm_t('BAUSTEIN.ZB_VERB_V')),
+            );
+        }
+        $sm_bl_mqtt = sprintf(sm_t('BAUSTEIN.S_MQTT'), sm_t('TAB.MQTT'), sm_t('MQ.LABEL_AN'), $sm_bl_pr, $sm_bl_pr);
+        $sm_bl_schritte = $sm_bl_k ? array(
+            sprintf(sm_t('BAUSTEIN.K_S1'), sm_t('TAB.LEGACY'), sm_t('TAB.TEST'), sm_t('TEST.K_HTTP')),
+            $sm_bl_mqtt,
+            sprintf(sm_t('BAUSTEIN.K_S3'), sm_t('TAB.LOXONE'), sm_t('LOX.H_VORLAGE'), sm_t('LOX.K_VORLAGE_LG')),
+            sprintf(sm_t('BAUSTEIN.K_S4'), $sm_bl_w['vorlage']),
+            sm_t('BAUSTEIN.S_BAUSTEINE'),
+            sm_t('BAUSTEIN.K_S6'),
+            sm_t('BAUSTEIN.S_MELDUNG'),
+            sm_t('BAUSTEIN.K_S8'),
+        ) : array(
+            sprintf(sm_t('BAUSTEIN.V_S1'), sm_t('TAB.VZ'), sm_t('VZ.LABEL_ENABLED')),
+            $sm_bl_mqtt,
+            sprintf(sm_t('BAUSTEIN.V_S3'), sm_t('TAB.LOXONE'), sm_t('LOX.H_VORLAGE'), sm_t('LOX.K_VORLAGE')),
+            sprintf(sm_t('BAUSTEIN.V_S4'), $sm_bl_w['vorlage']),
+            sm_t('BAUSTEIN.S_BAUSTEINE'),
+            sm_t('BAUSTEIN.V_S6'),
+            sm_t('BAUSTEIN.S_MELDUNG'),
+            sm_t('BAUSTEIN.V_S8'),
+        );
+        $sm_bl_benachr = sprintf(sm_t('BAUSTEIN.H_BENACHRICHTIGUNG'),
+                                 sm_e($sm_bl_status[0][0]), sm_e($sm_bl_status[2][0]));
+        $sm_bl_hinweise = $sm_bl_k ? array(
+            sm_t('BAUSTEIN.H_TAGESVERBRAUCH'),
+            sm_t('BAUSTEIN.H_FEHLT'),
+            sm_t('BAUSTEIN.H_STATISTIK'),
+            sm_t('BAUSTEIN.K_H_UEBERSCHUSS'),
+            sm_t('BAUSTEIN.K_H_TAKT'),
+            sm_t('BAUSTEIN.H_EINWEG'),
+            $sm_bl_benachr,
+            sm_t('BAUSTEIN.H_ODER'),
+        ) : array(
+            sm_t('BAUSTEIN.H_EINHEITEN'),
+            sm_t('BAUSTEIN.V_H_FORMELN'),
+            sm_t('BAUSTEIN.V_H_LEISTUNG'),
+            sm_t('BAUSTEIN.H_TAGESVERBRAUCH'),
+            sm_t('BAUSTEIN.H_FEHLT'),
+            sm_t('BAUSTEIN.H_STATISTIK'),
+            sm_t('BAUSTEIN.V_H_UEBERSCHUSS'),
+            sm_t('BAUSTEIN.H_EINWEG'),
+            $sm_bl_benachr,
+            sm_t('BAUSTEIN.H_ODER'),
+        );
+    } ?>
 <h3 class="sm-h3"><?php echo sm_e($sm_bl_w['titel']); ?></h3>
+<div class="sm-hinweis"><b><?php echo sm_e(sm_t('BAUSTEIN.SCHRITTE_TITEL')); ?></b>
+<ol class="sm-schritte">
+<?php foreach ($sm_bl_schritte as $sm_bl_x) { ?>
+<li><?php echo sm_e($sm_bl_x); ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?php echo sm_t('LOX.SP_BAUSTEIN'); ?></th><th><?php echo sm_t('LOX.SP_NAME'); ?></th><th><?php echo sm_t('LOX.SP_PARAMETER'); ?></th><th><?php echo sm_t('LOX.SP_EINGAENGE'); ?></th></tr>
 <?php foreach ($sm_bl_zeilen as $sm_bl_n => $sm_bl_z) { ?>
-<tr><td><?php echo (int) $sm_bl_n; ?></td><td><?php echo sm_e($sm_bl_z[0]); ?></td><td<?php echo $sm_bl_n <= 4 ? ' class="sm-mono"' : ''; ?>><?php echo sm_e($sm_bl_z[1]); ?></td><td><?php echo $sm_bl_z[2] !== '' ? sm_e($sm_bl_z[2]) : '&mdash;'; ?></td><td><?php echo $sm_bl_z[3] !== '' ? sm_e($sm_bl_z[3]) : '&mdash;'; ?></td></tr>
+<tr><td><?php echo (int) $sm_bl_n; ?></td><td><?php echo sm_e($sm_bl_z[0]); ?></td><td<?php echo in_array($sm_bl_n, $sm_bl_mono, true) ? ' class="sm-mono"' : ''; ?>><?php echo sm_e($sm_bl_z[1]); ?></td><td><?php echo $sm_bl_z[2] !== '' ? sm_e($sm_bl_z[2]) : '&mdash;'; ?></td><td><?php echo $sm_bl_z[3] !== '' ? sm_e($sm_bl_z[3]) : '&mdash;'; ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<div class="sm-alert sm-info"><b><?php echo sm_e(sm_t('BAUSTEIN.HINWEISE_TITEL')); ?></b>
+<ul class="sm-schritte">
+<?php foreach ($sm_bl_hinweise as $sm_bl_x) { ?>
+<li><?php echo $sm_bl_x; ?></li>
+<?php } ?>
+</ul></div>
 <figure class="sm-bild">
 <img src="<?php echo sm_e($sm_bl_w['bild']); ?>" alt="<?php echo sm_e(sprintf(sm_t('LOX.BILD_ALT'), $sm_bl_w['titel'])); ?>" loading="lazy">
 <figcaption><?php echo sm_e(sprintf(sm_t('LOX.BILD_UNTERSCHRIFT'), $sm_bl_w['seite'])); ?></figcaption>
 </figure>
 <p class="sm-small"><?php echo sm_t('LOX.MUSTERPROJEKT'); ?></p>
 <?php } ?>
-<div class="sm-alert sm-info">
-<?php echo sm_t('BAUSTEIN.H_TAGESVERBRAUCH'); ?><br>
-<?php echo sm_t('BAUSTEIN.H_STATISTIK'); ?><br>
-<?php echo sm_t('BAUSTEIN.H_EINHEITEN'); ?><br>
-<?php echo sm_t('BAUSTEIN.H_BENACHRICHTIGUNG'); ?><br>
-<?php echo sm_t('BAUSTEIN.H_ODER'); ?>
-</div>
 </div>
 
 <div class="sm-step">
@@ -1862,6 +2122,19 @@ if ($sm_ko['da'] && $sm_ko['ts']) {
 <?php } elseif (sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1') { ?>
 <div class="sm-alert sm-info"><?php echo sm_t('KO.NOCH_NICHTS'); ?></div>
 <?php } ?>
+<!-- Welle Bild 11 VOLL (2.8.9): die Vorlage fuer die Seite "Kosten und Fahrplan-Abgleich"
+     in Schritt 6 - fuer Schritt 10 und 11 zusammen, deshalb am Ende von Schritt 11. -->
+<div class="sm-hinweis"><?php echo sm_t('LOX.KO_VORLAGE_TEXT'); ?></div>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <?php echo sm_fmt(); ?>
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="kosten"><?php echo sm_t('LOX.K_VORLAGE_KO'); ?></button>
+  </form>
+</div>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.VORLAGE'); ?></span>
+</div>
 </div>
 </div>
 
