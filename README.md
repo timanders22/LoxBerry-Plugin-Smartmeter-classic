@@ -10,6 +10,36 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.11
+
+Umstellung auf MQTT (Gruppe 1): Werte gehen wie bisher über das MQTT-Gateway; Gateway V1 und V2
+werden beide unterstützt. Befehle aus Loxone hat dieses Plugin nicht.
+
+* **Schritt 2 im Reiter *Einbindung in Loxone*** richtet sich nach der Fassung des Gateways: unter
+  V1 „Abo prüfen“ (das Plugin trägt `<Praefix>/#` selbst ein), unter V2 eine Hakenliste der
+  Datenpunkte – genau die Namen der Namenstabelle für die eingeschalteten Teile, mit „Noncached“
+  an `<Praefix>_status_ok`,
+  `<Praefix>_kosten_quelle_ok` und `<Praefix>_abgleich_quelle_ok`. Der Reiter *Test* prüft die
+  Hakenliste gegen die gesendeten Themen.
+* **Keine Importvorlagen mehr für die Werte:** Die Knöpfe „Vorlage für Loxone Config erzeugen“,
+  „Vorlage für den klassischen Leser“ und „Vorlage für Kosten und Fahrplan erzeugen“ entfallen
+  (sie legten einen Virtuellen HTTP-Eingang mit `http://localhost` an). Statt dessen zeigt
+  Schritt 3 eine Namenstabelle der Gateway-Namen mit Kopierknopf, Bedeutung, Einheit/Bereich und
+  Zahl/Text: je Wert in Loxone Config einen *Virtuellen Eingang* (Texte: *Virtueller Texteingang*)
+  mit genau diesem Namen anlegen, „Als Digitaleingang verwenden“ nicht aktivieren. Der am
+  Miniserver angemeldete LoxBerry-Benutzer braucht Rechte auf die Eingänge. Wer die Seiten aus dem
+  Musterprojekt kopiert, bekommt die Eingänge mit. Die Baustein-Listen nennen als Typ jetzt
+  „Virtueller Eingang (Name wie das MQTT-Gateway ihn vergibt …)“; die drei Bilder sind neu.
+* **-1 statt „-“:** Schaltzustand, Tarif und Meldungscode, die eine Messung nicht mehr liefert,
+  und `abgleich/<n>/aktiv` einer entfernten Regel gehen als -1 hinaus (weiter retained). Die
+  Namenstabelle nennt bei diesen Werten den Bereich ab -1.
+* **Kosten:** `kosten/quelle_ok` geht auch hinaus, solange es noch keine Verbrauchshistorie gibt.
+* **Seiten „Smartmeter klassisch“ und „Smartmeter vzLogger“:** Einschaltverzögerung vor der
+  Zählerstörung (Nr. 25 mit 600 s bzw. Nr. 28 mit 300 s), damit nach einem Neustart des
+  Miniservers keine Fehlmeldung kommt; Takttabelle an Nr. 11, neue Bilder. Wer die Seite schon
+  gebaut hat: die Einschaltverzögerung zwischen NICHT (Nr. 10) und ODER (Nr. 12) einfügen.
+  Schritt 5 (Ausfallerkennung) beschreibt die beiden Wächter über die Lebenszeichen.
+
 ## Neu in 2.8.10
 
 Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild); ohne diese
@@ -76,7 +106,7 @@ wählt, was funktioniert.
 | **Smartmeter (vzLogger)** | Einstellungen und eine achtstufige Diagnose |
 | **Smartmeter (Legacy)** | der klassische Leser mit Zählerprofilen |
 | **MQTT** | die einzige Stelle, an der MQTT eingestellt wird |
-| **Einbindung in Loxone** | MQTT-Themen, UDP-Port, HTTP-Adresse — mit den gespeicherten Werten; drei Vorlagen für Loxone Config und drei Baustein-Seiten aus dem Musterprojekt |
+| **Einbindung in Loxone** | MQTT-Themen, UDP-Port, HTTP-Adresse — mit den gespeicherten Werten; Namenstabelle der Gateway-Namen, Hakenliste für Gateway V2 und drei Baustein-Seiten aus dem Musterprojekt |
 | **Test** | Knopfreihen nach Farbregel |
 | **Logdateien** | vzlogger- und Abholprotokoll |
 
@@ -158,9 +188,12 @@ Unterschiede sehen.
 Ob im MQTT-Gateway ein Abo einzutragen ist, hängt an dessen Fassung:
 
 - **Gateway V1** — das Abo `<Praefix>/#` muss eingetragen sein, sonst kommt am
-  Miniserver nichts an.
+  Miniserver nichts an. Das Plugin trägt es selbst ein (`mqtt_subscriptions.cfg`);
+  Schritt 2 sagt, wo man es prüft.
 - **Gateway V2** — das Gateway erkennt die Themengruppe von selbst; ein Abo ist
-  nicht einzutragen, der Kern schaltet die Knöpfe dafür sogar ab.
+  nicht einzutragen. Weitergeleitet wird aber nur, was unter *Abonnements* angehakt
+  ist: Schritt 2 zeigt die Hakenliste (genau die Namen aus Schritt 3) und nennt die
+  drei Werte, die zusätzlich „Noncached“ brauchen.
 
 Welche Fassung läuft, steht im Reiter *MQTT* — und dort steht auch nur der
 Satz, der auf diese Anlage zutrifft. Der Reiter *Einbindung in Loxone* zeigt
@@ -1051,7 +1084,7 @@ Gemessen mit künstlichen, CRC-gültigen SML-Telegrammen durch den echten Leser,
 * **Kosten und Abgleich:** Bei ausgefallener Preisquelle geht `quelle_ok 0` hinaus statt
   zu schweigen; nach Mitternacht -1 statt des Werts von gestern.
 * **MQTT:** Lebenszeichen `status/ok`, `status/ts`, `status/zaehler`; Zustände
-  (Breaker_State, Tarif_Indicator, Message_Code, `abgleich/<n>/aktiv`) retained, `-` für
+  (Breaker_State, Tarif_Indicator, Message_Code, `abgleich/<n>/aktiv`) retained, `-` (seit 2.8.11 `-1`) für
   fehlende Zustände und entfernte Regeln; Abräumen bei Präfixwechsel, „MQTT aus“ und
   Deinstallation; Abodatei für Gateway V1 wird mitgeliefert; Reiter MQTT zeigt die wirklich
   gesendeten Themen mit Spalte „retained“. Ein Präfix mit `#`, `+`, Leerraum oder
@@ -1581,7 +1614,7 @@ Miniserver nicht: über eine Laufzeit hinweg Energie summieren.
 ### Die Themen
 
     <praefix>/abgleich/quelle_ok        1 = Fahrplan erreichbar
-    <praefix>/abgleich/<n>/aktiv        die Regel soll laufen (retained; "-" = Regel entfernt)
+    <praefix>/abgleich/<n>/aktiv        die Regel soll laufen (retained; -1 = Regel entfernt)
     <praefix>/abgleich/<n>/soll         kWh, Leistung mal Laufzeit
     <praefix>/abgleich/<n>/ist          kWh, gemessener Netzbezug
     <praefix>/abgleich/<n>/fehlt        kWh Fehlbetrag

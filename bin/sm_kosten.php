@@ -281,6 +281,10 @@ if (!is_readable($SM_HIST)) {
     $sm_stand['grund'] = 'KEINE_HISTORIE';
     sm_k_log('Es gibt noch keine Verbrauchshistorie - nichts zu rechnen.', 'INFO');
     sm_k_atomar($SM_STAND, json_encode($sm_stand), 0640);
+    /* Gruppe 1 (2.8.11, Entwurf sm 2.3 c): die Preisquelle IST erreichbar - das geht auch ohne
+     * Historie hinaus. Bis 2.8.10 endete dieser Zweig ohne MQTT, und in Loxone blieb ein altes
+     * quelle_ok 0 stehen. Die Kostenzahlen bleiben, wie sie sind. */
+    sm_k_mqtt($sm_cfg, array('kosten/quelle_ok' => 1));
     exit(0);
 }
 

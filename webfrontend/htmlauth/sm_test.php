@@ -499,59 +499,62 @@ function sm_ini_muster_probe()
     return array(1, sprintf(sm_t('PRUEF.INI_OK'), $zeilen, $gesehen));
 }
 
-/** Sind die erzeugbaren Vorlagen wohlgeformt? */
-function sm_vorlagen_probe()
+/**
+ * Gruppe 1 (2.8.11; seit dem Nachtrag 19.10.2026 ohne Vorlagen): haelt die Hakenliste fuer Gateway V2
+ * (sm_v2_haken(), aus der Namenstabelle) gegen die Themen, die der Reiter MQTT als gesendet fuehrt
+ * (sm_mqtt_themen()) - in beide Richtungen, dazu Zahl/Text und den Merker Noncached.
+ *
+ * Zwei verschiedene Aufstellungen: die Themen fuehrt sm_mqtt_themen() je Gruppe selbst (Lebenszeichen,
+ * Kosten und Abgleich ausgeschrieben, Regel als <n>), die Hakenliste kommt aus den Eintraegen der
+ * Namenstabelle. Die Gateway-Namen werden hier aus den Themen gebildet ("/" und "%" -> "_", <n> -> 1),
+ * die drei Noncached-Namen ebenso. Ein Lesekopf ohne erste Messung (".../...") ist nicht zu vergleichen.
+ * Ohne Leseweg, Kosten und Abgleich gibt es nichts zu vergleichen: Strich.
+ */
+function sm_haken_probe()
 {
-    if (!function_exists('simplexml_load_string')) {
-        return array(2, sm_t('PRUEF.XML_KEIN_PARSER'));
-    }
-    $geprueft = 0;
-    $kaputt = array();
-    $lang = array();
-    foreach (array('sm_vorlage', 'sm_vorlage_legacy') as $f) {
-        list($name, $xml) = $f();
-        if ($name === '') {
-            continue;
-        }
-        $geprueft++;
-        /* Die Kodierung ZUERST. Danach kann sie nicht mehr gemessen
-         * werden: die XML-Erklaerung steht fest auf utf-8, libxml prueft
-         * die Kodierung des ganzen Dokuments, und jeder Fall, den die
-         * UTF-8-Zeile fangen soll, fuehrt schon eine Zeile vorher zum
-         * continue. Bis 2.4.2 stand sie danach und hat nie etwas
-         * gefunden - eine Pruefzeile, die nichts findet, sieht in der
-         * Durchsicht wie Sorgfalt aus. */
-        if (!preg_match('//u', $xml)) {
-            $kaputt[] = $name . ' (UTF-8)';
-            continue;
-        }
-        $vorher = libxml_use_internal_errors(true);
-        $sx = simplexml_load_string($xml);
-        libxml_clear_errors();
-        libxml_use_internal_errors($vorher);
-        if ($sx === false) {
-            $kaputt[] = $name;
-            continue;
-        }
-        // Der Kommentar eines Befehls wird in Loxone Config zum
-        // ANZEIGENAMEN. Was ueber vierzig Zeichen liegt, ist ein Satz und
-        // kein Name.
-        if (preg_match_all('/<VirtualInHttpCmd Title="[^"]*" Comment="([^"]*)"/', $xml, $m)) {
-            foreach ($m[1] as $c) {
-                if (strlen($c) > 40) { $lang[] = substr($c, 0, 30) . '...'; }
+    $soll = array();
+    foreach (sm_mqtt_themen() as $gr) {
+        foreach ($gr[1] as $z) {
+            if (strpos((string) $z[0], '...') !== false) {
+                continue;
             }
+            $n = str_replace(array('/', '%'), '_', str_replace('<n>', '1', (string) $z[0]));
+            $soll[$n] = (bool) $z[4];
         }
     }
-    if ($geprueft === 0) {
-        return array(2, sm_t('PRUEF.XML_KEINE'));
+    $ist = array();
+    $merker = array();
+    foreach (sm_v2_haken() as $h) {
+        $ist[$h[0]] = (bool) $h[3];
+        $merker[$h[0]] = $h[2];
     }
-    if ($kaputt) {
-        return array(0, sprintf(sm_t('PRUEF.XML_KAPUTT'), implode(', ', $kaputt)));
+    if (!$soll && !$ist) {
+        return array(2, sm_t('PRUEF.HAKEN_KEINE'));
     }
-    if ($lang) {
-        return array(0, sprintf(sm_t('PRUEF.XML_KOMMENTAR'), count($lang), $lang[0]));
+    $fehlt = array_keys(array_diff_key($soll, $ist));
+    if ($fehlt) {
+        return array(0, sprintf(sm_t('PRUEF.HAKEN_FEHLT'), count($fehlt), $fehlt[0]));
     }
-    return array(1, sprintf(sm_t('PRUEF.XML_OK'), $geprueft));
+    $zuviel = array_keys(array_diff_key($ist, $soll));
+    if ($zuviel) {
+        return array(0, sprintf(sm_t('PRUEF.HAKEN_ZUVIEL'), count($zuviel), $zuviel[0]));
+    }
+    foreach ($soll as $n => $tx) {
+        if ($ist[$n] !== $tx) {
+            return array(0, sprintf(sm_t('PRUEF.HAKEN_ART'), $n));
+        }
+    }
+    $pr = trim((string) sm_legacy_read()['MQTTTOPIC'], '/');
+    $nc = array();
+    foreach (array('status/ok', 'kosten/quelle_ok', 'abgleich/quelle_ok') as $th) {
+        $nc[] = str_replace(array('/', '%'), '_', $pr . '/' . $th);
+    }
+    foreach ($merker as $t => $m) {
+        if (($m === 'Noncached') !== in_array($t, $nc, true)) {
+            return array(0, sprintf(sm_t('PRUEF.HAKEN_MERKER'), $t));
+        }
+    }
+    return array(1, sprintf(sm_t('PRUEF.HAKEN_OK'), count($ist)));
 }
 
 /** Ist die Konfiguration heil - und vollstaendig? */
@@ -687,7 +690,7 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_THEMEN'), sm_themen_probe());
     $add(sm_t('PRUEF.Z_MUSTER'), sm_suchmuster_probe());
     $add(sm_t('PRUEF.Z_INI'), sm_ini_muster_probe());
-    $add(sm_t('PRUEF.Z_XML'), sm_vorlagen_probe());
+    $add(sm_t('PRUEF.Z_HAKEN'), sm_haken_probe());
     $add(sm_t('PRUEF.Z_REITER'), sm_reiter_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_SMACTIVE'), sm_smactive_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_FORM'), sm_formularprobe($datei));

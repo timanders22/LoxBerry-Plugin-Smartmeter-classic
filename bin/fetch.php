@@ -376,8 +376,9 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
                 }
             }
             /* Ein frueher retained gesendetes Zustandsfeld, das diese
-             * ERFOLGREICHE Messung nicht mehr liefert, bekommt einmal "-"
-             * retained (Entscheidungen 5 und 8) - sonst stuende der alte
+             * ERFOLGREICHE Messung nicht mehr liefert, bekommt einmal -1
+             * retained (Entscheidungen 5 und 8; bis 2.8.10 "-", seit Gruppe 1 E2
+             * eine Zahl, die Loxone nicht auf 0 setzt) - sonst stuende der alte
              * Zustand fuer immer im Broker. Schweigt der Zaehler, bleibt er
              * stehen; dann gilt status/ok. Der Merker liegt auf der Ramdisk. */
             if ($sm_frisch) {
@@ -389,9 +390,9 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
                         continue;
                     }
                     if (sm_udp('127.0.0.1', $sm_udpin,
-                               'retain ' . $sm_topic . '/' . $sm_serial . '/' . $sm_weg . ' -')) {
+                               'retain ' . $sm_topic . '/' . $sm_serial . '/' . $sm_weg . ' -1')) {
                         $sm_anzahl++;
-                        sm_fetch_log($sm_serial . ': ' . $sm_weg . ' fehlt in dieser Messung - "-" retained gesendet.', 'INFO');
+                        sm_fetch_log($sm_serial . ': ' . $sm_weg . ' fehlt in dieser Messung - -1 retained gesendet.', 'INFO');
                     } else {
                         $sm_fehl++;
                     }

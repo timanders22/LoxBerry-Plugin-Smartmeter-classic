@@ -173,27 +173,9 @@ $sm_legacy = sm_legacy_read();
  * Downloads - jeder in einem eigenen Formular, damit er nicht am
  * Speichern haengt. Sie enden mit exit.
  * ---------------------------------------------------------------- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])
-    && is_string($_POST['vorlage'])) {
-    $sm_was = $_POST['vorlage'];
-    /* Welle Bild 11 VOLL (2.8.9): "kosten" liefert die Vorlage fuer Kosten und Fahrplan
-     * (VI_smartmeter_kosten.xml, Knopf in Schritt 11); sonst wie bisher. */
-    if ($sm_was === 'kosten') {
-        list($sm_vname, $sm_vinhalt) = sm_vorlage_kosten();
-    } else {
-        list($sm_vname, $sm_vinhalt) = ($sm_was === 'legacy') ? sm_vorlage_legacy() : sm_vorlage();
-    }
-    if ($sm_vname === '') {
-        $sm_fehler[] = sm_t('LOX.VORLAGE_LEER');
-        $sm_tab = 'tab-loxone';
-    } else {
-        header('Content-Type: application/x-download');
-        header('Content-Disposition: attachment; filename="' . $sm_vname . '"');
-        header('Content-Length: ' . strlen($sm_vinhalt));
-        echo $sm_vinhalt;
-        exit;
-    }
-}
+/* Gruppe 1 (2.8.11, Nachtrag 19.10.2026): der Download "vorlage" (VI_smartmeter_mqtt.xml,
+ * VI_smartmeter_klassisch.xml, VI_smartmeter_kosten.xml) ist entfallen - fuer Werte ueber das
+ * MQTT-Gateway gibt es keine Importvorlage mehr, statt dessen die Namenstabelle in Schritt 3. */
 
 /* ---------------------------------------------------------------- *
  * Einstellungen sichern
@@ -803,6 +785,8 @@ LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : 
 .sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
     padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-mono { font-family: monospace; }
+.sm-kopie { margin-left: 6px; padding: 1px 8px; font-size: .85em; cursor: pointer; }
+.sm-namen td { vertical-align: top; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
 .sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0;
   padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
@@ -1409,8 +1393,12 @@ if ($sm_x3) { ?>
      unbedingt da - unter Gateway V2 haetten damit beide Texte auf der Seite
      gestanden. Genau das ist dem Vorbild MG iSmart passiert. -->
 <div class="<?php echo sm_abo_klasse(); ?>"><?php echo sm_abo_text(); ?></div>
+<?php /* Gruppe 1 (2.8.11): unter V2 gibt es kein Abo einzutragen, dort steht die Hakenliste. */
+if (sm_gateway_fassung() !== 2) { ?>
 <p class="sm-small"><?php echo sm_t('MQ.ABO_WO'); ?>:</p>
 <pre class="sm-pre"><?php echo sm_e(trim($sm_legacy['MQTTTOPIC'], '/')); ?>/#</pre>
+<?php }
+if (sm_gateway_fassung() !== 1) { echo sm_v2_haken_html(); } ?>
 
 <h2><?php echo sm_t('MQ.H_THEMEN'); ?></h2>
 <p class="sm-small"><?php echo sm_t('MQ.THEMEN_HINT'); ?></p>
@@ -1470,51 +1458,25 @@ foreach (sm_mqtt_themen() as $sm_gr) {
 </div>
 
 <div class="sm-step">
-<b><?php echo sm_t('LOX.S2_TITEL'); ?></b><br><br>
+<b><?php echo sm_e(sm_s2_titel()); ?></b><br><br>
 <div class="<?php echo sm_abo_klasse(); ?>"><?php echo sm_abo_text(); ?></div>
+<?php /* Gruppe 1 (2.8.11): Titel, Abo-Zeile und Hakenliste nach der Gateway-Fassung. */
+if (sm_gateway_fassung() !== 2) { ?>
 <?php echo sm_t('MQ.ABO_WO'); ?>:
 <pre class="sm-pre"><?php echo sm_e(trim($sm_legacy['MQTTTOPIC'], '/')); ?>/#</pre>
+<?php }
+if (sm_gateway_fassung() !== 1) { echo sm_v2_haken_html(); } ?>
 </div>
 
 <div class="sm-step">
 <b><?php echo sm_t('LOX.S3_TITEL'); ?></b><br><br>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th><?php echo sm_t('LOX.SP_TITEL_VE'); ?></th><th style="width:14%"><?php echo sm_t('ALLG.EINHEIT'); ?></th><th style="width:28%"><?php echo sm_t('ALLG.BEDEUTUNG'); ?></th></tr>
-<?php foreach (sm_vz_felder($sm_cfg) as $sm_feld) {
-    $sm_md = sm_feld($sm_feld);
-    if ($sm_md && $sm_md['typ'] === 'text') { continue; }
-    /* Dieselbe Quelle wie die Vorlage, die der Knopf darunter erzeugt.
-     * Die Tabelle erklaert, WAS importiert wird - sie muss deshalb genau
-     * das zeigen, was in der Datei steht. */
-    list($sm_eh_roh, , , $sm_nk_vz) = sm_einheit_fuer($sm_md, 'vz', $sm_feld);
-    $sm_eh = ($sm_eh_roh !== '')
-        ? '&lt;v.' . (int) $sm_nk_vz . '&gt;&nbsp;' . sm_e($sm_eh_roh) : '&ndash;';
-    $sm_bd = $sm_md ? sm_t($sm_md['bed']) : $sm_feld; ?>
-<tr><td class="sm-mono"><?php echo sm_e(sm_ve_name($sm_legacy['MQTTTOPIC'], $sm_cfg['serial'], $sm_feld)); ?></td>
-    <td><?php echo $sm_eh; ?></td><td><?php echo sm_e($sm_bd); ?></td></tr>
-<?php } ?>
-</table>
-</div>
+<?php /* Gruppe 1 (2.8.11, Nachtrag 19.10.2026): keine Importvorlage mehr (Virtueller HTTP-Eingang mit
+   http://localhost), sondern je Wert ein Virtueller Eingang mit genau dem Gateway-Namen - LoxBerry-Wiki
+   (MQTT-Widget), Regeln/07. Namenstabelle aus sm_namen_gruppen(), dieselbe Quelle wie die Hakenliste. */ ?>
+<div class="sm-hinweis"><?php echo sm_t('LOX.NAMEN_ANLEITUNG'); ?></div>
+<?php echo sm_namen_html(); ?>
+<div class="sm-alert sm-info"><?php echo sm_t('LOX.NAMEN_RECHTE'); ?><br><br><?php echo sm_t('LOX.NAMEN_MUSTER'); ?></div>
 <p class="sm-small"><?php echo sm_t('LOX.S3_HINT'); ?></p>
-
-<h2><?php echo sm_t('LOX.H_VORLAGE'); ?></h2>
-<div class="sm-hinweis"><?php echo sm_t('LOX.H_VORLAGE_TEXT'); ?></div>
-<div class="sm-knopfreihe">
-  <form action="index.php" method="post">
-    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <?php echo sm_fmt(); ?>
-    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="mqtt"><?php echo sm_t('LOX.K_VORLAGE'); ?></button>
-  </form>
-  <form action="index.php" method="post">
-    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <?php echo sm_fmt(); ?>
-    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="legacy"><?php echo sm_t('LOX.K_VORLAGE_LG'); ?></button>
-  </form>
-</div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.VORLAGE'); ?></span>
-</div>
 </div>
 
 <div class="sm-step">
@@ -1535,7 +1497,8 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 
 <div class="sm-step">
 <b><?php echo sm_t('LOX.S5_TITEL'); ?></b><br><br>
-<?php echo sm_t('LOX.S5_TEXT'); ?>
+<?php $sm_s5_pr = sm_e(trim((string) $sm_legacy['MQTTTOPIC'], '/'));
+printf(sm_t('LOX.S5_TEXT'), $sm_s5_pr, $sm_s5_pr, $sm_s5_pr); ?>
 </div>
 
 <div class="sm-step">
@@ -1545,16 +1508,19 @@ echo sm_e(sm_check($sm_cfg['serial'], sm_obis_feld($sm_cfg['channels'][0])));
 /* Welle Bild 11 VOLL (2.8.9, Musterprojekt): drei Seiten, alle immer sichtbar - je Ueberschrift,
  * Kasten "So uebernehmen Sie diese Seite", Baustein-Liste, Hinweise, Bild und Link. Die Listen
  * sind im LoxBerry-Plugins Musterprojekt in Loxone Config gebaut und verbunden
- * (Musterprojekt/baustein_listen.txt, Abschnitte "Smartmeter klassisch" (24 Zeilen),
- * "Smartmeter vzLogger" (27) und "Smartmeter Kosten und Fahrplan" (25)) - Vollausstattung.
+ * (Musterprojekt/baustein_listen.txt, Abschnitte "Smartmeter klassisch" (25 Zeilen),
+ * "Smartmeter vzLogger" (28) und "Smartmeter Kosten und Fahrplan" (25)) - Vollausstattung.
+ * Gruppe 1 (2.8.11): Einschaltverzoegerung #25 (klassisch) bzw. #28 (vzLogger) zwischen NICHT #10
+ * und ODER #12 (Entwurf E3), Takttabelle an #11 (klassisch). Nachtrag 2 (19.10.2026): Typ der
+ * Eingangszeilen "Virtueller Eingang (Name wie das MQTT-Gateway ihn vergibt, ...)" wie die Liste.
  * Bis 2.8.8: zwei Listen zu je 14 Zeilen und ein gemeinsamer Hinweiskasten.
  *
  * Die Namen der Eingaenge kommen aus derselben Quelle wie die Vorlagen: sm_ve_name() mit dem
  * Themenpraefix und der Zaehlernummer, die Lebenszeichen aus sm_vorlage_status(), die Kosten-
- * und Fahrplan-Eingaenge aus sm_vorlage_kosten_eintraege() (Vorlage in Schritt 11).
- * Zaehlernummer: auf dem vzLogger-Weg die Einstellung serial (wie sm_vorlage()), auf dem
- * klassischen Weg der erste Lesekopf (wie sm_vorlage_legacy()); ist nichts eingerichtet, steht
- * der Platzhalter. Der Vorlagentitel im Typ ist der Titel der Vorlage. Bausteinnamen in beiden
+ * und Fahrplan-Eingaenge aus sm_vorlage_kosten_eintraege() (Namenstabelle in Schritt 3).
+ * Zaehlernummer: auf dem vzLogger-Weg die Einstellung serial (wie die Namenstabelle), auf dem
+ * klassischen Weg der erste Lesekopf; ist nichts eingerichtet, steht
+ * der Platzhalter. Bausteinnamen in beiden
  * Sprachen wie im Musterprojekt. Tabellenzellen und Schritte gehen durch sm_e(), '' wird ein
  * Strich; die Hinweise sind Saetze mit Auszeichnung (wie bis 2.8.8) und gehen roh hinaus -
  * eingesetzte Namen werden vorher maskiert. */
@@ -1570,7 +1536,6 @@ $sm_bl_wege = array(
           'titel'    => sm_t('LOX.BL_KLASSISCH'),
           'seite'    => 'Smartmeter klassisch',
           'bild'     => 'einbindung_loxone_klassisch.png',
-          'vorlage'  => sm_t('LOX.VORLAGE_TITEL_LG'),
           'nummer'   => $sm_bl_koepfe ? (string) $sm_bl_koepfe[0]['ABSCHNITT'] : '',
           'energie'  => 'kWh',
           'leistung' => 'kW'),
@@ -1578,7 +1543,6 @@ $sm_bl_wege = array(
           'titel'    => sm_t('LOX.BL_VZLOGGER'),
           'seite'    => 'Smartmeter vzLogger',
           'bild'     => 'einbindung_loxone_vzlogger.png',
-          'vorlage'  => sm_t('LOX.VORLAGE_TITEL'),
           'nummer'   => (string) $sm_cfg['serial'],
           'energie'  => 'Wh',
           'leistung' => 'W'),
@@ -1586,14 +1550,13 @@ $sm_bl_wege = array(
           'titel'    => sm_t('LOX.BL_KOSTEN'),
           'seite'    => 'Smartmeter Kosten und Fahrplan',
           'bild'     => 'einbindung_loxone_kosten.png',
-          'vorlage'  => sm_t('LOX.VORLAGE_TITEL_KO'),
           'nummer'   => '',
           'energie'  => '',
           'leistung' => ''),
 );
 foreach ($sm_bl_wege as $sm_bl_w) {
     $sm_bl_k  = ($sm_bl_w['art'] === 'K');
-    $sm_bl_vh = sprintf(sm_t('BAUSTEIN.VHTTP_TYP'), $sm_bl_w['vorlage']);
+    $sm_bl_vh = sm_t('BAUSTEIN.VHTTP_TYP');
     /* Je Zeile: Typ, Name, Parameter, Eingaenge verbinden mit. $sm_bl_mono: Zeilen, deren Name
      * ein Eingang aus der Vorlage ist (Schreibmaschinenschrift). */
     if ($sm_bl_w['art'] === 'P') {
@@ -1703,8 +1666,8 @@ foreach ($sm_bl_wege as $sm_bl_w) {
         $sm_bl_schritte = array(
             sm_t('BAUSTEIN.P_S1'),
             sprintf(sm_t('BAUSTEIN.P_S2'), sm_t('TAB.LOXONE'), sm_t('AB.LABEL_AKTIV'), sm_t('KO.LABEL_AKTIV')),
-            sprintf(sm_t('BAUSTEIN.P_S3'), sm_t('LOX.K_VORLAGE_KO')),
-            sprintf(sm_t('BAUSTEIN.P_S4'), $sm_bl_w['vorlage']),
+            sprintf(sm_t('BAUSTEIN.P_S3'), sm_t('TAB.LOXONE')),
+            sm_t('BAUSTEIN.P_S4'),
             sm_t('BAUSTEIN.P_S5'),
             sm_t('BAUSTEIN.P_S6'),
         );
@@ -1762,12 +1725,12 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                    sm_t('BAUSTEIN.B10_VERB')),
             11  => array(sm_t('BAUSTEIN.B11_TYP'),
                    sm_t('BAUSTEIN.B11_NAME'),
-                   sm_t('BAUSTEIN.B11_PARAM'),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B11_PARAM_K') : sm_t('BAUSTEIN.B11_PARAM')),
                    sm_t('BAUSTEIN.B11_VERB')),
             12  => array(sm_t('BAUSTEIN.B12_TYP'),
                    sm_t('BAUSTEIN.B12_NAME'),
                    '',
-                   sm_t('BAUSTEIN.B12_VERB')),
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B12_VERB_K') : sm_t('BAUSTEIN.B12_VERB_V'))),
             13  => array(sm_t('BAUSTEIN.B13_TYP'),
                    sm_t('BAUSTEIN.B13_NAME'),
                    sm_t('BAUSTEIN.B13_PARAM'),
@@ -1819,6 +1782,10 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                        sm_t('BAUSTEIN.ZB_NAME'),
                        sm_t('BAUSTEIN.ZB_PARAM'),
                        sm_t('BAUSTEIN.ZB_VERB_K')),
+                25  => array(sm_t('BAUSTEIN.T_EVZ'),
+                       sm_t('BAUSTEIN.LF_NAME'),
+                       sm_t('BAUSTEIN.LF_PARAM_K'),
+                       sm_t('BAUSTEIN.LF_VERB')),
             );
         } else {
             $sm_bl_zeilen += array(
@@ -1838,14 +1805,18 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                        sm_t('BAUSTEIN.ZB_NAME'),
                        sm_t('BAUSTEIN.ZB_PARAM'),
                        sm_t('BAUSTEIN.ZB_VERB_V')),
+                28  => array(sm_t('BAUSTEIN.T_EVZ'),
+                       sm_t('BAUSTEIN.LF_NAME'),
+                       sm_t('BAUSTEIN.LF_PARAM_V'),
+                       sm_t('BAUSTEIN.LF_VERB')),
             );
         }
         $sm_bl_mqtt = sprintf(sm_t('BAUSTEIN.S_MQTT'), sm_t('TAB.MQTT'), sm_t('MQ.LABEL_AN'), $sm_bl_pr, $sm_bl_pr);
         $sm_bl_schritte = $sm_bl_k ? array(
             sprintf(sm_t('BAUSTEIN.K_S1'), sm_t('TAB.LEGACY'), sm_t('TAB.TEST'), sm_t('TEST.K_HTTP')),
             $sm_bl_mqtt,
-            sprintf(sm_t('BAUSTEIN.K_S3'), sm_t('TAB.LOXONE'), sm_t('LOX.H_VORLAGE'), sm_t('LOX.K_VORLAGE_LG')),
-            sprintf(sm_t('BAUSTEIN.K_S4'), $sm_bl_w['vorlage']),
+            sprintf(sm_t('BAUSTEIN.K_S3'), sm_t('TAB.LOXONE')),
+            sm_t('BAUSTEIN.K_S4'),
             sm_t('BAUSTEIN.S_BAUSTEINE'),
             sm_t('BAUSTEIN.K_S6'),
             sm_t('BAUSTEIN.S_MELDUNG'),
@@ -1853,8 +1824,8 @@ foreach ($sm_bl_wege as $sm_bl_w) {
         ) : array(
             sprintf(sm_t('BAUSTEIN.V_S1'), sm_t('TAB.VZ'), sm_t('VZ.LABEL_ENABLED')),
             $sm_bl_mqtt,
-            sprintf(sm_t('BAUSTEIN.V_S3'), sm_t('TAB.LOXONE'), sm_t('LOX.H_VORLAGE'), sm_t('LOX.K_VORLAGE')),
-            sprintf(sm_t('BAUSTEIN.V_S4'), $sm_bl_w['vorlage']),
+            sprintf(sm_t('BAUSTEIN.V_S3'), sm_t('TAB.LOXONE')),
+            sm_t('BAUSTEIN.V_S4'),
             sm_t('BAUSTEIN.S_BAUSTEINE'),
             sm_t('BAUSTEIN.V_S6'),
             sm_t('BAUSTEIN.S_MELDUNG'),
@@ -2124,19 +2095,9 @@ if ($sm_ko['da'] && $sm_ko['ts']) {
 <?php } elseif (sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1') { ?>
 <div class="sm-alert sm-info"><?php echo sm_t('KO.NOCH_NICHTS'); ?></div>
 <?php } ?>
-<!-- Welle Bild 11 VOLL (2.8.9): die Vorlage fuer die Seite "Kosten und Fahrplan-Abgleich"
-     in Schritt 6 - fuer Schritt 10 und 11 zusammen, deshalb am Ende von Schritt 11. -->
-<div class="sm-hinweis"><?php echo sm_t('LOX.KO_VORLAGE_TEXT'); ?></div>
-<div class="sm-knopfreihe">
-  <form action="index.php" method="post">
-    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <?php echo sm_fmt(); ?>
-    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="kosten"><?php echo sm_t('LOX.K_VORLAGE_KO'); ?></button>
-  </form>
-</div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.VORLAGE'); ?></span>
-</div>
+<!-- Gruppe 1 (2.8.11, Nachtrag 19.10.2026): statt des Vorlagenknopfs der Hinweis auf die
+     Namenstabelle in Schritt 3 (Gruppen Kostenrechnung und Fahrplan-Abgleich). -->
+<div class="sm-hinweis"><?php echo sm_t('LOX.KO_NAMEN'); ?></div>
 </div>
 </div>
 
@@ -2242,6 +2203,20 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
     }
     zeige(<?php echo json_encode($sm_tab); ?>);
 })();
+/* Gruppe 1 (2.8.11, Nachtrag 19.10.2026): ein Name der Namenstabelle in die Zwischenablage.
+   execCommand zuerst - navigator.clipboard gibt es nur in einem sicheren Kontext, und der LoxBerry
+   laeuft im Heimnetz meist mit http (Bauart WaermepumpeCloud wpAdresseKopieren). */
+function smNameKopieren(k) {
+    var a = k.getAttribute('data-name'), ok = false;
+    try {
+        var t = document.createElement('textarea');
+        t.value = a; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.left = '-9999px';
+        document.body.appendChild(t); t.select(); ok = document.execCommand('copy'); document.body.removeChild(t);
+    } catch (e) { ok = false; }
+    if (!ok && navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(a); ok = true; }
+    k.textContent = k.getAttribute(ok ? 'data-ok' : 'data-fehl');
+    return false;
+}
 </script>
 
 <?php LBWeb::lbfooter(); ?>

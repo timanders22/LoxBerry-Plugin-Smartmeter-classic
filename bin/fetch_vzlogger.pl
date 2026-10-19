@@ -625,17 +625,18 @@ sub SEND_MQTT {
 		else { $fehl++; }
 	}
 	# Ein frueher retained gesendetes Zustandsfeld, das diese erfolgreiche
-	# Messung nicht mehr liefert, bekommt einmal "-" retained (Entscheidungen
-	# 5 und 8). Merker auf der Ramdisk, wie in bin/fetch.php.
+	# Messung nicht mehr liefert, bekommt einmal -1 retained (Entscheidungen
+	# 5 und 8; bis 2.8.10 "-", seit Gruppe 1 E2 -1). Merker auf der Ramdisk,
+	# wie in bin/fetch.php.
 	if ( defined $merker ) {
 		my %jetzt = map { $_ => 1 } @zustaende;
 		if ( open(my $r, "<", $merker) ) {
 			while ( my $z = <$r> ) {
 				$z =~ s/\s+$//;
 				next if $z eq "" || $jetzt{$z} || !&IST_ZUSTAND($z);
-				if ( $sock->send("retain $prefix/$z -") ) {
+				if ( $sock->send("retain $prefix/$z -1") ) {
 					$anzahl++;
-					&LOG("$z fehlt in dieser Messung - \"-\" retained gesendet.", "INFO");
+					&LOG("$z fehlt in dieser Messung - -1 retained gesendet.", "INFO");
 				} else { $fehl++; }
 			}
 			close($r);

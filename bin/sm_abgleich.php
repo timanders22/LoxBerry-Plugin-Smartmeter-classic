@@ -323,7 +323,7 @@ if (is_readable($SM_VZJSON)) {
 $sm_stand = sm_ab_stand_lesen();
 $sm_jetzt = time();
 /* M4 (Durchgang 01.10.2026): die Regeln des vorigen Laufs und die noch nicht
- * gemeldeten entfernten - fuer den einmaligen "-"-Versand weiter unten. */
+ * gemeldeten entfernten - fuer den einmaligen -1-Versand weiter unten. */
 $sm_alt_regeln = is_array($sm_stand['regeln']) ? $sm_stand['regeln'] : array();
 $sm_entfernt_offen = (isset($sm_stand['entfernt_offen']) && is_array($sm_stand['entfernt_offen']))
     ? array_values(array_map('strval', $sm_stand['entfernt_offen'])) : array();
@@ -512,16 +512,17 @@ foreach ($sm_neu as $sm_nr => $sm_e) {
     $sm_zeilen[] = array('publish', $sm_z . 'ok', ($sm_u === 'zieht') ? 1
                                                  : (($sm_u === 'zieht_nicht') ? 0 : -1));
 }
-/* M4: eine entfernte Regel bekommt einmal aktiv "-" (retained, Entscheidung 5)
+/* M4: eine entfernte Regel bekommt einmal aktiv -1 (retained, Entscheidung 5;
+ * bis 2.8.10 "-", seit Gruppe 1 E2 -1 - die Bausteine dahinter lesen -1 wie "laeuft nicht")
  * und ok -1 ("kein Urteil", fluechtig). ok 0 hiesse "zieht nachweislich
  * nicht" - fuer eine geloeschte Regel eine falsche Aussage. */
 foreach ($sm_entfernt_offen as $sm_nr) {
-    $sm_zeilen[] = array('retain', 'abgleich/' . $sm_nr . '/aktiv', '-');
+    $sm_zeilen[] = array('retain', 'abgleich/' . $sm_nr . '/aktiv', -1);
     $sm_zeilen[] = array('publish', 'abgleich/' . $sm_nr . '/ok', -1);
 }
 if (sm_ab_mqtt($sm_cfg, $sm_zeilen) && $sm_entfernt_offen) {
     sm_ab_log('Regel(n) ' . implode(', ', $sm_entfernt_offen) . ' fuehrt der Fahrplan nicht mehr - '
-        . 'aktiv "-" und ok -1 gesendet.', 'INFO');
+        . 'aktiv -1 und ok -1 gesendet.', 'INFO');
     $sm_stand['entfernt_offen'] = array();
     if (!sm_ab_atomar($SM_STAND, json_encode($sm_stand), 0640)) {
         $sm_ok = false;

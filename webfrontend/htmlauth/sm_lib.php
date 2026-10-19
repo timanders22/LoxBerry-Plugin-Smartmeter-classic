@@ -545,16 +545,19 @@ function sm_mqtt_gateway_info()
  */
 function sm_abo_text()
 {
-    $g = sm_mqtt_gateway_info();
-    $f = ($g === null) ? 0 : (int) $g['fassung'];
-    if ($f >= 2) {
+    /* Gruppe 1 (2.8.11): der V1-Satz nennt das Abo mit dem eingestellten Praefix - das Plugin
+     * traegt es selbst ein (mqtt_subscriptions.cfg), der Anwender prueft es nur. */
+    $f  = sm_gateway_fassung();
+    $pr = trim((string) sm_legacy_read()['MQTTTOPIC'], '/');
+    $v1 = sprintf(sm_t('MQ.ABO_PFLICHT'), sm_e($pr));
+    if ($f === 2) {
         return sm_t('MQ.ABO_V2');
     }
     if ($f === 1) {
-        return sm_t('MQ.ABO_PFLICHT');
+        return $v1;
     }
     return sm_t('MQ.ABO_UNBEKANNT')
-         . '<br><br>' . sm_t('MQ.ABO_PFLICHT')
+         . '<br><br>' . $v1
          . '<br><br>' . sm_t('MQ.ABO_V2');
 }
 
@@ -565,6 +568,89 @@ function sm_abo_klasse()
     $f = ($g === null) ? 0 : (int) $g['fassung'];
     // V2 verlangt keine Handarbeit - das ist ein Hinweis, keine Warnung.
     return $f >= 2 ? 'sm-alert sm-info' : 'sm-alert sm-warn';
+}
+
+/**
+ * Die Fassung des MQTT-Gateways in drei Stufen (Gruppe 1, 2.8.11): 0 = unbekannt, 1, 2 (= 2 und
+ * hoeher). Dieselbe Einteilung wie sm_abo_text() und sm_abo_klasse() - EINE Stelle fuer die
+ * Teile der Seite, die seit 2.8.11 dazukommen (Schritttitel, Abo-Zeile, Hakenliste).
+ */
+function sm_gateway_fassung()
+{
+    $g = sm_mqtt_gateway_info();
+    $f = ($g === null) ? 0 : (int) $g['fassung'];
+    return ($f >= 2) ? 2 : (($f === 1) ? 1 : 0);
+}
+
+/**
+ * Der Titel von Schritt 2 im Reiter Einbindung in Loxone (Gruppe 1, 2.8.11, Entwurf 2.5).
+ * Bis 2.8.10 hiess er immer "Abo im MQTT-Gateway eintragen" - unter V2 eine Aufforderung, die es
+ * dort nicht gibt, und unter V1 traegt das Plugin das Abo selbst ein (mqtt_subscriptions.cfg).
+ */
+function sm_s2_titel()
+{
+    $f = sm_gateway_fassung();
+    if ($f === 2) {
+        return sm_t('LOX.S2_TITEL_V2');
+    }
+    if ($f === 1) {
+        return sm_t('LOX.S2_TITEL');
+    }
+    return sm_t('LOX.S2_TITEL_BEIDE');
+}
+
+/**
+ * Die Hakenliste fuer Gateway V2 (Gruppe 1, 2.8.11, Entwurf 2.5 und E7; seit dem Nachtrag 19.10.2026
+ * aus der Namenstabelle statt aus den Vorlagen).
+ *
+ * V2 abonniert nur, was unter System -> MQTT Gateway -> Abonnements angehakt ist. Die Liste wird
+ * GEBAUT, nicht gepflegt: die eingeschalteten Gruppen von sm_namen_gruppen(), also genau das, was das
+ * Plugin sendet. Textfelder gehoeren dazu - ein Virtueller Texteingang braucht den Haken ebenso. Ein
+ * Name, der zweimal kommt, steht einmal da.
+ *
+ * Merker "Noncached" an den drei Werten, die meist dauerhaft auf 1 stehen: ohne den Haken stuenden sie
+ * nach einem Neustart des Miniservers auf 0, bis sich der Wert aendert (V2 sendet einen gleichen Wert
+ * nicht noch einmal). "Zuruecksetzen nach Senden" braucht diese Linie nicht - sie hat kein Impulsthema.
+ *
+ * Die Pruefzeile sm_haken_probe() im Reiter Test haelt die Liste gegen die Themen des Reiters MQTT
+ * (sm_mqtt_themen(), eine eigene Aufstellung dessen, was die Dienste senden).
+ *
+ * Rueckgabe: Liste array(Datenpunkt, Bedeutung, Merker, Textfeld); Merker '' oder 'Noncached'.
+ */
+function sm_v2_haken()
+{
+    $aus = array();
+    $gesehen = array();
+    foreach (sm_namen_gruppen() as $g) {
+        if (!$g[2]) {
+            continue;
+        }
+        foreach ($g[3] as $r) {
+            if (isset($gesehen[$r[0]])) {
+                continue;
+            }
+            $gesehen[$r[0]] = true;
+            $aus[] = array($r[0], $r[1], $r[4], $r[3]);
+        }
+    }
+    return $aus;
+}
+
+/** Die Hakenliste als Tabelle (roh auszugeben; jeder Text geht durch sm_e()). */
+function sm_v2_haken_html()
+{
+    $z = sm_v2_haken();
+    if (!$z) {
+        return '<p class="sm-small">' . sm_e(sm_t('LOX.HAKEN_LEER')) . '</p>';
+    }
+    $o = '<div class="sm-breit"><table class="sm-tbl"><tr><th>' . sm_e(sm_t('LOX.SP_DATENPUNKT'))
+       . '</th><th>' . sm_e(sm_t('ALLG.BEDEUTUNG')) . '</th><th style="width:14%">'
+       . sm_e(sm_t('LOX.SP_ZUSATZ')) . '</th></tr>';
+    foreach ($z as $r) {
+        $o .= '<tr><td class="sm-mono">' . sm_e($r[0]) . '</td><td>' . sm_e($r[1]) . '</td><td>'
+            . ($r[2] !== '' ? sm_e($r[2]) : '&ndash;') . '</td></tr>';
+    }
+    return $o . '</table></div><p class="sm-small">' . sm_e(sm_t('LOX.HAKEN_QUELLE')) . '</p>';
 }
 
 /* ==================================================================
@@ -1696,153 +1782,137 @@ function sm_einheit_fuer($md, $weg, $feld = '')
 }
 
 /**
- * Eine VirtualInHttp-Vorlage bauen.
+ * Die Namenstabelle der Gateway-Namen (Gruppe 1, 2.8.11, Nachtrag 19.10.2026).
  *
- * Bauform nach dem Heimkino-Kunstgriff (12.08.2026): Dummy-Adresse
- * http://localhost und Abfragezyklus 604800 s, nur damit Loxone die richtig
- * benannten Eingaenge anlegt - die Werte kommen vom MQTT-Gateway. Format
- * wie Original-Export aus Loxone Config 17.1.
+ * Fuer Werte ueber das MQTT-Gateway gibt es keine Importvorlage mehr (bis 18.10. ein virtueller
+ * HTTP-Eingang mit der Adresse http://localhost): die LoxBerry-Anleitung (Wiki, MQTT-Widget) und
+ * Regeln/07 verlangen je Wert einen einfachen Virtuellen Eingang bzw. Virtuellen Texteingang mit genau
+ * dem Namen, den das Gateway bildet (sm_ve_name(): nur / und % werden zu _). Diese Funktion liefert die
+ * Namen je Gruppe - EINE Quelle fuer die Tabelle in Schritt 3 und die Hakenliste fuer Gateway V2.
  *
- * $eintraege ist eine Liste aus (Titel, Feldname). Textfelder gehoeren
- * NICHT hinein: das nachgebaute Format ist nur fuer Zahlenwerte belegt, und
- * ein Eingang mit Analog="true" auf einen Text zeigt dauerhaft 0.
+ * Gruppen in der Reihenfolge der Seite: vzLogger (die eingestellten Kanaele samt den Feldern, die
+ * fetch_vzlogger.pl selbst bildet), klassischer Leser (je Lesekopf mit Zaehlerprofil die Felder der
+ * letzten Messung - dieselbe Auswahl wie sm_mqtt_themen()), Lebenszeichen, Kostenrechnung,
+ * Fahrplan-Abgleich (Regel 1). Jede Gruppe traegt, ob sie gerade eingeschaltet ist; die Tabelle zeigt
+ * alle, die Hakenliste nur die eingeschalteten. Textfelder stehen mit Art "Text" darin.
  *
- * $weg ist 'legacy' oder 'vz' und entscheidet ueber Einheit und Grenzen -
- * siehe sm_einheit_fuer(). Bis 2.4.3 gab es den Unterschied nicht, und die
- * vzLogger-Vorlage trug die Einheiten des klassischen Weges.
+ * Rueckgabe: Liste array(Schluessel, Ueberschrift, eingeschaltet, Zeilen, Hinweis); eine Zeile ist
+ * array(Name, Bedeutung, Einheit und Bereich, Textfeld, Merker) mit Merker '' oder 'Noncached'.
  */
-function sm_xml_virtual_in($titel, $kommentar, $eintraege, $weg = 'legacy')
+function sm_namen_gruppen()
 {
-    $crlf = "\r\n";
-    $x = function ($s) {
-        return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8');
-    };
-    $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualInHttp HintText="" Title="' . $x($titel) . '" Comment="' . $x($kommentar)
-        . '" Address="http://localhost" PollingTime="604800">' . $crlf;
-    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
-    foreach ($eintraege as $e) {
-        list($t, $feld) = $e;
-        $md = sm_feld($feld);
-        list($sm_eh, $sm_min, $sm_max, $sm_nk) = sm_einheit_fuer($md, $weg, $feld);
-        // Ein Feld, das der Katalog nicht kennt, bekommt keine erfundene
-        // Einheit und keine erfundenen Grenzen.
-        // $sm_nk, nicht $md['nk']: bei Wh statt kWh sind drei Stellen
-        // hinter dem Komma drei Stellen zuviel.
-        $einheit = ($sm_eh !== '') ? '<v.' . (int) $sm_nk . '> ' . $sm_eh : '';
-        $min  = $sm_min;
-        $max  = $sm_max;
-        /* Ohne Katalogeintrag vorzeichenbehaftet: sm_obis_feld() bildet
-         * fuer jeden unbekannten Kanal ein OBIS_<kurz>, und ein negativer
-         * Wert wuerde durch Signed="false" auf 0 gekappt. */
-        $sig  = (!$md || $md['signed']) ? 'true' : 'false';
-        /* Welle Bild 11 VOLL (2.8.9): ein Eintrag darf Vorzeichen, Vorgabewert und Grenzen
-         * selbst mitbringen (e[4]) - die Kosten- und Fahrplan-Themen stehen nicht im Katalog,
-         * und -1 heisst dort "unbekannt". Ohne e[4] bleibt alles wie bisher (DefVal 0). */
-        $def  = 0;
-        if (isset($e[4])) {
-            list($sm_vz, $def, $min, $max) = $e[4];
-            $sig = $sm_vz ? 'true' : 'false';
-        }
-        // Der Kommentar wird in Loxone Config zum ANZEIGENAMEN, nicht zur
-        // Dokumentation. Eine knappe Zeile, kein Fliesstext.
-        // A7 (Durchgang 01.10.2026): ein Eintrag darf Kommentar und Anzeige
-        // selbst mitbringen (die Lebenszeichen-Themen stehen nicht im Katalog).
-        $bed  = isset($e[2]) ? $e[2] : ($md ? sm_t($md['bed']) : $feld);
-        if (isset($e[3])) {
-            $einheit = (string) $e[3];
-        }
-        $o .= "\t" . '<VirtualInHttpCmd Title="' . $x($t) . '" ';
-        $o .= 'Comment="' . $x($bed) . '" Check=" " ';
-        $o .= 'Signed="' . $sig . '" Analog="true" SourceValLow="0" DestValLow="0" '
-            . 'SourceValHigh="1" DestValHigh="1" DefVal="' . $def . '" MinVal="' . $min
-            . '" MaxVal="' . $max . '" Unit="' . $x($einheit) . '" HintText=""/>' . $crlf;
-    }
-    $o .= '</VirtualInHttp>' . $crlf;
-    return $o;
-}
-
-/**
- * Die Vorlage der MQTT-Eingaenge.
- *
- * Der Titel MUSS der Name sein, unter dem das MQTT-Gateway den Eingang
- * anlegt - bei MQTT ist der Titel die Adresse. Er kommt deshalb aus
- * sm_ve_name(), derselben Funktion, aus der auch die Themen-Tabelle im
- * Reiter MQTT schoepft.
- */
-function sm_vorlage()
-{
-    $cfg    = sm_vz_read();
-    $legacy = sm_legacy_read();
+    $legacy  = sm_legacy_read();
+    $vz      = sm_vz_read();
+    $alles   = sm_cfg_read();
     $praefix = $legacy['MQTTTOPIC'];
-    $serial  = $cfg['serial'];
-
-    $eintraege = array();
-    $text = 0;
-    foreach (sm_vz_felder($cfg) as $feld) {
-        $md = sm_feld($feld);
-        if ($md && $md['typ'] === 'text') {
-            $text++;
-            continue;
-        }
-        $eintraege[] = array(sm_ve_name($praefix, $serial, $feld), $feld);
+    $pr      = trim((string) $praefix, '/');
+    // Noncached an den drei Werten, die meist dauerhaft auf 1 stehen (Entwurf E7).
+    $nc = array();
+    foreach (array('status/ok', 'kosten/quelle_ok', 'abgleich/quelle_ok') as $th) {
+        $nc[] = str_replace(array('/', '%'), '_', $pr . '/' . $th);
     }
-    $eintraege = array_merge($eintraege, sm_vorlage_status($praefix));
-    $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR'), date('d.m.Y'), $praefix)
-        . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
-    return array('VI_smartmeter_mqtt.xml',
-        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL'), $kommentar, $eintraege, 'vz'));
-}
+    $gr = array();
 
-/**
- * Die Vorlage der Werte des klassischen Lesers.
- *
- * Angelegt wird nur, was beim letzten erfolgreichen Abruf wirklich einen
- * Wert trug - eine Liste aus dem Katalog waere eine dritte Stelle, die mit
- * dem Code auseinanderlaeuft, und Loxone traegt fuer einen Eingang ohne
- * Wert DefVal="0" ein. Eine 0 sieht aus wie ein Messwert.
- *
- * Hat noch kein Lesekopf geantwortet, entsteht KEINE Datei; die Oberflaeche
- * sagt, warum.
- */
-function sm_vorlage_legacy()
-{
-    $legacy = sm_legacy_read();
-    $praefix = $legacy['MQTTTOPIC'];
-    $eintraege = array();
-    $text = 0;
-    $koepfe = 0;
+    $z = array();
+    foreach (sm_vz_felder($vz) as $feld) {
+        $z[] = sm_namen_zeile(sm_ve_name($praefix, $vz['serial'], $feld), $feld, 'vz');
+    }
+    $gr[] = array('vz', sm_t('MQ.G_VZ'), !empty($vz['enabled']), $z, '');
+
+    $z = array();
     foreach (sm_koepfe() as $k) {
-        $serial = $k['ABSCHNITT'];
-        $werte = sm_werte($serial);
-        if (!$werte) {
+        $m = isset($k['METER']) ? (string) $k['METER'] : '0';
+        if ($m === '' || $m === '0') {
             continue;
         }
-        $koepfe++;
-        foreach ($werte as $pv) {
-            $feld = $pv[0];
-            $md = sm_feld($feld);
-            if ($md && $md['typ'] === 'text') {
-                $text++;
-                continue;
-            }
-            $eintraege[] = array(sm_ve_name($praefix, $serial, $feld), $feld);
+        $werte = sm_werte($k['ABSCHNITT']);
+        foreach ($werte ? $werte : array() as $pv) {
+            $z[] = sm_namen_zeile(sm_ve_name($praefix, $k['ABSCHNITT'], $pv[0]), $pv[0], 'legacy');
         }
     }
-    if (!$eintraege) {
-        return array('', '');
+    $gr[] = array('legacy', sm_t('MQ.G_KLASSISCH'), $legacy['READ'] === '1', $z,
+                  $z ? '' : sm_t('MQ.T_NOCH_KEINE'));
+
+    $z = array();
+    $bereich = array('ok' => '0 … 1', 'ts' => 's (Unix)', 'zaehler' => '0 … 999');
+    foreach (sm_vorlage_status($praefix) as $e) {
+        $t = substr((string) $e[1], strlen('status_'));
+        $z[] = array($e[0], (string) $e[2], isset($bereich[$t]) ? $bereich[$t] : '', false,
+                     in_array($e[0], $nc, true) ? 'Noncached' : '');
     }
-    $eintraege = array_merge($eintraege, sm_vorlage_status($praefix));
-    $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR_LG'), date('d.m.Y'), $koepfe)
-        . ($text > 0 ? ' ' . sprintf(sm_t('LOX.VORLAGE_TEXTFELDER'), $text) : '');
-    return array('VI_smartmeter_klassisch.xml',
-        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL_LG'), $kommentar, $eintraege, 'legacy'));
+    $gr[] = array('status', sm_t('MQ.G_STATUS'), !empty($vz['enabled']) || $legacy['READ'] === '1', $z, '');
+
+    $zk = array();
+    $za = array();
+    foreach (sm_vorlage_kosten_eintraege($praefix) as $e) {
+        $eh = trim((string) preg_replace('/<v[^>]*>/', '', (string) $e[3]));
+        $zeile = array($e[0], (string) $e[2], sm_bereich_text($eh, $e[4][2], $e[4][3]), false,
+                       in_array($e[0], $nc, true) ? 'Noncached' : '');
+        if (strpos((string) $e[1], 'kosten/') === 0) {
+            $zk[] = $zeile;
+        } else {
+            $za[] = $zeile;
+        }
+    }
+    $gr[] = array('kosten', sm_t('MQ.G_KOSTEN'), sm_cfg_get($alles, 'KOSTEN', 'AKTIV', '0') === '1', $zk, '');
+    $gr[] = array('abgleich', sm_t('MQ.G_ABGLEICH'), sm_cfg_get($alles, 'ABGLEICH', 'AKTIV', '0') === '1', $za, '');
+    return $gr;
+}
+
+/** Eine Zeile der Namenstabelle fuer ein Feld des Katalogs (Einheit und Grenzen je Leseweg). */
+function sm_namen_zeile($name, $feld, $weg)
+{
+    $md   = sm_feld($feld);
+    $text = $md && $md['typ'] === 'text';
+    $bed  = $md ? sm_t($md['bed']) : $feld;
+    $bereich = '';
+    if (!$text) {
+        list($eh, $min, $max) = sm_einheit_fuer($md, $weg, $feld);
+        $bereich = sm_bereich_text($eh, $min, $max);
+    }
+    return array((string) $name, (string) $bed, $bereich, $text, '');
+}
+
+/** "kWh, 0 … 1000000" bzw. "0 … 9" ohne Einheit. */
+function sm_bereich_text($eh, $min, $max)
+{
+    $b = (string) (0 + $min) . ' … ' . (string) (0 + $max);
+    return ((string) $eh !== '') ? $eh . ', ' . $b : $b;
+}
+
+/** Die Namenstabelle als HTML (roh auszugeben; jeder Text geht durch sm_e()). */
+function sm_namen_html()
+{
+    $o = '';
+    foreach (sm_namen_gruppen() as $g) {
+        list(, $titel, $an, $zeilen, $hinweis) = $g;
+        $o .= '<p class="sm-small"><b>' . sm_e($titel) . '</b>'
+            . ($an ? '' : ' <i>(' . sm_e(sm_t('LOX.NAMEN_AUS')) . ')</i>') . '</p>';
+        if (!$zeilen) {
+            $o .= '<p class="sm-small">' . sm_e($hinweis) . '</p>';
+            continue;
+        }
+        $o .= '<div class="sm-breit"><table class="sm-tbl sm-namen"><tr><th>' . sm_e(sm_t('LOX.SP_TITEL_VE'))
+            . '</th><th style="width:30%">' . sm_e(sm_t('ALLG.BEDEUTUNG')) . '</th><th style="width:18%">'
+            . sm_e(sm_t('LOX.SP_BEREICH')) . '</th><th style="width:16%">' . sm_e(sm_t('LOX.SP_ART')) . '</th></tr>';
+        foreach ($zeilen as $r) {
+            $o .= '<tr><td><span class="sm-mono">' . sm_e($r[0]) . '</span> '
+                . '<button type="button" data-role="none" class="sm-kopie" data-name="' . sm_e($r[0])
+                . '" data-ok="' . sm_e(sm_t('LOX.NAMEN_KOPIERT')) . '" data-fehl="' . sm_e(sm_t('LOX.NAMEN_MARKIEREN'))
+                . '" onclick="return smNameKopieren(this);">' . sm_e(sm_t('LOX.NAMEN_KOPIEREN')) . '</button></td>'
+                . '<td>' . sm_e($r[1]) . '</td><td>' . ($r[2] !== '' ? sm_e($r[2]) : '&ndash;') . '</td><td>'
+                . sm_e($r[3] ? sm_t('LOX.NAMEN_TEXT') : sm_t('LOX.NAMEN_ZAHL')) . '</td></tr>';
+        }
+        $o .= '</table></div>';
+    }
+    return $o;
 }
 
 /**
  * Die Eingaenge der Vorlage "Kosten und Fahrplan" (Welle Bild 11 VOLL, 2.8.9).
  *
- * EINE Quelle fuer die Vorlage (sm_vorlage_kosten()) und die Baustein-Liste der Seite
+ * EINE Quelle fuer die Namenstabelle (sm_namen_gruppen(); bis zum Nachtrag 19.10.2026 die Vorlage
+ * sm_vorlage_kosten()) und die Baustein-Liste der Seite
  * "Kosten und Fahrplan-Abgleich" im Reiter Einbindung in Loxone. Inhalt wie im LoxBerry-Plugins
  * Musterprojekt (Musterprojekt/vorlagen/VI_smartmeter_kosten.xml): die acht Kostenthemen, das
  * Lebenszeichen des Abgleichs und die sieben Themen einer Regel. Titel = Name, unter dem das
@@ -1868,7 +1938,9 @@ function sm_vorlage_kosten_eintraege($praefix, $regel = 1)
         array('kosten/offen',      sm_t('LOX.VE_K_OFFEN'),      '<v> h',     array(false, 0, 0, 24)),
         array('kosten/ohne_preis', sm_t('LOX.VE_K_OHNE_PREIS'), '<v> h',     array(false, 0, 0, 24)),
         array('abgleich/quelle_ok', sm_t('LOX.VE_A_QUELLE_OK'), '<v>',       array(false, 0, 0, 1)),
-        array('abgleich/' . $r . '/aktiv',  sprintf(sm_t('LOX.VE_A_AKTIV'), $r), '<v>',       array(false, 0, 0, 1)),
+        // Gruppe 1 (2.8.11, E2): eine entfernte Regel bekommt aktiv -1 (bis 2.8.10 "-") - also
+        // vorzeichenbehaftet mit Min -1; Vorgabe -1 wie die uebrigen "unbekannt"-Werte.
+        array('abgleich/' . $r . '/aktiv',  sprintf(sm_t('LOX.VE_A_AKTIV'), $r), '<v>',       array(true, -1, -1, 1)),
         array('abgleich/' . $r . '/soll',   sprintf(sm_t('LOX.VE_A_SOLL'), $r),  '<v.2> kWh', array(false, 0, 0, 100000)),
         array('abgleich/' . $r . '/ist',    sprintf(sm_t('LOX.VE_A_IST'), $r),   '<v.2> kWh', array(false, 0, 0, 100000)),
         array('abgleich/' . $r . '/fehlt',  sprintf(sm_t('LOX.VE_A_FEHLT'), $r), '<v.2> kWh', array(false, 0, 0, 100000)),
@@ -1881,22 +1953,6 @@ function sm_vorlage_kosten_eintraege($praefix, $regel = 1)
         $aus[] = array(str_replace(array('/', '%'), '_', $pr . '/' . $t[0]), $t[0], $t[1], $t[2], $t[3]);
     }
     return $aus;
-}
-
-/**
- * Die Vorlage "Kosten und Fahrplan" (Welle Bild 11 VOLL, 2.8.9, neue Faehigkeit).
- *
- * Gleiche Bauart wie die beiden anderen Vorlagen: Dummy-Adresse http://localhost, die Werte
- * schreibt das MQTT-Gateway. Sie entsteht immer - auch bei ausgeschalteter Kostenrechnung bzw.
- * ausgeschaltetem Abgleich; dann kommen eben keine Werte (der Kommentar sagt das).
- */
-function sm_vorlage_kosten()
-{
-    $legacy = sm_legacy_read();
-    $praefix = $legacy['MQTTTOPIC'];
-    $kommentar = sprintf(sm_t('LOX.VORLAGE_KOMMENTAR_KO'), $praefix);
-    return array('VI_smartmeter_kosten.xml',
-        sm_xml_virtual_in(sm_t('LOX.VORLAGE_TITEL_KO'), $kommentar, sm_vorlage_kosten_eintraege($praefix)));
 }
 
 /* ==================================================================
@@ -2427,7 +2483,7 @@ function sm_mqtt_nach_aenderung(array $alt, array $neu)
  * smartmeter/<kopf>/... sendete - keines der gezeigten Themen kam an; Kosten,
  * Abgleich und Lebenszeichen standen nirgends (gemessen, MQTT-Bericht Nr. 8).
  * Der klassische Weg zeigt je Lesekopf die Felder der letzten Messung
- * (dieselbe Quelle wie sm_vorlage_legacy()).
+ * (dieselbe Auswahl wie die Namenstabelle, sm_namen_gruppen()).
  *
  * Rueckgabe: Liste von array(ueberschrift, zeilen, hinweis); eine Zeile ist
  * array(thema, einheit, bedeutung, retained, textfeld).
