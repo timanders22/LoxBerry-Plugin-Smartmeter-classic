@@ -10,6 +10,14 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.12
+
+Die Installation meldete einen Fehler bei der Dienstdatei; behoben.
+
+* Die Dienstdatei (sie läuft beim Hochfahren des LoxBerry, startet vzlogger und schreibt ins
+  Protokoll) bekam ihre Pfade nie eingesetzt; die Installation meldete dazu „Permission denied“
+  und „stehen noch Platzhalter“. Die Pfade setzt jetzt der LoxBerry-Installer selbst ein.
+
 ## Neu in 2.8.11
 
 Umstellung auf MQTT (Gruppe 1): Werte gehen wie bisher über das MQTT-Gateway; Gateway V1 und V2

@@ -114,44 +114,60 @@ else
 fi
 
 # ===========================================================================
-# Platzhalter ersetzen
+# Platzhalter ersetzen - nur noch in der smartmeter.cfg
 #
-# REPLACEBYSUBFOLDER, REPLACEBYNAME und REPLACEBYBASEFOLDER sind KEINE
-# Platzhalter des Installateurs - der kennt nur REPLACELBHOMEDIR,
-# REPLACELBPPLUGINDIR und die uebrigen REPLACELBP*. Diese drei ersetzt das
-# Plugin deshalb selbst, und genau deshalb muss der Block darueber vorher
-# laufen.
+# REPLACEBYSUBFOLDER und REPLACEBYNAME sind KEINE Platzhalter des
+# Installateurs. Die beiden in der smartmeter.cfg ersetzt das Plugin deshalb
+# selbst, und genau deshalb muss der Block darueber vorher laufen. Die
+# Konfiguration gehoert loxberry, dieses Skript darf dort schreiben.
+#
+# Die Dienstdatei fasst dieses Skript NICHT mehr an (BERICHTIGT MIT 2.8.12).
+# Bis 2.8.11 standen hier zwei weitere sed -i auf system/daemons/plugins/
+# <name>. Der Ordner gehoert root:root, dieses Skript laeuft als loxberry -
+# sed konnte seine Ersatzdatei dort nie anlegen. Gemessen am LoxBerry
+# 4.0 (19.10.2026): "sed: couldn't open temporary file ... Permission
+# denied", danach das <ERROR> der Nachpruefung, und die installierte
+# Dienstdatei trug seit der Uebernahme des Plugins sieben Platzhalter.
+# Seit 2.8.12 traegt daemon/daemon die Platzhalter des Installers; der
+# ersetzt sie in allen Textdateien des Pakets (plugininstall.pl, replaceenv),
+# BEVOR er die Datei als root nach system/daemons/plugins/ kopiert.
 # ===========================================================================
 # Die Pfade quotiert. Ein Leerzeichen im Installationsverzeichnis
 # zerlegte die Zeilen sonst, und sed schriebe in eine Datei, die niemand
 # gemeint hat.
 /bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" "$ARGV5/config/plugins/$ARGV3/smartmeter.cfg"
 /bin/sed -i "s#REPLACEBYNAME#$ARGV2#" "$ARGV5/config/plugins/$ARGV3/smartmeter.cfg"
-/bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" "$ARGV5/system/daemons/plugins/$ARGV2"
-/bin/sed -i "s#REPLACEBYBASEFOLDER#$ARGV5#" "$ARGV5/system/daemons/plugins/$ARGV2"
 
 # Nachgelesen statt angenommen.
 #
 # sed legt seine Ersatzdatei im ZIELverzeichnis an. Scheitert das - Rechte,
 # volle Ramdisk, Datei fehlt -, endet der Aufruf zwar mit einem Fehler, aber
-# niemand sah ihn: die vier Zeilen oben pruefen nichts und melden nichts.
+# niemand sah ihn: die Zeilen oben pruefen nichts und melden nichts.
 # In der Konfiguration bliebe dann woertlich REPLACEBYSUBFOLDER stehen, das
 # Plugin liefe ins Leere, und im Installationsprotokoll stuende dazu kein
 # Wort. Deshalb wird jetzt gelesen, was wirklich in den Dateien steht.
+#
+# Gesucht werden BEIDE Arten (seit 2.8.12): die eigenen (REPLACEBY...) und
+# die des Installers (REPLACELB...). Bleibt in der Dienstdatei einer der
+# Installer-Platzhalter stehen, hat der Installer sie nicht als Textdatei
+# erkannt - auch das gehoert ins Protokoll. Das Muster nennt bewusst keinen
+# vollstaendigen Installer-Platzhalter: der Installer ersetzt sie auch in
+# dieser Datei, und aus dem Muster wuerde sonst ein Pfad.
 SM_REST=0
 for SM_ZIEL in "$ARGV5/config/plugins/$ARGV3/smartmeter.cfg" \
                "$ARGV5/system/daemons/plugins/$ARGV2"; do
     if [ ! -f "$SM_ZIEL" ]; then
         echo "<ERROR> $SM_ZIEL fehlt - die Installation ist unvollstaendig."
         SM_REST=1
-    elif grep -q "REPLACEBY" "$SM_ZIEL"; then
-        echo "<ERROR> In $SM_ZIEL stehen noch Platzhalter (REPLACEBY...)."
+    elif grep -Eq 'REPLACE(BY|LB)' "$SM_ZIEL"; then
+        SM_WELCHE=$(grep -Eo 'REPLACE(BY|LB)[A-Z]*' "$SM_ZIEL" | sort -u | tr '\n' ' ')
+        echo "<ERROR> In $SM_ZIEL stehen noch Platzhalter: $SM_WELCHE"
         echo "<ERROR> Die Ersetzung ist gescheitert; das Plugin wuerde so nicht laufen."
         SM_REST=1
     fi
 done
 if [ "$SM_REST" = "0" ]; then
-    echo "<OK> Platzhalter in Konfiguration und Dienstdatei ersetzt."
+    echo "<OK> Keine Platzhalter mehr in Konfiguration und Dienstdatei."
 fi
 
 # Die Konfiguration traegt das Zugriffstoken des Endpunkts.

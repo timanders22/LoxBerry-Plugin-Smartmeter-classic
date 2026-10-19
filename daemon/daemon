@@ -1,6 +1,22 @@
 #!/bin/bash
 
-logfile=REPLACEBYBASEFOLDER/log/plugins/REPLACEBYSUBFOLDER/smartmeter.log
+# ---------------------------------------------------------------------------
+# Pfade (BERICHTIGT MIT 2.8.12)
+#
+# Die Pfade dieser Datei setzt der LoxBerry-Installer selbst ein: er ersetzt
+# seine Platzhalter in allen Textdateien des Pakets, BEVOR er diese Datei als
+# root nach system/daemons/plugins/ kopiert (plugininstall.pl, replaceenv).
+#
+# Bis 2.8.11 trug sie eigene Platzhalter, die postinstall.sh nachtraeglich
+# mit sed -i ersetzen wollte. postinstall.sh laeuft als loxberry, der Ordner
+# system/daemons/plugins gehoert root - sed konnte dort nie schreiben
+# (gemessen am LoxBerry 4.0, 19.10.2026: "Permission denied"). Die
+# installierte Datei trug deshalb seit der Uebernahme des Plugins die
+# Platzhalter woertlich, und alle Pfade zeigten ins Leere: Protokoll,
+# vzlogger-Konfiguration und Marke der laufenden Aktualisierung (am Geraet
+# stand in smartmeter.log kein einziges "Start Init").
+# ---------------------------------------------------------------------------
+logfile=REPLACELBPLOGDIR/smartmeter.log
 
 echo "`date` - Start Init " >>$logfile
 echo "`date` - Creating new UDEV Rules for I/R heads: /etc/udev/rules.d/99-smartmeter.rules " >>$logfile
@@ -20,9 +36,9 @@ else
 fi
 
 # Start vzlogger at boot if the vzLogger mode is enabled
-VZJSON=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.json
-VZCONF=REPLACEBYBASEFOLDER/config/plugins/REPLACEBYSUBFOLDER/vzlogger.conf
-MARKE=REPLACEBYBASEFOLDER/data/plugins/REPLACEBYSUBFOLDER.upgrade_laeuft
+VZJSON=REPLACELBPCONFIGDIR/vzlogger.json
+VZCONF=REPLACELBPCONFIGDIR/vzlogger.conf
+MARKE=REPLACELBHOMEDIR/data/plugins/REPLACELBPPLUGINDIR.upgrade_laeuft
 
 # ---------------------------------------------------------------------------
 # Die Prozesse UNSERES vzlogger finden - argumentweise ueber /proc.
@@ -126,8 +142,8 @@ if [ -f "$VZJSON" ] && [ -f "$VZCONF" ] && grep -Eq '"enabled"[[:space:]]*:[[:sp
 	# damit niemand nach einem Ordner sucht, den es nicht gibt.
 	VZBIN="$(command -v vzlogger)"
 	if [ -n "$VZBIN" ]; then
-		mkdir -p /dev/shm/REPLACEBYSUBFOLDER
-		chown loxberry:loxberry /dev/shm/REPLACEBYSUBFOLDER
+		mkdir -p /dev/shm/REPLACELBPPLUGINDIR
+		chown loxberry:loxberry /dev/shm/REPLACELBPPLUGINDIR
 		su loxberry -s /bin/bash -c "nohup $VZBIN -c $VZCONF >/dev/null 2>&1 &"
 		# Nach der WIRKUNG melden (Durchgang 01.10.2026, C6; Regeln/03
 		# Abschnitt 5): bis 2.8.5 stand "vzlogger started" auch dann, wenn
@@ -137,7 +153,7 @@ if [ -f "$VZJSON" ] && [ -f "$VZCONF" ] && grep -Eq '"enabled"[[:space:]]*:[[:sp
 		if [ -n "$SM_NEU" ]; then
 			echo "`date` - vzlogger started: $VZBIN (PID $(echo $SM_NEU)) " >>$logfile
 		else
-			echo "`date` - WARNING: vzlogger was started ($VZBIN), but 2 s later no process is running - see /dev/shm/REPLACEBYSUBFOLDER/vzlogger.log " >>$logfile
+			echo "`date` - WARNING: vzlogger was started ($VZBIN), but 2 s later no process is running - see /dev/shm/REPLACELBPPLUGINDIR/vzlogger.log " >>$logfile
 		fi
 	else
 		echo "`date` - vzlogger enabled but not installed - see plugin tab vzLogger " >>$logfile
