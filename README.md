@@ -10,6 +10,10 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.14
+
+* **Mehrere Regeln im Fahrplan:** der Hinweis zur Baustein-Liste nennt jetzt je weitere Regel Nr. 15–25, 33 und 34 zum Kopieren – bisher fehlten Nr. 33 (Eingang `abgleich_<n>_speicher`) und Nr. 34 (Formel „Urteil Regel <n> mit Speicher“).
+
 ## Neu in 2.8.13
 
 Sicherheit, Tagesabschluss der Kosten, Hausspeicher im Fahrplan-Abgleich und das MQTT-Gateway V2 als Hausform.
