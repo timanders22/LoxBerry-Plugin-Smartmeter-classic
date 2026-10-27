@@ -159,8 +159,11 @@ foreach ($sm_reiter as $sm_i) { $sm_reiter_ids[] = substr($sm_i, 4); }
  * dann erreichbar, wenn der Wachposten durchgefallen ist - er schreibt
  * genau dieses Feld absichtlich zurueck. */
 $sm_wunsch = '';
+/* Gruppe 35 (2.8.13, T1-5): ?form= ist die Hausform (Regeln/04 :756); ?tab= bleibt fuer alte Lesezeichen. */
 if (isset($_POST['activetab']) && is_string($_POST['activetab'])) {
     $sm_wunsch = $_POST['activetab'];
+} elseif (isset($_GET['form']) && is_string($_GET['form'])) {
+    $sm_wunsch = 'tab-' . $_GET['form'];
 } elseif (isset($_GET['tab']) && is_string($_GET['tab'])) {
     $sm_wunsch = 'tab-' . $_GET['tab'];
 }
@@ -190,6 +193,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sichern'])) {
     sm_log('Einstellungen gesichert (Download).');
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="smartmeter-classic_einstellungen.txt"');
+    header('Content-Length: ' . strlen($sm_txt));
+    echo $sm_txt;
+    exit;
+}
+
+/* ---------------------------------------------------------------- *
+ * Gruppe 35 (2.8.13, E-E14): die Tageskosten als CSV - nur lesen, vor
+ * jeder Ausgabe wie die Sicherung.
+ * ---------------------------------------------------------------- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ko_csv'])) {
+    $sm_kh = sm_paths()['datadir'] . '/kosten_historie.csv';
+    $sm_txt = is_readable($sm_kh) ? (string) @file_get_contents($sm_kh)
+            : "datum;kwh;ct;eur;stunden;offen;ohne_preis;stunde23;zeilen\n";
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="smartmeter-classic_kosten_historie.csv"');
     header('Content-Length: ' . strlen($sm_txt));
     echo $sm_txt;
     exit;
@@ -490,15 +508,18 @@ if (isset($_POST['ab_speichern'])) {
     /* Die Adresse wird ABGEWIESEN, nicht zurechtgebogen. Nur http und
      * https: ein file:// oder ein Pfad waere ein Weg, dem Plugin eine
      * beliebige Datei unterzuschieben. */
-    if ($sm_ab_url !== '' && !preg_match('#^https?://#i', $sm_ab_url)) {
+    /* Gruppe 35 (2.8.13, T1-6): dieselbe Pruefung wie beim Zurueckspielen (sm_url_ok). */
+    if ($sm_ab_url !== '' && !sm_url_ok($sm_ab_url)) {
         $sm_fehler[] = sm_t('AB.FEHLER_URL');
-        $sm_eingaben = sm_eingaben_sammeln('ab', array('ab_aktiv', 'ab_url'), array('ab_url'));
+        $sm_eingaben = sm_eingaben_sammeln('ab', array('ab_aktiv', 'ab_url', 'ab_speicher'), array('ab_url'));
     } elseif ($sm_ab_an && $sm_ab_url === '') {
         // Einschalten ohne Adresse waere ein Schalter ohne Wirkung.
         $sm_fehler[] = sm_t('AB.FEHLER_LEER');
-        $sm_eingaben = sm_eingaben_sammeln('ab', array('ab_aktiv', 'ab_url'), array('ab_url'));
+        $sm_eingaben = sm_eingaben_sammeln('ab', array('ab_aktiv', 'ab_url', 'ab_speicher'), array('ab_url'));
     } elseif (!sm_cfg_set('ABGLEICH', array(
-            'AKTIV' => $sm_ab_an ? '1' : '0', 'FAHRPLAN_URL' => $sm_ab_url))) {
+            'AKTIV' => $sm_ab_an ? '1' : '0', 'FAHRPLAN_URL' => $sm_ab_url,
+            // Gruppe 35 (2.8.13, Entscheidung 5): Abnehmer haus/speicher, ab Werk aus.
+            'SPEICHER_EIN' => isset($_POST['ab_speicher']) ? '1' : '0'))) {
         $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
                                '<span class="sm-mono">smartmeter.cfg</span>');
     } else {
@@ -517,7 +538,7 @@ if (isset($_POST['ko_speichern'])) {
     /* Dieselbe Abweisung wie beim Fahrplan: nur http und https. Ein
      * file:// waere ein Weg, dem Plugin eine beliebige Datei
      * unterzuschieben. */
-    if ($sm_ko_url !== '' && !preg_match('#^https?://#i', $sm_ko_url)) {
+    if ($sm_ko_url !== '' && !sm_url_ok($sm_ko_url)) {
         $sm_fehler[] = sm_t('KO.FEHLER_URL');
         $sm_eingaben = sm_eingaben_sammeln('ko', array('ko_aktiv', 'ko_url'), array('ko_url'));
     } elseif ($sm_ko_an && $sm_ko_url === ''
@@ -532,6 +553,28 @@ if (isset($_POST['ko_speichern'])) {
                                '<span class="sm-mono">smartmeter.cfg</span>');
     } else {
         $sm_meldung = sm_t('MELD.GESPEICHERT');
+    }
+    $sm_tab = 'tab-loxone';
+}
+
+/* ---------------------------------------------------------------- *
+ * Gruppe 35 (2.8.13, E-E8): Endpunkt und Lastgang ein-/ausschalten
+ * ---------------------------------------------------------------- */
+if (isset($_POST['ep_speichern'])) {
+    if (sm_cfg_set('MAIN', array('ENDPUNKT_EIN' => isset($_POST['ep_ein']) ? '1' : '0'))) {
+        $sm_meldung = sm_t('MELD.GESPEICHERT');
+        sm_log('Endpunkt fuer den Miniserver ' . (isset($_POST['ep_ein']) ? 'eingeschaltet.' : 'ausgeschaltet.'));
+    } else {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'), '<span class="sm-mono">smartmeter.cfg</span>');
+    }
+    $sm_tab = 'tab-loxone';
+}
+if (isset($_POST['lgang_speichern'])) {
+    if (sm_cfg_set('MAIN', array('LASTGANG_EIN' => isset($_POST['lgang_ein']) ? '1' : '0'))) {
+        $sm_meldung = sm_t('MELD.GESPEICHERT');
+        sm_log('Lastgang ' . (isset($_POST['lgang_ein']) ? 'eingeschaltet.' : 'ausgeschaltet.'));
+    } else {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'), '<span class="sm-mono">smartmeter.cfg</span>');
     }
     $sm_tab = 'tab-loxone';
 }
@@ -685,7 +728,7 @@ if ($sm_ist_post) {
                        'lg_ausgabe' => $sm_lg_ausgabe, 'suchzeilen' => $sm_suchzeilen,
                        'suchvorschlag' => $sm_suchvorschlag, 'eingaben' => $sm_eingaben);
     if (sm_flash_schreiben($sm_inhalt)) {
-        header('Location: index.php?tab=' . rawurlencode(substr($sm_tab, 4)), true, 303);
+        header('Location: index.php?form=' . rawurlencode(substr($sm_tab, 4)), true, 303);
         exit;
     }
 } else {
@@ -772,8 +815,11 @@ $sm_lastgang = sm_lastgang_lage();
 
 $sm_version = sm_fassung();
 
-LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : ''),
-                'https://wiki.loxberry.de/plugins/smartmeter/start', 'help.html');
+/* Gruppe 35 (2.8.13): T1-8 eigene Wiki-Seite (nicht die des Originals), T1-3 class_exists (Regeln/03 :179). */
+if (class_exists('LBWeb')) {
+    LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : ''),
+                    'https://wiki.loxberry.de/plugins/smartmeter_classic/start', 'help.html');
+}
 ?>
 
 <style>
@@ -945,28 +991,39 @@ if ($sm_lcfg_read !== '1') {
 <div class="sm-tabs">
   <a class="sm-tab<?php echo $sm_tab === 'tab-vzlogger' ? ' sm-active' : ''; ?>"
      data-ziel="tab-vzlogger" data-neuladen="1"
-     href="index.php?tab=vzlogger"><?php echo sm_t('TAB.VZ'); ?></a>
+     href="index.php?form=vzlogger"><?php echo sm_t('TAB.VZ'); ?></a>
   <a class="sm-tab<?php echo $sm_tab === 'tab-legacy' ? ' sm-active' : ''; ?>"
      data-ziel="tab-legacy"
-     href="index.php?tab=legacy"><?php echo sm_t('TAB.LEGACY'); ?></a>
+     href="index.php?form=legacy"><?php echo sm_t('TAB.LEGACY'); ?></a>
   <a class="sm-tab<?php echo $sm_tab === 'tab-mqtt' ? ' sm-active' : ''; ?>"
      data-ziel="tab-mqtt"
-     href="index.php?tab=mqtt"><?php echo sm_t('TAB.MQTT'); ?></a>
+     href="index.php?form=mqtt"><?php echo sm_t('TAB.MQTT'); ?></a>
   <a class="sm-tab<?php echo $sm_tab === 'tab-loxone' ? ' sm-active' : ''; ?>"
      data-ziel="tab-loxone"
-     href="index.php?tab=loxone"><?php echo sm_t('TAB.LOXONE'); ?></a>
+     href="index.php?form=loxone"><?php echo sm_t('TAB.LOXONE'); ?></a>
   <a class="sm-tab<?php echo $sm_tab === 'tab-test' ? ' sm-active' : ''; ?>"
      data-ziel="tab-test" data-neuladen="1"
-     href="index.php?tab=test"><?php echo sm_t('TAB.TEST'); ?></a>
+     href="index.php?form=test"><?php echo sm_t('TAB.TEST'); ?></a>
   <a class="sm-tab<?php echo $sm_tab === 'tab-log' ? ' sm-active' : ''; ?>"
      data-ziel="tab-log" data-neuladen="1"
-     href="index.php?tab=log"><?php echo sm_t('TAB.LOG'); ?></a>
+     href="index.php?form=log"><?php echo sm_t('TAB.LOG'); ?></a>
 </div>
 
 <!-- ============================== vzLogger ============================== -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-vzlogger' ? ' sm-active' : ''; ?>" id="tab-vzlogger">
 <div class="sm-hinweis"><?php echo sm_t('KOPF.WAS_IST_DAS'); ?></div>
+<!-- Gruppe 35 (2.8.13, Regeln/04): EINE gesammelte Legende oben im Reiter - genau die Farben, die hier als
+     Knopf vorkommen (lesen, technische Hilfe, schaltend). Bis 2.8.12 stand je Formular eine eigene. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.SICHERN'); ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.VZ_PHASEN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_INSTALL'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_NEUSTART'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_SPEICHERN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.LADEN'); ?></span>
+</div>
 
+<?php if ($sm_installout === '') { $sm_installout = sm_vz_install_stand(); } ?>
 <?php if ($sm_installout !== '') { ?>
 <h2><?php echo sm_t('VZ.H_INSTALLAUSGABE'); ?></h2>
 <div class="sm-log"><?php echo sm_e($sm_installout); ?></div>
@@ -994,9 +1051,6 @@ if ($sm_lcfg_read !== '1') {
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="vz_install" value="1"><?php echo sm_t('VZ.K_INSTALL'); ?></button>
   </form>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_INSTALL'); ?></span>
-</div>
 <?php } else { ?>
 <div class="sm-knopfreihe">
   <form method="post" action="index.php">
@@ -1004,9 +1058,6 @@ if ($sm_lcfg_read !== '1') {
     <?php echo sm_fmt(); ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="vz_neustart" value="1"><?php echo sm_t('VZ.K_NEUSTART'); ?></button>
   </form>
-</div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_NEUSTART'); ?></span>
 </div>
 <?php } ?>
 
@@ -1104,6 +1155,10 @@ if (!$gefunden && $sm_vz_dev !== '') {
   <span class="sm-mono">1-0:1.8.0</span> (<?php echo sm_t('OBIS.BEZUG'); ?>),
   <span class="sm-mono">1-0:2.8.0</span> (<?php echo sm_t('OBIS.EINSPEISUNG'); ?>),
   <span class="sm-mono">1-0:16.7.0</span> (<?php echo sm_t('OBIS.LEISTUNG'); ?>).</p>
+  <div class="sm-knopfreihe">
+    <button data-role="none" type="button" class="sm-btn sm-b-technik" onclick="return smPhasen();"><?php echo sm_e(sm_t('VZ.K_PHASEN')); ?></button>
+  </div>
+  <p class="sm-small"><?php printf(sm_t('VZ.HINT_PHASEN'), '<span class="sm-mono">fetch_vzlogger.pl --roh</span>'); ?></p>
 </div>
 
 <h2><?php echo sm_t('VZ.H_WEITERGABE'); ?></h2>
@@ -1132,9 +1187,6 @@ if (!$gefunden && $sm_vz_dev !== '') {
 
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="vz_speichern" value="1"><?php echo sm_t('VZ.K_SPEICHERN'); ?></button>
-</div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.VZ_SPEICHERN'); ?></span>
 </div>
 </form>
 
@@ -1167,15 +1219,18 @@ if ($sm_x3) { ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="laden" value="1"><?php echo sm_t('EINST.LADEN'); ?></button>
   </form>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.SICHERN'); ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.LADEN'); ?></span>
-</div>
 <div class="sm-small"><?php echo sm_t('EINST.LADEN_HINT'); ?></div>
 </div>
 
 <!-- =============================== Legacy =============================== -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-legacy' ? ' sm-active' : ''; ?>" id="tab-legacy">
+<!-- Gruppe 35 (2.8.13, Regeln/04): EINE gesammelte Legende oben im Reiter - genau die Farben, die hier als
+     Knopf vorkommen (lesen, technische Hilfe, schaltend). Bis 2.8.12 stand je Formular eine eigene. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.LG_ABFRAGEN'); ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.LG_CACHE'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.LG_SPEICHERN'); ?></span>
+</div>
 
 <h2><?php echo sm_t('LG.H_LESER'); ?></h2>
 <p class="sm-small"><?php echo sm_t('LG.HINT_LESER'); ?></p>
@@ -1316,11 +1371,6 @@ if ($sm_x3) { ?>
       echo $sm_koepfe ? '' : ' disabled'; ?>><?php echo sm_t('SUCHE.K'); ?></button>
   </form>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.LG_ABFRAGEN'); ?></span>
-<span><i class="sm-punkt sm-b-technik"></i> <?php echo sm_t('LEGENDE.LG_CACHE'); ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.LG_SPEICHERN'); ?></span>
-</div>
 
 <?php if ($sm_suchzeilen) { ?>
 <h2><?php echo sm_t('SUCHE.H_ERGEBNIS'); ?></h2>
@@ -1345,6 +1395,11 @@ if ($sm_x3) { ?>
 
 <!-- ================================= MQTT ================================= -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-mqtt' ? ' sm-active' : ''; ?>" id="tab-mqtt">
+<!-- Gruppe 35 (2.8.13, Regeln/04): EINE gesammelte Legende oben im Reiter - genau die Farben, die hier als
+     Knopf vorkommen (lesen, technische Hilfe, schaltend). Bis 2.8.12 stand je Formular eine eigene. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.MQ_SPEICHERN'); ?></span>
+</div>
 <?php $sm_gw = sm_mqtt_gateway_info(); ?>
 <?php if ($sm_gw !== null && !$sm_gw['autostart']) { ?>
 <div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo sm_t('MQ.W_AUTOSTART'); ?></div>
@@ -1381,9 +1436,6 @@ if ($sm_x3) { ?>
 </div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mq_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
-</div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.MQ_SPEICHERN'); ?></span>
 </div>
 </form>
 
@@ -1439,6 +1491,15 @@ foreach (sm_mqtt_themen() as $sm_gr) {
 
 <!-- ========================= Einbindung in Loxone ========================= -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
+<!-- Gruppe 35 (2.8.13, Regeln/04): EINE gesammelte Legende oben im Reiter - genau die Farben, die hier als
+     Knopf vorkommen (lesen, technische Hilfe, schaltend). Bis 2.8.12 stand je Formular eine eigene. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.KO_CSV'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.TOKEN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.EP_SPEICHERN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.AB_SPEICHERN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.KO_SPEICHERN'); ?></span>
+</div>
 
 <h2><?php echo sm_t('LOX.H_TITEL'); ?></h2>
 
@@ -1560,7 +1621,7 @@ foreach ($sm_bl_wege as $sm_bl_w) {
     /* Je Zeile: Typ, Name, Parameter, Eingaenge verbinden mit. $sm_bl_mono: Zeilen, deren Name
      * ein Eingang aus der Vorlage ist (Schreibmaschinenschrift). */
     if ($sm_bl_w['art'] === 'P') {
-        $sm_bl_mono = array(1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21);
+        $sm_bl_mono = array(1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 26, 27, 28, 33);
         $sm_bl_zeilen = array(
             1   => array($sm_bl_vh,
                    $sm_bl_kn[0],
@@ -1662,6 +1723,46 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                    sm_t('BAUSTEIN.P25_NAME'),
                    sm_t('BAUSTEIN.P25_PARAM'),
                    sm_t('BAUSTEIN.P25_VERB')),
+            /* Gruppe 35 (Entwurf 9): Kosten gestern (#26-#30, Tagesabschluss), Meldung ueber SignalBot (#31) und
+             * die Ansage fuer wer will (#32), Speicher fuer den Status #22 (#33). Namen aus
+             * sm_vorlage_kosten_eintraege(): 16 speicher, 17 gestern_eur, 18 gestern_kwh, 20 gestern_stunden. */
+            26  => array($sm_bl_vh,
+                   $sm_bl_kn[17],
+                   sm_t('BAUSTEIN.P26_PARAM'),
+                   ''),
+            27  => array($sm_bl_vh,
+                   $sm_bl_kn[18],
+                   sm_t('BAUSTEIN.P27_PARAM'),
+                   ''),
+            28  => array($sm_bl_vh,
+                   $sm_bl_kn[20],
+                   sm_t('BAUSTEIN.P28_PARAM'),
+                   ''),
+            29  => array(sm_t('BAUSTEIN.T_FORMEL'),
+                   sm_t('BAUSTEIN.P29_NAME'),
+                   sm_t('BAUSTEIN.P29_PARAM'),
+                   sm_t('BAUSTEIN.P29_VERB')),
+            30  => array(sm_t('BAUSTEIN.T_STATUS'),
+                   sm_t('BAUSTEIN.P30_NAME'),
+                   sm_t('BAUSTEIN.P30_PARAM'),
+                   sm_t('BAUSTEIN.P30_VERB')),
+            31  => array(sm_t('BAUSTEIN.T_VQ_BEFEHL'),
+                   sm_t('BAUSTEIN.P31_NAME'),
+                   sm_t('BAUSTEIN.P31_PARAM'),
+                   sm_t('BAUSTEIN.P31_VERB')),
+            32  => array(sm_t('BAUSTEIN.T_VQ_BEFEHL'),
+                   sm_t('BAUSTEIN.P32_NAME'),
+                   sm_t('BAUSTEIN.P32_PARAM'),
+                   sm_t('BAUSTEIN.P32_VERB')),
+            33  => array($sm_bl_vh,
+                   $sm_bl_kn[16],
+                   sm_t('BAUSTEIN.P33_PARAM'),
+                   ''),
+            // Nachbau e2 (A1): ein Status hat nur acht Eingaenge - die Formel #34 fasst #20 und #33 fuer #22.
+            34  => array(sm_t('BAUSTEIN.T_FORMEL'),
+                   sm_t('BAUSTEIN.P34_NAME'),
+                   sm_t('BAUSTEIN.P34_PARAM'),
+                   sm_t('BAUSTEIN.P34_VERB')),
         );
         $sm_bl_schritte = array(
             sm_t('BAUSTEIN.P_S1'),
@@ -1697,7 +1798,8 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                    ''),
             4   => array($sm_bl_vh,
                    $sm_bl_status[2][0],
-                   sm_t('BAUSTEIN.B4_PARAM'),
+                   // Gruppe 35 (Entwurf 9): je Leseweg - klassisch nennt den Unterschied zu 2.8.12.
+                   ($sm_bl_k ? sm_t('BAUSTEIN.B4_PARAM_K') : sm_t('BAUSTEIN.B4_PARAM_V')),
                    ''),
             5   => array(sm_t('BAUSTEIN.B5_TYP'),
                    sm_t('BAUSTEIN.B5_NAME'),
@@ -1786,6 +1888,11 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                        sm_t('BAUSTEIN.LF_NAME'),
                        sm_t('BAUSTEIN.LF_PARAM_K'),
                        sm_t('BAUSTEIN.LF_VERB')),
+                // Gruppe 35 (Entscheidung 5, E-E12): Meldung ueber SignalBot - nur Signal, keine Ansage.
+                26  => array(sm_t('BAUSTEIN.T_VQ_BEFEHL'),
+                       sm_t('BAUSTEIN.SIG_NAME'),
+                       sm_t('BAUSTEIN.SIG_PARAM_K'),
+                       sm_t('BAUSTEIN.SIG_VERB')),
             );
         } else {
             $sm_bl_zeilen += array(
@@ -1809,6 +1916,10 @@ foreach ($sm_bl_wege as $sm_bl_w) {
                        sm_t('BAUSTEIN.LF_NAME'),
                        sm_t('BAUSTEIN.LF_PARAM_V'),
                        sm_t('BAUSTEIN.LF_VERB')),
+                29  => array(sm_t('BAUSTEIN.T_VQ_BEFEHL'),
+                       sm_t('BAUSTEIN.SIG_NAME'),
+                       sm_t('BAUSTEIN.SIG_PARAM_V'),
+                       sm_t('BAUSTEIN.SIG_VERB')),
             );
         }
         $sm_bl_mqtt = sprintf(sm_t('BAUSTEIN.S_MQTT'), sm_t('TAB.MQTT'), sm_t('MQ.LABEL_AN'), $sm_bl_pr, $sm_bl_pr);
@@ -1930,9 +2041,22 @@ $sm_zustandszeile = '<span class="sm-mono">'
 </form>
 </div>
 <?php } ?>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.TOKEN'); ?></span>
+<?php /* Gruppe 35 (2.8.13, E-E8): Schalter des Endpunkts. Neuinstallation aus, Update an. */
+$sm_ep_ein = smg_schalter_ein(sm_cfg_read(), 'ENDPUNKT_EIN'); ?>
+<?php if (!$sm_ep_ein) { ?>
+<div class="sm-alert sm-info"><?php echo sm_t('LOX.EP_AUS'); ?></div>
+<?php } ?>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<?php echo sm_fmt(); ?>
+<div class="sm-row">
+  <label><input data-role="none" type="checkbox" name="ep_ein" value="1"<?php echo $sm_ep_ein ? ' checked' : ''; ?>> <?php echo sm_t('LOX.EP_LABEL'); ?></label>
+  <p class="sm-small"><?php echo sm_t('LOX.EP_HINT'); ?></p>
 </div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ep_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
+</div>
+</form>
 </div>
 
 <div class="sm-step">
@@ -1963,6 +2087,21 @@ printf(sm_t('LOX.S9_LAGE'), (int) $sm_lastgang['stunden_heute'],
 <?php if ($sm_lastgang['offen'] > 0) { ?>
 <div class="sm-alert sm-warn"><?php echo sm_t('LOX.S9_OFFEN'); ?></div>
 <?php } ?>
+<?php /* Gruppe 35 (2.8.13, E-E8 Vorschlag 1): eigener Schalter des Lastgangs (Abnehmer: Spotpreis-Plugins). */
+$sm_lgang_ein = smg_schalter_ein(sm_cfg_read(), 'LASTGANG_EIN'); ?>
+<?php if (!$sm_lgang_ein) { ?>
+<div class="sm-alert sm-info"><?php echo sm_t('LOX.LG_AUS'); ?></div>
+<?php } ?>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<?php echo sm_fmt(); ?>
+<div class="sm-row">
+  <label><input data-role="none" type="checkbox" name="lgang_ein" value="1"<?php echo $sm_lgang_ein ? ' checked' : ''; ?>> <?php echo sm_t('LOX.LG_LABEL'); ?></label>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="lgang_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
+</div>
+</form>
 </div>
 
 <div class="sm-step">
@@ -1983,14 +2122,22 @@ printf(sm_t('LOX.S9_LAGE'), (int) $sm_lastgang['stunden_heute'],
          value="<?php echo sm_e(sm_fw('ab', 'ab_url', sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'FAHRPLAN_URL', ''))); ?>">
   <p class="sm-small"><?php echo sm_t('AB.HINT_URL'); ?></p>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.AB_SPEICHERN'); ?></span>
+<div class="sm-row">
+  <label><input data-role="none" type="checkbox" name="ab_speicher" value="1"<?php
+    echo sm_fh('ab', 'ab_speicher', sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'SPEICHER_EIN', '0') === '1') ? ' checked' : '';
+    ?>> <?php echo sm_t('AB.LABEL_SPEICHER'); ?></label>
+  <p class="sm-small"><?php echo sm_t('AB.HINT_SPEICHER'); ?></p>
 </div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ab_speichern" value="1"><?php
     echo sm_t('ALLG.SPEICHERN'); ?></button>
 </div>
 </form>
+<?php /* Gruppe 35 (2.8.13): die Lage des Lesers haus/speicher - nur mit dem Haken. */
+list($sm_sl_z, $sm_sl_t) = sm_speicher_lage();
+if ($sm_sl_t !== '') { ?>
+<div class="sm-alert <?php echo $sm_sl_z === 'ok' ? 'sm-ok' : 'sm-warn'; ?>"><?php echo sm_e($sm_sl_t); ?></div>
+<?php } ?>
 <?php
 $sm_ab = sm_abgleich_stand();
 if ($sm_ab['da'] && $sm_ab['regeln']) { ?>
@@ -2054,9 +2201,6 @@ if ($sm_ab['da'] && $sm_ab['regeln']) { ?>
          value="<?php echo sm_e(sm_fw('ko', 'ko_url', sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'PREIS_URL', ''))); ?>">
   <p class="sm-small"><?php echo sm_t('KO.HINT_URL'); ?></p>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.KO_SPEICHERN'); ?></span>
-</div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ko_speichern" value="1"><?php
     echo sm_t('ALLG.SPEICHERN'); ?></button>
@@ -2095,6 +2239,43 @@ if ($sm_ko['da'] && $sm_ko['ts']) {
 <?php } elseif (sm_cfg_get(sm_cfg_read(), 'KOSTEN', 'AKTIV', '0') === '1') { ?>
 <div class="sm-alert sm-info"><?php echo sm_t('KO.NOCH_NICHTS'); ?></div>
 <?php } ?>
+<?php /* Gruppe 35 (2.8.13, E-E14): die letzten 14 Tage aus kosten_historie.csv (Tagesabschluss samt
+ * 23-24 Uhr) und der Download als CSV. Nur lesen. */
+$sm_tage = sm_kosten_tage(14); ?>
+<h3 class="sm-h3"><?php echo sm_t('KO.H_TAGE'); ?></h3>
+<?php if ($sm_tage) { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?php echo sm_t('KO.SP_DATUM'); ?></th><th><?php echo sm_t('KO.SP_EUR'); ?></th>
+    <th><?php echo sm_t('KO.SP_KWH'); ?></th><th><?php echo sm_t('KO.SP_CT_KWH'); ?></th>
+    <th><?php echo sm_t('KO.SP_STUNDEN'); ?></th><th><?php echo sm_t('KO.SP_HINWEIS'); ?></th></tr>
+<?php foreach ($sm_tage as $sm_tg) {
+    $sm_tg_eur = (float) $sm_tg['eur'];
+    $sm_tg_kwh = (float) $sm_tg['kwh'];
+    $sm_tg_h = array();
+    if ((int) $sm_tg['ohne_preis'] > 0) { $sm_tg_h[] = sprintf(sm_t('KO.T_OHNE_PREIS'), (int) $sm_tg['ohne_preis']); }
+    if ((int) $sm_tg['offen'] > 0) { $sm_tg_h[] = sprintf(sm_t('KO.T_OFFEN'), (int) $sm_tg['offen']); }
+    if ($sm_tg['stunde23'] !== '1') { $sm_tg_h[] = sm_t('KO.T_OHNE23'); } ?>
+<tr><td class="sm-mono"><?php echo sm_e($sm_tg['datum']); ?></td>
+    <td class="sm-mono"><?php echo $sm_tg_eur < 0 ? '&ndash;' : sm_e(number_format($sm_tg_eur, 2, ',', '.')); ?></td>
+    <td class="sm-mono"><?php echo $sm_tg_kwh < 0 ? '&ndash;' : sm_e(number_format($sm_tg_kwh, 3, ',', '.')); ?></td>
+    <td class="sm-mono"><?php echo ($sm_tg_eur < 0 || $sm_tg_kwh <= 0) ? '&ndash;'
+        : sm_e(number_format((float) $sm_tg['ct'] / $sm_tg_kwh, 1, ',', '.')); ?></td>
+    <td class="sm-mono"><?php echo (int) $sm_tg['stunden']; ?></td>
+    <td><?php echo $sm_tg_h ? sm_e(implode('; ', $sm_tg_h)) : '&ndash;'; ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } else { ?>
+<p class="sm-small"><?php echo sm_t('KO.TAGE_LEER'); ?></p>
+<?php } ?>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<?php echo sm_fmt(); ?>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="ko_csv" value="1"><?php echo sm_t('KO.K_CSV'); ?></button>
+</div>
+</form>
 <!-- Gruppe 1 (2.8.11, Nachtrag 19.10.2026): statt des Vorlagenknopfs der Hinweis auf die
      Namenstabelle in Schritt 3 (Gruppen Kostenrechnung und Fahrplan-Abgleich). -->
 <div class="sm-hinweis"><?php echo sm_t('LOX.KO_NAMEN'); ?></div>
@@ -2103,6 +2284,11 @@ if ($sm_ko['da'] && $sm_ko['ts']) {
 
 <!-- ================================= Test ================================= -->
 <div class="sm-pane<?php echo $sm_tab === 'tab-test' ? ' sm-active' : ''; ?>" id="tab-test">
+<!-- Gruppe 35 (2.8.13, Regeln/04): EINE gesammelte Legende oben im Reiter - genau die Farben, die hier als
+     Knopf vorkommen (lesen, technische Hilfe, schaltend). Bis 2.8.12 stand je Formular eine eigene. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.LESEN'); ?></span>
+</div>
 
 <?php if ($sm_test_titel !== '') { ?>
 <div class="sm-alert sm-ok"><b><?php echo $sm_test_titel; ?></b></div>
@@ -2155,9 +2341,6 @@ if ($sm_ko['da'] && $sm_ko['ts']) {
   </form>
 <?php } ?>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo sm_t('LEGENDE.LESEN'); ?></span>
-</div>
 </div>
 
 <!-- ============================== Logdateien ============================== -->
@@ -2192,6 +2375,10 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
         }
         var f = document.querySelectorAll('input[name="activetab"]');
         for (var k = 0; k < f.length; k++) { f[k].value = ziel; }
+        /* Gruppe 35 (2.8.13, T1-5): die Adresse folgt dem Reiter - F5 bleibt auf ihm. */
+        if (window.history && history.replaceState && /^tab-[a-z]+$/.test(ziel)) {
+            try { history.replaceState(null, '', 'index.php?form=' + ziel.substring(4)); } catch (e) {}
+        }
     }
     for (var k = 0; k < reiter.length; k++) {
         reiter[k].addEventListener('click', function (e) {
@@ -2206,6 +2393,18 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
 /* Gruppe 1 (2.8.11, Nachtrag 19.10.2026): ein Name der Namenstabelle in die Zwischenablage.
    execCommand zuerst - navigator.clipboard gibt es nur in einem sicheren Kontext, und der LoxBerry
    laeuft im Heimnetz meist mit http (Bauart WaermepumpeCloud wpAdresseKopieren). */
+/* Gruppe 35 (2.8.13, Fremd-E5, E-E15): Strom und Spannung L1-L3 als Kanaele eintragen - nur, was fehlt;
+   gespeichert wird erst mit "Speichern". Ob der Zaehler sie liefert, zeigt fetch_vzlogger.pl --roh. */
+function smPhasen() {
+    var t = document.getElementById('vz_channels');
+    if (!t) { return false; }
+    var neu = ['1-0:31.7.0', '1-0:51.7.0', '1-0:71.7.0', '1-0:32.7.0', '1-0:52.7.0', '1-0:72.7.0'];
+    var alt = t.value.split(/[\s,]+/), z = [], i;
+    for (i = 0; i < alt.length; i++) { if (alt[i] !== '') { z.push(alt[i]); } }
+    for (i = 0; i < neu.length; i++) { if (z.indexOf(neu[i]) < 0) { z.push(neu[i]); } }
+    t.value = z.join('\n');
+    return false;
+}
 function smNameKopieren(k) {
     var a = k.getAttribute('data-name'), ok = false;
     try {
@@ -2219,4 +2418,4 @@ function smNameKopieren(k) {
 }
 </script>
 
-<?php LBWeb::lbfooter(); ?>
+<?php if (class_exists('LBWeb')) { LBWeb::lbfooter(); } ?>

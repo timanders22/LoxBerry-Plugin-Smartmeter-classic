@@ -238,7 +238,9 @@ if [ "$SM_SICH_OK" = "1" ]; then
 	mkdir -p "$HIST_SICHER" 2>/dev/null
 	chmod 0700 "$HIST_SICHER" 2>/dev/null
 	HIST_N=0
-	for HIST_F in historie.csv historie_merker.json abgleich.json; do
+	# Gruppe 35 (2.8.13, N1): dazu kosten.json und kosten_historie.csv - mit dem Tagesabschluss traegt
+	# kosten.json die Preise des Vortags; ein Update kurz vor Mitternacht verloere sonst einen Tag.
+	for HIST_F in historie.csv historie_merker.json abgleich.json kosten.json kosten_historie.csv; do
 		if [ -f "$HIST_QUELLE/$HIST_F" ]; then
 			if cp -p "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F" 2>/dev/null; then
 				HIST_N=$((HIST_N + 1))
@@ -396,6 +398,12 @@ netz_zweitschrift() {
     fi
     if ! grep -qF -- "$2" "$quelle" 2>/dev/null; then
         echo "<WARNING> $1 traegt das Merkmal $2 nicht (beschaedigt?) - keine Zweitschrift angelegt."
+        return 0
+    fi
+    # Gruppe 35 (2.8.13, T1-1 B/E1): eine Datei mit Platzhalter ist die Werkseinstellung, keine
+    # Einstellung dieser Anlage - sie wird nie Zweitschrift.
+    if grep -q 'REPLACEBY' "$quelle" 2>/dev/null; then
+        echo "<WARNING> $1 traegt noch Platzhalter (REPLACEBY...) - keine Zweitschrift angelegt."
         return 0
     fi
     tmp="$zweit.tmp.$$"

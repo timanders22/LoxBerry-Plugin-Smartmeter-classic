@@ -23,7 +23,15 @@ echo "`date` - Creating new UDEV Rules for I/R heads: /etc/udev/rules.d/99-smart
 echo "# LoxBerry Smartmeter classic - DO NOT EDIT BY HAND!
 # (wortgleich mit postroot.sh - beide schreiben dieselbe Datei)
 # Frueherer Kopf: LoxBerry SML-eMon Plugin device rule file - DO NOT EDIT BY HAND!" >/etc/udev/rules.d/99-smartmeter.rules
-echo "KERNEL==\"ttyUSB[0-9]*\",GROUP=\"loxberry\",MODE=\"0666\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\"" >>/etc/udev/rules.d/99-smartmeter.rules
+# Gruppe 35 (2.8.13, Entscheidung 4, F1/E-E10): die engere Regel ist AN (SM_UDEV_ENG=1) - wortgleich mit
+# postroot.sh; Rueckweg SM_UDEV_ENG=0 (bisherige Regel).
+SM_UDEV_ENG=1
+if [ "$SM_UDEV_ENG" = "1" ]; then
+	echo "SUBSYSTEM==\"tty\",KERNEL==\"ttyUSB[0-9]*\",ENV{ID_SERIAL_SHORT}==\"?*\",GROUP=\"loxberry\",MODE=\"0660\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\"" >>/etc/udev/rules.d/99-smartmeter.rules
+	echo "SUBSYSTEM==\"tty\",KERNEL==\"ttyUSB[0-9]*\",ENV{ID_SERIAL_SHORT}!=\"?*\",GROUP=\"loxberry\",MODE=\"0660\",SYMLINK+=\"serial/smartmeter/\$kernel\"" >>/etc/udev/rules.d/99-smartmeter.rules
+else
+	echo "KERNEL==\"ttyUSB[0-9]*\",GROUP=\"loxberry\",MODE=\"0666\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\"" >>/etc/udev/rules.d/99-smartmeter.rules
+fi
 # Gemeldet wird, was in der Datei steht, nicht der Vorsatz (NEU MIT 2.8.3).
 # Am 18.09.2026 in WSL gemessen: schlug das Schreiben fehl (Permission
 # denied), stand im Protokoll trotzdem "New UDEV-Rule ... created."

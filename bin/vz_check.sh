@@ -60,6 +60,8 @@ if [ -n "$NEEDED" ]; then
 	case "$FILEINFO" in
 		*"32-bit"*ARM*) LIBDIRS="/lib/arm-linux-gnueabihf /usr/lib/arm-linux-gnueabihf"; TAG="hard-float" ;;
 		*"64-bit"*ARM*) LIBDIRS="/lib/aarch64-linux-gnu /usr/lib/aarch64-linux-gnu"; TAG="AArch64" ;;
+		# Gruppe 35 (2.8.13, T5-4): x86-64 meldete bis 2.8.12 jede Bibliothek faelschlich "FEHLT".
+		*"64-bit"*x86-64*) LIBDIRS="/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu"; TAG="x86-64" ;;
 		*)              LIBDIRS="/lib /usr/lib";                                       TAG="" ;;
 	esac
 	for L in $NEEDED; do
@@ -67,8 +69,13 @@ if [ -n "$NEEDED" ]; then
 		for D in $LIBDIRS; do
 			[ -e "$D/$L" ] && FOUND="ja"
 		done
-		if [ -z "$FOUND" ] && [ -n "$TAG" ]; then
-			ldconfig -p 2>/dev/null | grep -F "$L" | grep -q "$TAG" && FOUND="ja"
+		if [ -z "$FOUND" ]; then
+			if [ -n "$TAG" ]; then
+				ldconfig -p 2>/dev/null | grep -F "$L" | grep -q "$TAG" && FOUND="ja"
+			else
+				# Unbekannte Architektur: ldconfig -p als Rueckfall (Gruppe 35).
+				ldconfig -p 2>/dev/null | grep -qF "$L" && FOUND="ja"
+			fi
 		fi
 		if [ -n "$FOUND" ]; then
 			HAVE="$HAVE $L"

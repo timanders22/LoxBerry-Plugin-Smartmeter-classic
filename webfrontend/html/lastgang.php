@@ -54,7 +54,9 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            // Gruppe 35 (Regeln/06 :179/:531): dritte Bedingung general.json.
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -120,6 +122,11 @@ $sm_soll = smg_wert($sm_cfg, 'MAIN', 'TOKEN', '');
 $sm_ist  = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
 if ($sm_soll !== '' && !(($sm_ist !== '') && hash_equals($sm_soll, $sm_ist))) {
     sm_lg_ende(403, 'TOKEN');
+}
+/* Gruppe 35 (2.8.13, E-E8 Vorschlag 1): eigener Schalter LASTGANG_EIN - der Abnehmer ist ein Plugin
+ * (Spotpreis aWATTar, Tarifvergleich), nicht der Miniserver. Neuinstallation aus, Update an. */
+if (!smg_schalter_ein($sm_cfg, 'LASTGANG_EIN')) {
+    sm_lg_ende(403, 'LASTGANG_AUS');
 }
 
 /* ---------------- Wieviele Stunden ----------------

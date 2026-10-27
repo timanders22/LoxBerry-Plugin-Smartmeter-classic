@@ -465,6 +465,8 @@ function smg_mqtt_behalten($home, array $filter)
                     $tl = unpack('n', substr($pk[1], 0, 2));
                     $t = substr($pk[1], 2, $tl[1]);
                     $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
+                    // Gruppe 35 (T4-5): ein Rumpf, kuerzer als Thema und Paketnummer, ist kaputt - uebergehen.
+                    if (strlen($pk[1]) < $versatz) { continue; }
                     $wert = (string) substr($pk[1], $versatz);
                     if (($pk[0] & 1) && $wert !== '') {
                         $aus['werte'][$t] = $wert;
@@ -708,7 +710,7 @@ function smg_mqtt_vormerken($home, $ordner, $praefix, $weg = false)
         @unlink($tmp);
         return false;
     }
-    @chmod($tmp, 0640);
+    @chmod($tmp, 0600);   // Gruppe 35: 0600 wie jede Datei dieser Linie, die kein Verbrauchswert ist
     if (!@rename($tmp, $datei)) {
         @unlink($tmp);
         return false;
@@ -778,6 +780,431 @@ function smg_abo_datei($home, $ordner, $praefix, $schreiben)
         }
     }
     return array($pfad, $da, $geschrieben);
+}
+
+/* ==================================================================
+ * Gruppe 35 (2.8.13) - Wurzel, Adressen, Schalter, Sperren, Noncached,
+ * Abraeumen mit Ruecklesen und der Leser fuer haus/speicher
+ * ================================================================== */
+
+/**
+ * Der LoxBerry-Wurzelordner (Gruppe 35, Entscheidung 7; Regeln/06 :179/:531):
+ * LBHOMEDIR, sonst vom Ort $von aufwaerts der erste Ordner mit
+ * config/plugins, webfrontend UND config/system/general.json. Bis 2.8.12
+ * stand die Suche fuenfmal ausgeschrieben, ohne general.json, an zwei
+ * Stellen mit einem festen (und seit LoxBerry 3 veralteten) Pfad unter /home.
+ * '' heisst: nicht bestimmbar - der Aufrufer bricht ab.
+ */
+function smg_wurzel($von)
+{
+    $h = getenv('LBHOMEDIR');
+    if (is_string($h) && $h !== '' && is_dir($h)) {
+        return rtrim($h, '/');
+    }
+    $d = (string) $von;
+    for ($i = 0; $i < 8; $i++) {
+        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
+            && is_file($d . '/config/system/general.json')) {
+            return $d;
+        }
+        $e = dirname($d);
+        if ($e === $d) { break; }
+        $d = $e;
+    }
+    return '';
+}
+
+/**
+ * Eine Adresse des Spotpreis-Plugins (Gruppe 35, T1-6): http/https, keine
+ * Steuerzeichen, keine Anfuehrungszeichen, kein Rueckstrich, hoechstens 512
+ * Zeichen, FILTER_VALIDATE_URL. Dieselbe Regel im Formular, beim
+ * Zurueckspielen und vor jedem Abruf.
+ */
+function smg_url_ok($u)
+{
+    if (!is_string($u) || $u === '' || strlen($u) > 512) {
+        return false;
+    }
+    if (preg_match('/[\x00-\x20\x7F"\'\\\\]/', $u)) {
+        return false;
+    }
+    if (!preg_match('#\Ahttps?://#i', $u)) {
+        return false;
+    }
+    return filter_var($u, FILTER_VALIDATE_URL) !== false;
+}
+
+/**
+ * Ein Schalter aus [MAIN] mit der Lese-Regel "fehlt = an" (Gruppe 35, E-E8):
+ * ENDPUNKT_EIN, LASTGANG_EIN. Die mitgelieferte smartmeter.cfg traegt 0
+ * (Neuinstallation); eine Konfiguration ohne den Schluessel stammt aus
+ * 2.8.12 oder aelter, dort war beides offen. postupgrade.sh schreibt 1.
+ */
+function smg_schalter_ein($cfg, $schluessel)
+{
+    if (!isset($cfg['MAIN']) || !is_array($cfg['MAIN']) || !array_key_exists($schluessel, $cfg['MAIN'])) {
+        return true;
+    }
+    return trim((string) $cfg['MAIN'][$schluessel]) === '1';
+}
+
+/**
+ * Eine Sperre je Skript auf der Ramdisk (Gruppe 35, Entscheidung 2, T4-3):
+ * fopen 'ce' (O_CLOEXEC - ein Kind erbt sie nie, Gedaechtnis
+ * sperre-vererbt-sich-an-kinder), flock LOCK_EX | LOCK_NB. Rueckgabe: der
+ * Griff (bis zum Ende des Laufs halten), false = belegt (der Lauf endet
+ * still), null = Sperrdatei nicht anlegbar (dann laeuft der Lauf ohne -
+ * lieber rechnen als gar nicht).
+ */
+function smg_sperre($shm, $name)
+{
+    if (!is_dir($shm)) {
+        @mkdir($shm, 0775, true);
+    }
+    $fh = @fopen($shm . '/' . $name . '.lock', 'ce');
+    if ($fh === false) {
+        return null;
+    }
+    if (!flock($fh, LOCK_EX | LOCK_NB)) {
+        fclose($fh);
+        return false;
+    }
+    return $fh;
+}
+
+/**
+ * Die Themen, die im MQTT-Gateway V2 den Haken "Noncached" brauchen
+ * (Gruppe 35, E-E5, N4) - EINE Liste fuer Namenstabelle, Hakenliste,
+ * Pruefzeile im Reiter Test und bin/healthcheck. ok-Themen stehen oft
+ * tagelang auf demselben Wert, status/zaehler kommt nach 999 -> 0 oder einem
+ * doppelten Minutenlauf zweimal gleich - ohne den Haken verschluckte das
+ * Gateway V2 den gleichen Wert. $regeln: Nummern der Fahrplan-Regeln.
+ */
+function smg_noncached_themen(array $regeln = array())
+{
+    $t = array('status/ok', 'status/zaehler', 'kosten/quelle_ok', 'abgleich/quelle_ok');
+    foreach ($regeln as $n) {
+        $t[] = 'abgleich/' . (int) $n . '/ok';
+    }
+    return $t;
+}
+
+/** Die Regelnummern des Fahrplan-Abgleichs (abgleich.json), Regel 1 immer, hoechstens 5. */
+function smg_regeln($datei)
+{
+    $r = array(1);
+    $d = is_readable($datei) ? @json_decode((string) @file_get_contents($datei), true) : null;
+    if (is_array($d) && isset($d['regeln']) && is_array($d['regeln'])) {
+        foreach (array_keys($d['regeln']) as $n) {
+            if (preg_match('/^[1-9][0-9]?$/', (string) $n) && (int) $n <= 5) { $r[] = (int) $n; }
+        }
+    }
+    $r = array_values(array_unique($r));
+    sort($r);
+    return $r;
+}
+
+/**
+ * Die Noncached-Lage im MQTT-Gateway V2 (Gruppe 35, N5): fuer jedes Thema in
+ * $themen (unter dem Praefix) ein Eintrag in config/system/subscriptions.json
+ * mit Haken (Id = Thema) und Noncached. Nur lesen. Rueckgabe
+ * array(lage, fehlende Themen); lage 'ok' | 'fehlt' | 'kein_v2' (Gateway nicht V2)
+ * | 'keine_datei' (subscriptions.json fehlt oder ist nicht lesbar).
+ */
+function smg_v2_noncached_lage($home, $praefix, array $themen)
+{
+    $gen = @json_decode((string) @file_get_contents($home . '/config/system/general.json'), true);
+    $v = (is_array($gen) && isset($gen['Mqtt']['Gatewayversion'])) ? (int) $gen['Mqtt']['Gatewayversion'] : 0;
+    if ($v < 2) {
+        return array('kein_v2', array());
+    }
+    $d = @json_decode((string) @file_get_contents($home . '/config/system/subscriptions.json', false, null, 0, 4194304), true);
+    if (!is_array($d)) {
+        return array('keine_datei', array());
+    }
+    $liste = (isset($d['Subscriptions']) && is_array($d['Subscriptions'])) ? $d['Subscriptions'] : $d;
+    $nc = array();
+    foreach ($liste as $e) {
+        if (!is_array($e) || !isset($e['Id'])) { continue; }
+        // (string) true ist "1" - Haken als true, 1, "1" oder "true".
+        $an = isset($e['Noncached']) && is_scalar($e['Noncached'])
+            && in_array(strtolower((string) $e['Noncached']), array('1', 'true'), true);
+        $nc[(string) $e['Id']] = $an;
+    }
+    $fehlt = array();
+    foreach ($themen as $t) {
+        $id = trim((string) $praefix, '/') . '/' . $t;
+        if (empty($nc[$id])) { $fehlt[] = $id; }
+    }
+    return array($fehlt ? 'fehlt' : 'ok', $fehlt);
+}
+
+/* ---------------- MQTT 3.1.1 von Hand: kurze Sitzungen am Broker ---------------- */
+
+/** Restlaenge eines MQTT-Pakets. */
+function smg_mq_laenge($n)
+{
+    $o = '';
+    do {
+        $b = $n % 128;
+        $n = intdiv($n, 128);
+        if ($n > 0) { $b |= 128; }
+        $o .= chr($b);
+    } while ($n > 0);
+    return $o;
+}
+
+/** $n Byte lesen bis zur Zeit $bis (microtime); null = Frist, Ende oder Fehler. */
+function smg_mq_lies($s, $n, $bis)
+{
+    $d = '';
+    while (strlen($d) < $n) {
+        $rest = $bis - microtime(true);
+        if ($rest <= 0) { return null; }
+        // N8 (Entwurf G35): die Lesezeit auf die RESTFRIST setzen - mit fest 1 s ueberzog die Probe ihre Frist.
+        stream_set_timeout($s, (int) floor($rest), (int) (($rest - floor($rest)) * 1000000));
+        $t = @fread($s, $n - strlen($d));
+        if ($t === false || $t === '') {
+            $m = stream_get_meta_data($s);
+            if (!empty($m['eof']) || feof($s)) { return null; }
+            continue;
+        }
+        $d .= $t;
+    }
+    return $d;
+}
+
+/** Ein Paket array(Kopfbyte, Rumpf) oder null. */
+function smg_mq_paket($s, $bis)
+{
+    $k = smg_mq_lies($s, 1, $bis);
+    if ($k === null) { return null; }
+    $n = 0;
+    $f = 1;
+    for ($i = 0; $i < 4; $i++) {
+        $b = smg_mq_lies($s, 1, $bis);
+        if ($b === null) { return null; }
+        $n += (ord($b) & 127) * $f;
+        $f *= 128;
+        if (!(ord($b) & 128)) { break; }
+    }
+    $r = ($n > 0) ? smg_mq_lies($s, $n, $bis) : '';
+    return ($r === null) ? null : array(ord($k), $r);
+}
+
+/**
+ * Eine Sitzung am Broker (Zugang feldweise aus general.json; das Kennwort
+ * steht nur im CONNECT-Paket, nie in einem Protokoll oder auf einer
+ * Befehlszeile). Rueckgabe der Strom oder null.
+ */
+function smg_mq_verbinden($home, $kennung)
+{
+    if (!function_exists('stream_socket_client')) { return null; }
+    $d = @json_decode((string) @file_get_contents($home . '/config/system/general.json'), true);
+    if (!is_array($d) || !isset($d['Mqtt']) || !is_array($d['Mqtt'])) { return null; }
+    $m = $d['Mqtt'];
+    $hol = function ($k) use ($m) { return (isset($m[$k]) && is_scalar($m[$k])) ? (string) $m[$k] : ''; };
+    $host = trim($hol('Brokerhost'));
+    if ($host === '' || $host === 'localhost') { $host = '127.0.0.1'; }
+    $port = (int) $hol('Brokerport');
+    if ($port <= 0 || $port > 65535) { $port = 1883; }
+    $benutzer = $hol('Brokeruser');
+    $kennwort = $hol('Brokerpass');
+    $s = @stream_socket_client('tcp://' . $host . ':' . $port, $e1, $e2, 2);
+    if (!$s) { return null; }
+    $zk = function ($t) { return pack('n', strlen($t)) . $t; };
+    $flags = 0x02;
+    $nutz = $zk($kennung . getmypid());
+    if ($benutzer !== '') {
+        $flags |= 0x80;
+        $nutz .= $zk($benutzer);
+        if ($kennwort !== '') { $flags |= 0x40; $nutz .= $zk($kennwort); }
+    }
+    $kopf = $zk('MQTT') . chr(4) . chr($flags) . pack('n', 30);
+    $p = chr(0x10) . smg_mq_laenge(strlen($kopf . $nutz)) . $kopf . $nutz;
+    if (@fwrite($s, $p) !== strlen($p)) { fclose($s); return null; }
+    $ack = smg_mq_paket($s, microtime(true) + 2.0);
+    if ($ack === null || ($ack[0] >> 4) !== 2 || strlen($ack[1]) < 2 || ord($ack[1][1]) !== 0) {
+        fclose($s);
+        return null;
+    }
+    return $s;
+}
+
+/**
+ * Retained setzen und ZURUECKLESEN (Gruppe 35, Entscheidung 6; Pruefbericht
+ * E4 Vorschlag 2). Bis 2.8.12 ging das -1 zum Abraeumen eines weggefallenen
+ * Zustands als EIN UDP-Datagramm an das Gateway, und der Merker galt danach
+ * unabhaengig vom Erfolg - ging es verloren, stand der alte Zustand fuer
+ * immer im Broker. Jetzt: kurze Sitzung direkt am Broker, PUBLISH QoS 1
+ * retained mit PUBACK, DISCONNECT, danach smg_mqtt_behalten() auf genau diese
+ * Themen. Bestaetigt ist ein Thema nur, wenn das zurueckgelesene Paket die
+ * Retain-Marke traegt und den gesetzten Wert.
+ * $tw: array(Thema => Wert). Rueckgabe array('bestaetigt' => [...],
+ * 'offen' => [...], 'lage' => keine_verbindung|kein_puback|nicht_nachgelesen|nachgelesen).
+ */
+function smg_mqtt_setzen_rueck($home, array $tw)
+{
+    $aus = array('bestaetigt' => array(), 'offen' => array_keys($tw), 'lage' => 'keine_verbindung');
+    if (!$tw) {
+        $aus['lage'] = 'nachgelesen';
+        return $aus;
+    }
+    $s = smg_mq_verbinden($home, 'smraeum');
+    if (!$s) { return $aus; }
+    $pid = 1;
+    $puback = true;
+    foreach ($tw as $t => $w) {
+        $t = (string) $t;
+        $w = (string) $w;
+        $r = pack('n', strlen($t)) . $t . pack('n', $pid) . $w;
+        $p = chr(0x33) . smg_mq_laenge(strlen($r)) . $r;
+        if (@fwrite($s, $p) !== strlen($p)) { $puback = false; break; }
+        $ack = smg_mq_paket($s, microtime(true) + 2.0);
+        if ($ack === null || $ack[0] !== 0x40) { $puback = false; }
+        $pid++;
+    }
+    @fwrite($s, chr(0xE0) . chr(0));
+    fclose($s);
+    $f = smg_mqtt_behalten($home, array_keys($tw));
+    if ($f['lage'] !== 'ok') {
+        $aus['lage'] = $puback ? 'nicht_nachgelesen' : 'kein_puback';
+        return $aus;
+    }
+    $aus['lage'] = 'nachgelesen';
+    $aus['bestaetigt'] = array();
+    $aus['offen'] = array();
+    foreach ($tw as $t => $w) {
+        if (isset($f['werte'][(string) $t]) && $f['werte'][(string) $t] === (string) $w) {
+            $aus['bestaetigt'][] = (string) $t;
+        } else {
+            $aus['offen'][] = (string) $t;
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Der abgekoppelte Leser fuer haus/speicher (Gruppe 35, Entscheidung 5,
+ * Regeln/07 Nr. 15 "Technik"): abonniert haus/speicher/richtung, leistung
+ * und zaehler und wartet, bis zaehler einmal LIVE (ohne Retain-Marke) kam,
+ * hoechstens $frist Sekunden (65 s - der Anbieter sendet jede Minute, Marstek
+ * in Sekunde 36; Gedaechtnis abnehmer-phasenfalle-kurze-sitzung). Schreibt
+ * nie unter haus/. Rueckgabe array(richtung, leistung, zaehler, live, dauer);
+ * Werte als Text oder null.
+ */
+function smg_haus_speicher_lesen($home, $frist)
+{
+    $l = array('richtung' => null, 'leistung' => null, 'zaehler' => null, 'live' => false, 'dauer' => 0.0);
+    $t0 = microtime(true);
+    $bis = $t0 + (float) $frist;
+    $s = smg_mq_verbinden($home, 'smhaus');
+    if (!$s) { return $l; }
+    $ft = array('haus/speicher/richtung', 'haus/speicher/leistung', 'haus/speicher/zaehler');
+    $sub = pack('n', 1);
+    foreach ($ft as $t) { $sub .= pack('n', strlen($t)) . $t . chr(0); }
+    @fwrite($s, chr(0x82) . smg_mq_laenge(strlen($sub)) . $sub);
+    while (microtime(true) < $bis) {
+        $p = smg_mq_paket($s, $bis);
+        if ($p === null) { break; }
+        if (($p[0] >> 4) !== 3 || strlen($p[1]) < 2) { continue; }
+        $tl = unpack('n', substr($p[1], 0, 2));
+        $qos = ($p[0] >> 1) & 3;
+        if (strlen($p[1]) < 2 + $tl[1] + ($qos > 0 ? 2 : 0)) { continue; }
+        $t = substr($p[1], 2, $tl[1]);
+        $w = (string) substr($p[1], 2 + $tl[1] + ($qos > 0 ? 2 : 0));
+        $k = substr($t, strlen('haus/speicher/'));
+        if (array_key_exists($k, $l) && $k !== 'live' && $k !== 'dauer') { $l[$k] = $w; }
+        if ($k === 'zaehler' && !($p[0] & 1)) { $l['live'] = true; break; }
+    }
+    @fwrite($s, chr(0xE0) . chr(0));
+    fclose($s);
+    $l['dauer'] = round(microtime(true) - $t0, 2);
+    return $l;
+}
+
+/**
+ * Das Urteil aus einer Lage des Lesers (Gruppe 35, E-E11): nur eine frische
+ * (live) Aussage "entlaedt" (richtung 2) zaehlt; richtung -1 oder fehlend =
+ * keine Aussage (wie bisher), kein live-zaehler = die Quelle schweigt.
+ * Ein retained "2" allein macht nie unsicher.
+ */
+function smg_speicher_urteil(array $l)
+{
+    if (empty($l['live'])) { return 'quelle_schweigt'; }
+    if (!isset($l['richtung']) || $l['richtung'] === null || !is_numeric($l['richtung'])
+        || (int) $l['richtung'] < 0) {
+        return 'ohne_aussage';
+    }
+    return ((int) $l['richtung'] === 2) ? 'entlaedt' : 'entlaedt_nicht';
+}
+
+/**
+ * Weggefallene Zustaende eines Lesekopfs abraeumen (Gruppe 35, Entscheidung 6;
+ * Pruefbericht E4) - EIN Weg fuer beide Leser: bin/fetch.php ruft die Funktion
+ * direkt, bin/fetch_vzlogger.pl ueber "sm_mqtt_leeren.php --setzen <kopf>".
+ *
+ * Der Merker <kopf>.retained auf der Ramdisk fuehrt jedes Zustandsfeld, das
+ * retained hinausging und nicht nachweislich abgeraeumt ist. Ein Feld, das
+ * diese erfolgreiche Messung nicht mehr liefert, bekommt -1 retained ueber
+ * smg_mqtt_setzen_rueck() (Broker direkt, QoS 1, Ruecklesen) und verlaesst den
+ * Merker erst, wenn das Ruecklesen es bestaetigt. Offene Felder bleiben darin
+ * und werden hoechstens einmal je 10 min erneut versucht (<kopf>.abraeumen_ts).
+ * Ist der Broker nicht zu fragen, gilt nichts als erledigt - eine INFO-Zeile,
+ * kein Fehler. Rueckgabe: Protokollzeilen "<STUFE> Text".
+ */
+function smg_abraeumen($home, $shm, $praefix, $kopf, array $jetzt)
+{
+    $aus = array();
+    if (!preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}\z/', (string) $kopf) || strpos((string) $kopf, '..') !== false) {
+        return array('<WARN> Abraeumen: Kopfname unzulaessig - nichts getan.');
+    }
+    $jetzt = array_values(array_unique(array_filter(array_map('strval', $jetzt), 'smg_mqtt_retained')));
+    $merker = $shm . '/' . $kopf . '.retained';
+    $ts_datei = $shm . '/' . $kopf . '.abraeumen_ts';
+    $vorher = is_file($merker) ? array_filter(array_map('trim', (array) @file($merker))) : array();
+    $vorher = array_values(array_filter($vorher, 'smg_mqtt_retained'));
+    $weg = array_values(array_diff($vorher, $jetzt));
+    $offen = $weg;
+    if ($weg) {
+        $letzt = is_file($ts_datei) ? (int) trim((string) @file_get_contents($ts_datei)) : 0;
+        if (time() - $letzt >= 600 || $letzt > time()) {
+            @file_put_contents($ts_datei, (string) time());
+            $tw = array();
+            foreach ($weg as $f) {
+                $tw[trim((string) $praefix, '/') . '/' . $kopf . '/' . $f] = '-1';
+            }
+            $r = smg_mqtt_setzen_rueck($home, $tw);
+            $offen = array();
+            foreach ($weg as $f) {
+                $t = trim((string) $praefix, '/') . '/' . $kopf . '/' . $f;
+                if (in_array($t, $r['bestaetigt'], true)) {
+                    $aus[] = '<OK> ' . $kopf . ': ' . $f . ' fehlt in dieser Messung - -1 retained gesetzt und am Broker zurueckgelesen.';
+                } else {
+                    $offen[] = $f;
+                }
+            }
+            if ($offen) {
+                $aus[] = '<INFO> ' . $kopf . ': -1 fuer ' . implode(', ', $offen) . ' ist nicht bestaetigt (Broker: '
+                       . $r['lage'] . ') - bleibt vorgemerkt, naechster Versuch in 10 min.';
+            }
+        }
+    }
+    $neu = array_values(array_unique(array_merge($jetzt, $offen)));
+    sort($neu);
+    if ($neu) {
+        $tmp = $merker . '.tmp.' . getmypid();
+        if (@file_put_contents($tmp, implode("\n", $neu) . "\n") !== false && @rename($tmp, $merker)) {
+            // geschrieben
+        } else {
+            @unlink($tmp);
+            $aus[] = '<WARN> ' . $kopf . ': der Merker ' . $merker . ' liess sich nicht schreiben.';
+        }
+    } elseif (is_file($merker)) {
+        @unlink($merker);
+        @unlink($ts_datei);
+    }
+    return $aus;
 }
 
 }

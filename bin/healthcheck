@@ -42,7 +42,9 @@ function sm_hc_wurzel()
 {
     $d = __DIR__;
     for ($i = 0; $i < 8; $i++) {
-        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+        // Gruppe 35 (Regeln/06 :179/:531): dritte Bedingung general.json.
+        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
+            && is_file($d . '/config/system/general.json')) {
             return $d;
         }
         $eltern = dirname($d);
@@ -208,6 +210,42 @@ if ($sm_stumm) {
         'Ein Lesekopf schweigt: ' . implode(', ', $sm_stumm) . ' - erlaubt sind ' . $sm_grenze
         . ' s. Die juengste Messung ueber alle Koepfe ist ' . $sm_alter . ' s alt. In Loxone '
         . 'behalten die virtuellen Eingaenge dieses Kopfes ihren letzten Wert.',
+        array('logfile' => $sm_log));
+}
+
+/* Gruppe 35 (2.8.13, N5): die Haken im MQTT-Gateway V2. Unter V2 kommt nur an, was angehakt ist, und
+ * ein gleicher Wert nur mit "Noncached" - fehlt der Haken an status/ok oder status/zaehler, meldet die
+ * Ausfallerkennung im Miniserver nach dessen Neustart faelschlich einen Fehler (oder schweigt). Nur lesen
+ * (config/system/subscriptions.json); fehlt die Datei: Hinweis, nie Fehler. Dieselbe Liste wie die
+ * Namenstabelle (smg_noncached_themen), nur fuer die eingeschalteten Gruppen. */
+$sm_nc = array();
+if (smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '1') === '1') {
+    $sm_nc_alle = smg_noncached_themen(smg_regeln($sm_home . '/data/plugins/' . $sm_ordner . '/abgleich.json'));
+    foreach ($sm_nc_alle as $sm_t) {
+        if (strpos($sm_t, 'status/') === 0
+            || (strpos($sm_t, 'kosten/') === 0 && smg_wert($sm_cfg, 'KOSTEN', 'AKTIV', '0') === '1')
+            || (strpos($sm_t, 'abgleich/') === 0 && smg_wert($sm_cfg, 'ABGLEICH', 'AKTIV', '0') === '1')) {
+            $sm_nc[] = $sm_t;
+        }
+    }
+}
+$sm_v2 = $sm_nc ? smg_v2_noncached_lage($sm_home, smg_wert($sm_cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), $sm_nc)
+                : array('kein_v2', array());
+$sm_text_ok = 'Der Zaehler wird gelesen. Letzte Messung vor ' . $sm_alter . ' s (erlaubt '
+    . $sm_grenze . ' s), ' . count($sm_dateien) . ' Datendatei(en), umlaufender '
+    . 'Zaehler ' . $sm_zaehler . '.'
+    . ($sm_teile ? ' Je Lesekopf: ' . implode(', ', $sm_teile) . '.' : '');
+if ($sm_v2[0] === 'fehlt') {
+    sm_hc_antwort($sm_titel, 4,
+        $sm_text_ok . ' MQTT-Gateway V2: bei ' . count($sm_v2[1]) . ' Datenpunkt(en) fehlt der Haken oder '
+        . '"Noncached" (' . implode(', ', $sm_v2[1]) . ') - System, MQTT Gateway, Abonnements; die Liste steht '
+        . 'im Plugin, Reiter Einbindung in Loxone, Schritt 2.',
+        array('logfile' => $sm_log));
+}
+if ($sm_v2[0] === 'keine_datei') {
+    sm_hc_antwort($sm_titel, 6,
+        $sm_text_ok . ' MQTT-Gateway V2: die Abonnements (config/system/subscriptions.json) sind nicht lesbar - '
+        . 'ob status/ok und status/zaehler "Noncached" tragen, ist hier nicht zu sehen.',
         array('logfile' => $sm_log));
 }
 

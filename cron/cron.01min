@@ -42,6 +42,13 @@ if [ ! -d "$BIN" ]; then
     exit 1
 fi
 
+# Gruppe 35 (2.8.13; Bauart Spotpreis aWATTar 1.2.39): ruft jemand diese Datei als root auf, laeuft sie als
+# loxberry weiter - sonst legten die Laeufe root-eigene Dateien an (der LoxBerry-Cron startet ohnehin als
+# loxberry; der Zweig ist eine Haertung).
+if [ "$(id -u)" = "0" ] && command -v su >/dev/null 2>&1 && [ -z "${SM_ALS_LOXBERRY:-}" ]; then
+    SM_ALS_LOXBERRY=1 exec su loxberry -s /bin/sh -c "SM_ALS_LOXBERRY=1 /bin/sh '$0'"
+fi
+
 # vzLogger: bricht selbst sofort ab, wenn die Betriebsart nicht vzLogger ist.
 if [ -x "$BIN/fetch_vzlogger.pl" ]; then
     ( "$BIN/fetch_vzlogger.pl" 2>&1 >/dev/null | logger -t smartmeter-classic ) &
@@ -55,6 +62,15 @@ if [ -x "$BIN/sm_historie.php" ]; then
     ( "$BIN/sm_historie.php" 2>&1 >/dev/null | logger -t smartmeter-classic ) &
 else
     logger -t smartmeter-classic "sm_historie.php fehlt oder ist nicht ausfuehrbar"
+fi
+
+# Gruppe 35 (2.8.13, Entscheidung 5): der Abnehmer haus/speicher - ein abgekoppelter Leser, der bis
+# 65 s auf ein LIVE-Lebenszeichen des Anbieters wartet. Er laeuft DOPPELT abgekoppelt (die aeussere
+# Unterschale endet sofort), damit das "wait" darunter nie auf ihn wartet; Deskriptoren 8 und 9 zu
+# (Gedaechtnis sperre-vererbt-sich-an-kinder). Ob er etwas tut (Haken SPEICHER_EIN, eine Regel aktiv,
+# keine Upgrade-Marke) und dass hoechstens einer laeuft (haus.lock), entscheidet sm_abgleich.php selbst.
+if [ -x "$BIN/sm_abgleich.php" ]; then
+    ( ( "$BIN/sm_abgleich.php" --haus-lesen 2>&1 >/dev/null </dev/null | logger -t smartmeter-classic ) 8<&- 9<&- & )
 fi
 
 wait

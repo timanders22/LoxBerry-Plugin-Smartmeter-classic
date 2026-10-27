@@ -26,6 +26,20 @@ ACTION="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 PLUGINNAME="$(basename "$SCRIPT_DIR")"
 LBHOMEDIR="${SCRIPT_DIR%/bin/plugins/*}"
+# Gruppe 35 (T5-3, nur Text): ausserhalb von .../bin/plugins/<ordner> stimmt LBHOMEDIR nicht - ueber sudo
+# laeuft das Skript aber immer installiert.
+
+# Gruppe 35 (2.8.13, Pruefbericht T5-2): EIN trap fuer alles, was ein Abbruch aufraeumen muss. Bis 2.8.12
+# ersetzte der zweite trap (Dienststart-Sperre) den ersten - der Schluessel unter /tmp blieb liegen.
+tmpkey=""
+SM_GESPERRT=0
+sm_aufraeumen()
+{
+	[ -n "$tmpkey" ] && rm -f "$tmpkey"
+	[ "$SM_GESPERRT" = "1" ] && unblock_service_start
+	return 0
+}
+trap 'sm_aufraeumen' EXIT INT TERM
 
 KEYRING="/usr/share/keyrings/volkszaehler-volkszaehler-org-project-archive-keyring.gpg"
 SOURCE_LIST="/etc/apt/sources.list.d/volkszaehler-volkszaehler-org-project.list"
@@ -68,8 +82,8 @@ configure_repository()
 
 	if ! command -v curl >/dev/null 2>&1 || ! command -v gpg >/dev/null 2>&1; then
 		echo "<INFO> Installiere Hilfspakete (ca-certificates, curl, gnupg)"
-		apt-get update
-		apt-get install -y --no-install-recommends ca-certificates curl gnupg
+		timeout 600 apt-get update
+		timeout 600 apt-get install -y --no-install-recommends ca-certificates curl gnupg
 	fi
 
 	ID="debian"; CODENAME=""
@@ -82,9 +96,8 @@ configure_repository()
 	[ "${ID:-debian}" = "raspbian" ] && REPO_OS="raspbian"
 
 	tmpkey="$(mktemp)"
-	trap 'rm -f "$tmpkey"' EXIT
 	echo "<INFO> Hole den Schluessel der Paketquelle"
-	if ! curl -fsSL "$KEY_URL" -o "$tmpkey"; then
+	if ! curl -fsSL --max-time 30 "$KEY_URL" -o "$tmpkey"; then
 		echo "<ERROR> Schluessel nicht abrufbar: $KEY_URL"
 		exit 3
 	fi
@@ -118,12 +131,15 @@ block_service_start()
 	fi
 	printf '#!/bin/sh\nexit 101\n' >"$POLICY_FILE"
 	chmod 0755 "$POLICY_FILE"
-	# Und eine Wache: ein Abbruch darf die Sperre nicht stehen lassen.
-	trap 'unblock_service_start' EXIT INT TERM
+	# Und eine Wache: ein Abbruch darf die Sperre nicht stehen lassen - ueber den EINEN trap oben.
+	SM_GESPERRT=1
 }
 
 unblock_service_start()
 {
+	# Nur einmal: ein zweiter Aufruf loeschte die eben zurueckgelegte Datei des Systems.
+	[ "$SM_GESPERRT" = "1" ] || return 0
+	SM_GESPERRT=0
 	rm -f "$POLICY_FILE"
 	[ -e "$POLICY_BACKUP" ] && mv "$POLICY_BACKUP" "$POLICY_FILE"
 	return 0
@@ -167,12 +183,12 @@ install_package()
 
 	configure_repository
 	echo "<INFO> Aktualisiere die Paketlisten"
-	apt-get update
+	timeout 600 apt-get update
 
 	oldversion="$(installed_version)"
 	block_service_start   # setzt selbst einen trap auf unblock
 	echo "<INFO> Installiere vzlogger"
-	if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends vzlogger; then
+	if ! DEBIAN_FRONTEND=noninteractive timeout 600 apt-get install -y --no-install-recommends vzlogger; then
 		unblock_service_start
 		echo "<ERROR> vzlogger liess sich nicht installieren"
 		exit 4

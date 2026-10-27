@@ -6,6 +6,20 @@
 # selbst installiert hat. Den Merker schreibt bin/vzlogger_pkg.sh.
 # Herkunft des Verfahrens: Smartmeter-NG.
 
+# Gruppe 35 (2.8.13, Entscheidung 3, Pruefbericht T2-7): der Installer ruft beim Deinstallieren eines
+# Plugins jedes uninstall-Skript, dessen Name mit dessen Namen BEGINNT (plugininstall.pl :1570-1577) -
+# beim Original "smartmeter" also auch dieses, mit $2 = smartmeter. Ohne Wache entfernte es dann UNSERE
+# udev-Regel, stoppte vzlogger und raeumte /dev/shm/smartmeter. Ist $2 gesetzt und nicht dieser Name:
+# nichts tun. Leeres $2 (alte LoxBerry-Fassungen) wie bisher.
+# BEKANNTE GRENZE (E2): purge_installation loescht beim Upgrade oder Deinstallieren eines Plugins
+# "smartmeter" auch system/daemons/plugins/smartmeter-classic und uninstall/smartmeter-classic
+# (plugininstall.pl :1599-1607) - dagegen hilft diese Wache nicht. Der Reiter Test zeigt es
+# ("Dienstdatei vorhanden"); Abhilfe: dieselbe Fassung drueberinstallieren.
+if [ -n "${2:-}" ] && [ "$2" != "smartmeter-classic" ]; then
+	echo "<INFO> Deinstallation von $2 - nicht dieses Plugin, nichts zu tun."
+	exit 0
+fi
+
 ARGV3=$3
 ARGV5=$5
 

@@ -24,41 +24,19 @@
  */
 
 // ---------------------------------------------------------------- Pfade
-/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
- *
- * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt.
- */
-if (!function_exists('lb_wurzel_ermitteln')) {
-    function lb_wurzel_ermitteln()
-    {
-        $d = __DIR__;
-        for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
-                return $d;
-            }
-            $eltern = dirname($d);
-            if ($eltern === $d) { break; }
-            $d = $eltern;
-        }
-        return '';
-    }
-}
-
-$sm_home = getenv('LBHOMEDIR');
-if (!$sm_home || !is_dir($sm_home)) {
-    foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-        if (is_dir($k)) { $sm_home = $k; break; }
-    }
-}
-$sm_home = $sm_home ? $sm_home : lb_wurzel_ermitteln();
-// Der Pluginordner ergibt sich aus dem Ablageort dieser Datei
-// (<home>/bin/plugins/<ordner>/fetch.php).
+/* Gruppe 35 (2.8.13, Entscheidung 7: T2-3, T3-4, T4-6). Bis 2.8.12 stand hier
+ * eine eigene Wurzelsuche ohne general.json und mit festem Systempfad. Die
+ * Wurzel kommt jetzt aus smg_wurzel() (bin/sm_gemein.php), gleich nach dem
+ * Einbinden weiter unten. Der Pluginordner ergibt sich aus dem Ablageort
+ * dieser Datei (<home>/bin/plugins/<ordner>/fetch.php); aus dem entpackten
+ * Archiv heisst er "bin" - dann der eigene Name, nie /dev/shm/bin. */
 $sm_ordner = basename(dirname(__FILE__));
-$sm_cfgdatei = $sm_home . '/config/plugins/' . $sm_ordner . '/smartmeter.cfg';
+if ($sm_ordner === '' || $sm_ordner === 'bin') { $sm_ordner = 'smartmeter-classic'; }
 $sm_shm      = '/dev/shm/' . $sm_ordner;
 $sm_logdatei = $sm_shm . '/fetch.log';
-$sm_bin      = $sm_home . '/bin/plugins/' . $sm_ordner;
+$sm_home     = '';
+$sm_cfgdatei = '';
+$sm_bin      = '';
 
 $sm_argv = isset($argv) ? (array) $argv : array();
 $sm_laut = in_array('--verbose', $sm_argv, true);
@@ -86,6 +64,15 @@ if (!is_file($sm_gemein)) {
 }
 require_once $sm_gemein;
 
+/* Gruppe 35 (2.8.13, T2-3/T4-6): die Wurzel ueber smg_wurzel() - mit general.json, ohne festen Pfad. */
+$sm_home = smg_wurzel(__DIR__);
+if ($sm_home === '') {
+    fwrite(STDERR, "Der LoxBerry-Wurzelordner liess sich nicht bestimmen.\n");
+    exit(1);
+}
+$sm_cfgdatei = $sm_home . '/config/plugins/' . $sm_ordner . '/smartmeter.cfg';
+$sm_bin      = $sm_home . '/bin/plugins/' . $sm_ordner;
+
 /* ------------------------------------------------------------------
  * Nur ein Lauf gleichzeitig - eine Sperrdatei je DATENBESTAND
  *
@@ -104,7 +91,9 @@ require_once $sm_gemein;
  * flock mit LOCK_NB: laeuft schon einer, endet dieser Aufruf sofort und
  * ohne Aufhebens - das ist der Normalfall und kein Fehler.
  * ------------------------------------------------------------------ */
-$sm_sperre = @fopen($sm_shm . '/daten.lock', 'c');
+/* Gruppe 35 (2.8.13, T3-6 PHP-Teil): 'ce' = O_CLOEXEC - ein Kind (perl sm_logger.pl) erbt den Griff
+ * nicht und haelt die Sperre nie ueber das Ende dieses Laufs hinaus (Gedaechtnis sperre-vererbt-sich). */
+$sm_sperre = @fopen($sm_shm . '/daten.lock', 'ce');
 if ($sm_sperre === false) {
     // Ohne Sperrdatei lieber lesen als gar nicht lesen.
     $sm_sperre = null;
@@ -235,6 +224,11 @@ function sm_udp($ziel, $port, $text)
 }
 
 // ------------------------------------------------------- Hauptdurchlauf
+/* Gruppe 35 (2.8.13, E-E2, Pruefbericht E3): eine Zeitgrenze von 60 s fuer ALLE Leseaufrufe dieses
+ * Laufs zusammen (timeout -k 5 vor perl). Haengt sm_logger.pl ausserhalb des Zerlegers (der hat seine
+ * eigene Grenze von 20 s), haelt dieser Lauf daten.lock nicht mehr bis zum Neustart. */
+define('SM_FETCH_FRIST', 60);
+$sm_frist_ende = time() + SM_FETCH_FRIST;
 $sm_gelesen = 0;
 $sm_versucht = 0;
 $sm_gescheitert = 0;
@@ -282,13 +276,21 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
         $sm_befehl .= ' --verbose';
     }
 
+    $sm_rest = $sm_frist_ende - time();
+    if ($sm_rest < 2) {
+        sm_fetch_log($sm_serial . ': die Zeitgrenze von ' . SM_FETCH_FRIST . ' s fuer diesen Lauf ist erreicht'
+             . ' - dieser Lesekopf wird erst im naechsten Lauf gelesen (ZEITGRENZE).', 'WARN');
+        continue;
+    }
     sm_fetch_log($sm_serial . ': lese ueber ' . $sm_device . ' (Profil ' . $sm_meter . ')');
     /* A3 (Durchgang 01.10.2026): der Zeitstempel der Messung VOR dem Lesen.
      * Nur wenn er danach gewachsen ist, hat dieser Lauf etwas gemessen. */
     $sm_ts_vorher = smg_ts_datei($sm_shm . '/' . $sm_serial . '.data');
     $sm_aus = array(); $sm_rc = 0;
-    @exec('perl ' . $sm_befehl . ' 2>&1', $sm_aus, $sm_rc);
-    if ($sm_rc !== 0) {
+    @exec('timeout -k 5 ' . (int) $sm_rest . ' perl ' . $sm_befehl . ' 2>&1', $sm_aus, $sm_rc);
+    if ($sm_rc === 124 || $sm_rc === 137) {
+        sm_fetch_log($sm_serial . ': sm_logger.pl nach ' . (int) $sm_rest . ' s abgebrochen (ZEITGRENZE).', 'WARN');
+    } elseif ($sm_rc !== 0) {
         sm_fetch_log($sm_serial . ': sm_logger.pl endete mit ' . $sm_rc . ' - '
              . substr(implode(' ', $sm_aus), 0, 200), 'ERROR');
     }
@@ -381,28 +383,16 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
              * eine Zahl, die Loxone nicht auf 0 setzt) - sonst stuende der alte
              * Zustand fuer immer im Broker. Schweigt der Zaehler, bleibt er
              * stehen; dann gilt status/ok. Der Merker liegt auf der Ramdisk. */
+            /* Gruppe 35 (2.8.13, Entscheidung 6, Pruefbericht E4): ein frueher retained gesendetes
+             * Zustandsfeld, das diese ERFOLGREICHE Messung nicht mehr liefert, bekommt -1 retained -
+             * seit 2.8.13 direkt am Broker mit Ruecklesen (smg_abraeumen in sm_gemein.php). Bis 2.8.12
+             * ging es als EIN UDP-Datagramm, und der Merker galt unabhaengig vom Erfolg. Schweigt der
+             * Zaehler, bleibt der Zustand stehen; dann gilt status/ok. */
             if ($sm_frisch) {
-                $sm_merker = $sm_shm . '/' . $sm_serial . '.retained';
-                $sm_vorher_r = is_file($sm_merker)
-                    ? array_filter(array_map('trim', (array) @file($sm_merker))) : array();
-                foreach (array_diff($sm_vorher_r, $sm_zustaende) as $sm_weg) {
-                    if (!smg_mqtt_retained($sm_weg)) {
-                        continue;
+                foreach (smg_abraeumen($sm_home, $sm_shm, $sm_topic, $sm_serial, $sm_zustaende) as $sm_az) {
+                    if (preg_match('/^<([A-Z]+)> (.*)$/s', $sm_az, $sm_am)) {
+                        sm_fetch_log($sm_am[2], $sm_am[1]);
                     }
-                    if (sm_udp('127.0.0.1', $sm_udpin,
-                               'retain ' . $sm_topic . '/' . $sm_serial . '/' . $sm_weg . ' -1')) {
-                        $sm_anzahl++;
-                        sm_fetch_log($sm_serial . ': ' . $sm_weg . ' fehlt in dieser Messung - -1 retained gesendet.', 'INFO');
-                    } else {
-                        $sm_fehl++;
-                    }
-                }
-                $sm_zustaende = array_values(array_unique($sm_zustaende));
-                sort($sm_zustaende);
-                if ($sm_zustaende) {
-                    @file_put_contents($sm_merker, implode("\n", $sm_zustaende) . "\n");
-                } elseif (is_file($sm_merker)) {
-                    @unlink($sm_merker);
                 }
             }
             $sm_versucht += $sm_anzahl + $sm_fehl;
@@ -424,39 +414,17 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
  * zwei verschiedene Groessen. */
 $sm_stand = smg_zaehler_weiter($sm_shm . '/zaehler');
 
-/* A7 (Durchgang 01.10.2026, Entscheidung 8): das Lebenszeichen auch ueber
- * MQTT - bis 2.8.5 stand es nur in der Schlusszeile des Endpunkts.
- * status/ok traegt dasselbe Urteil wie OK im Endpunkt (jeder eingeschaltete
- * Lesekopf juenger als 3 x Takt), status/ts die Zeit dieses Laufs,
- * status/zaehler den umlaufenden Zaehler. Alle drei fluechtig: ein
- * zurueckbehaltenes ok=1 sagte nach einem Neustart "in Ordnung" ueber einen
- * toten Dienst. Gesendet in JEDEM Lauf, auch wenn kein Zaehler antwortete. */
+/* Gruppe 35 (2.8.13, E-E4, N3): das Lebenszeichen status/ok, status/ts,
+ * status/zaehler sendet seit 2.8.13 bin/sm_historie.php im FESTEN 60-s-Takt
+ * (jede Minute, unabhaengig vom Abfragetakt; eigener Zaehler). Bis 2.8.12
+ * stand es hier und kam im Lesetakt - bei 15 min alle 15 min, beim Takt
+ * "nur beim Systemstart" nie. Der Zaehler oben bleibt: ZAEHLER= im Endpunkt
+ * zaehlt die Leselaeufe. Hier bleibt die Abodatei des Gateways (M3,
+ * Rueckfall fuer Anlagen auf Gateway V1). */
 if ($sm_sendmqtt) {
-    $sm_udpin = sm_gateway_udpin($sm_home);
-    if ($sm_udpin) {
-        $sm_lage = smg_kopf_lage($sm_shm, smg_koepfe($sm_cfg, null),
-                                 smg_alter_grenze(smg_wert($sm_cfg, 'MAIN', 'CRON', '5'), false));
-        $sm_status_ok = $sm_lage ? 1 : 0;
-        foreach ($sm_lage as $sm_l) {
-            if (!$sm_l['ok']) { $sm_status_ok = 0; }
-        }
-        $sm_st_fehl = 0;
-        foreach (array('status/ok' => $sm_status_ok, 'status/ts' => time(),
-                       'status/zaehler' => $sm_stand) as $sm_k => $sm_v) {
-            $sm_versucht++;
-            if (!sm_udp('127.0.0.1', $sm_udpin, 'publish ' . $sm_topic . '/' . $sm_k . ' ' . $sm_v)) {
-                $sm_st_fehl++;
-            }
-        }
-        $sm_gescheitert += $sm_st_fehl;
-        sm_fetch_log('MQTT: Lebenszeichen status/ok=' . $sm_status_ok . ' gesendet'
-             . ($sm_st_fehl ? ', ' . $sm_st_fehl . ' von 3 gescheitert' : '') . '.',
-             $sm_st_fehl ? 'WARN' : 'OK');
-        /* M3: die Abodatei des Gateways folgt dem Praefix (Regeln/07). */
-        list($sm_abo_pfad, , $sm_abo_neu) = smg_abo_datei($sm_home, $sm_ordner, $sm_topic, true);
-        if ($sm_abo_neu) {
-            sm_fetch_log('MQTT: Abodatei des Gateways gesetzt: ' . $sm_topic . '/# (' . $sm_abo_pfad . ').', 'INFO');
-        }
+    list($sm_abo_pfad, , $sm_abo_neu) = smg_abo_datei($sm_home, $sm_ordner, $sm_topic, true);
+    if ($sm_abo_neu) {
+        sm_fetch_log('MQTT: Abodatei des Gateways gesetzt: ' . $sm_topic . '/# (' . $sm_abo_pfad . ').', 'INFO');
     }
 }
 

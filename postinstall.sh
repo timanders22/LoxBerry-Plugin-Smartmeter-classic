@@ -70,7 +70,7 @@ netz_zurueck_cfg() {
     fi
     if [ "$verloren" = "1" ]; then
         if cp -p "$zweit" "$ziel" 2>/dev/null; then
-            chmod 0640 "$ziel" 2>/dev/null
+            chmod 0600 "$ziel" 2>/dev/null
             echo "<OK> smartmeter.cfg aus der Zweitschrift wiederhergestellt ($grund)."
         else
             echo "<WARNING> smartmeter.cfg liess sich nicht zurueckspielen. Die Sicherung"
@@ -90,7 +90,7 @@ netz_ohne_vorgabe() {
     [ -f "$zweit" ] || return 0
     if [ ! -s "$ziel" ]; then
         if cp -p "$zweit" "$ziel" 2>/dev/null; then
-            chmod 0640 "$ziel" 2>/dev/null
+            chmod 0600 "$ziel" 2>/dev/null
             echo "<OK> $1 aus der Zweitschrift wiederhergestellt."
         else
             echo "<WARNING> $1 liess sich nicht zurueckspielen ($zweit)."
@@ -170,8 +170,11 @@ if [ "$SM_REST" = "0" ]; then
     echo "<OK> Keine Platzhalter mehr in Konfiguration und Dienstdatei."
 fi
 
-# Die Konfiguration traegt das Zugriffstoken des Endpunkts.
-chmod 0640 "$NETZ_CFG/smartmeter.cfg" 2>/dev/null
+# Die Konfiguration traegt das Zugriffstoken des Endpunkts - 0600 (Gruppe 35, Regeln/05 :358; bis 2.8.12 0640).
+# vzlogger.json/.conf ebenso, wenn vorhanden.
+for SM_D in smartmeter.cfg vzlogger.json vzlogger.conf; do
+    [ -f "$NETZ_CFG/$SM_D" ] && chmod 0600 "$NETZ_CFG/$SM_D" 2>/dev/null
+done
 
 echo "<INFO> Make scripts executable"
 # Die Cron-Verknuepfungen zeigen auf diese beiden Dateien - ohne

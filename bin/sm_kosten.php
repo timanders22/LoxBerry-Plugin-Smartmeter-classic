@@ -37,6 +37,12 @@
  * Wer es braucht, muesste die Stundenpreise mitschreiben. Das gehoert dann
  * ins Spotpreis-Plugin, nicht hierher: dort entstehen sie.
  *
+ * SEIT 2.8.13 (Gruppe 35, Entscheidung 2): EINEN Tag zurueck merkt sich
+ * dieser Lauf die Preise doch - die des laufenden Tages (preise_tag in
+ * kosten.json), beim Datumswechsel nachgerueckt (preise_vortag). Damit
+ * schliesst der erste Lauf nach 0 Uhr den Vortag samt der Stunde 23-24 Uhr
+ * ab: eine Zeile je Tag in kosten_historie.csv und kosten/gestern_*.
+ *
  * DIE EINHEIT
  *
  * historie.csv fuehrt Wh und schreibt die Einheit daneben; Stunden mit "?"
@@ -73,17 +79,10 @@ if (!is_file($sm_gemein)) {
 }
 require_once $sm_gemein;
 
-$sm_home = getenv('LBHOMEDIR');
-if (!$sm_home || !is_dir($sm_home)) {
-    $sm_d = __DIR__;
-    for ($sm_i = 0; $sm_i < 8; $sm_i++) {
-        if (is_dir($sm_d . '/config/plugins') && is_dir($sm_d . '/webfrontend')) { break; }
-        $sm_e = dirname($sm_d);
-        if ($sm_e === $sm_d) { $sm_d = ''; break; }
-        $sm_d = $sm_e;
-    }
-    $sm_home = $sm_d;
-}
+/* Gruppe 35 (2.8.13, T4-6): EINE Wurzelsuche fuer alle Abholer - smg_wurzel() in sm_gemein.php
+ * (LBHOMEDIR, sonst aufwaerts mit config/plugins, webfrontend UND config/system/general.json). Die
+ * Schleife hier lieferte nach acht Stufen ohne Treffer den achten Elternordner statt ''. */
+$sm_home = smg_wurzel(__DIR__);
 if ($sm_home === '' || !is_dir($sm_home)) {
     fwrite(STDERR, "Der LoxBerry-Wurzelordner liess sich nicht bestimmen.\n");
     exit(1);
@@ -95,6 +94,9 @@ $SM_HIST     = $SM_DATA . '/historie.csv';
 $SM_STAND    = $SM_DATA . '/kosten.json';
 $SM_GENERAL  = $sm_home . '/config/system/general.json';
 $SM_LOG      = $sm_home . '/log/plugins/' . $sm_ordner . '/smartmeter.log';
+// Gruppe 35 (2.8.13): Tagesabschluss (eine Zeile je Tag) und die Sperre auf der Ramdisk.
+$SM_KHIST    = $SM_DATA . '/kosten_historie.csv';
+$SM_SHM      = '/dev/shm/' . $sm_ordner;
 
 function sm_k_log($text, $stufe = 'INFO')
 {
@@ -198,6 +200,155 @@ function sm_k_mqtt($cfg, $msgs)
 }
 
 /* ==================================================================
+ * Gruppe 35 (2.8.13, Entscheidung 2: T4-3 + Fremd-E3) - Tagesabschluss
+ *
+ * Bis 2.8.12 rechnete dieser Lauf nur "heute"; die Stunde 23-24 Uhr
+ * entsteht in historie.csv erst nach 0 Uhr und fiel damit in keinen Tag,
+ * und von 0 bis 1 Uhr stand stunde_ct auf -1 (Pruefbericht T4-3, Probe).
+ * Jetzt merkt sich kosten.json die Preise des Tages (preise_tag) und rueckt
+ * sie beim Datumswechsel nach preise_vortag, BEVOR neue eingetragen werden.
+ * Der erste Lauf nach 0 Uhr, der die 23-Uhr-Zeile des Vortags in
+ * historie.csv sieht (spaetestens an der Frist 01:00, dann ohne sie),
+ * schliesst den Vortag ab: genau EINE Zeile je Tag in kosten_historie.csv.
+ * Ohne Vortagspreise entsteht die Zeile mit -1 - kein erfundener Preis.
+ * Preise nach Stundenschluessel 0-23: am 25-Stunden-Tag haben beide
+ * 2-Uhr-Stunden denselben Preis (Bestand, N9).
+ * ================================================================== */
+define('SM_K_FRIST', 3600);
+define('SM_K_KOPF', 'datum;kwh;ct;eur;stunden;offen;ohne_preis;stunde23;zeilen');
+
+/** Preise merken: preise_tag nachruecken, bekannte Stunden halten. */
+function sm_k_preise_merken(array $stand, array $preise, $jetzt)
+{
+    $heute = date('Y-m-d', $jetzt);
+    $pt = (isset($stand['preise_tag']) && is_array($stand['preise_tag'])) ? $stand['preise_tag'] : null;
+    if ($pt && isset($pt['datum']) && $pt['datum'] !== $heute) {
+        // Nachruecken, nie verwerfen - die Preise von gestern braucht der Abschluss.
+        $stand['preise_vortag'] = $pt;
+        $pt = null;
+    }
+    if (!$pt || !isset($pt['ct']) || !is_array($pt['ct'])) {
+        $pt = array('datum' => $heute, 'ct' => array());
+    }
+    foreach ($preise as $h => $ct) {
+        $pt['ct'][(string) (int) $h] = (float) $ct;
+    }
+    $stand['preise_tag'] = $pt;
+    return $stand;
+}
+
+/**
+ * Den Vortag abschliessen (unter der Sperre dieses Laufs). Rueckgabe
+ * array(Lage, Zeile|null); Lage: erledigt | wartet | keine_daten |
+ * geschrieben | ohne_preise | nicht_schreibbar.
+ */
+function sm_k_tagesabschluss($hist, $khist, array $stand, $jetzt)
+{
+    $heute_beginn = strtotime('today', $jetzt);
+    $gestern_beginn = strtotime('yesterday', $jetzt);
+    $gestern = date('Y-m-d', $gestern_beginn);
+    if (sm_k_gestern_zeile($khist, $jetzt) !== null) {
+        return array('erledigt', null);
+    }
+    $wh = array();
+    $offen = 0;
+    $hat23 = false;
+    $zeilen = 0;
+    $s23 = strtotime($gestern . ' 23:00:00');
+    $fh = is_readable($hist) ? @fopen($hist, 'rb') : false;
+    if ($fh !== false) {
+        while (($z = fgets($fh)) !== false) {
+            $f = explode(';', trim($z));
+            if (count($f) < 7 || !ctype_digit($f[0])) { continue; }
+            $st = (int) $f[0];
+            if ($st < $gestern_beginn || $st >= $heute_beginn) { continue; }
+            $zeilen++;
+            if ($st === $s23) { $hat23 = true; }
+            if ($f[4] !== 'Wh') { $offen++; continue; }
+            // Je Stundenbeginn (nicht je Uhrzeit): am 25-Stunden-Tag sind es zwei 2-Uhr-Stunden.
+            $wh[$st] = (isset($wh[$st]) ? $wh[$st] : 0.0) + (float) $f[2];
+        }
+        fclose($fh);
+    }
+    if (!$hat23 && $jetzt < $heute_beginn + SM_K_FRIST) {
+        return array('wartet', null);
+    }
+    if ($zeilen === 0) {
+        // Kein Leser lief gestern - keine Zeile; gestern_* gehen als -1 hinaus.
+        return array('keine_daten', null);
+    }
+    $pv = (isset($stand['preise_vortag']['datum'], $stand['preise_vortag']['ct'])
+           && $stand['preise_vortag']['datum'] === $gestern && is_array($stand['preise_vortag']['ct']))
+        ? $stand['preise_vortag']['ct'] : array();
+    $ct = 0.0;
+    $kwh = 0.0;
+    $n = 0;
+    $ohne = 0;
+    foreach ($wh as $st => $m) {
+        $h = (int) date('G', $st);
+        if (!isset($pv[(string) $h])) { $ohne++; continue; }
+        $ct += $m / 1000.0 * (float) $pv[(string) $h];
+        $kwh += $m / 1000.0;
+        $n++;
+    }
+    $zeile = implode(';', array($gestern, $n ? round($kwh, 3) : -1, $n ? round($ct, 3) : -1,
+        $n ? round($ct / 100.0, 3) : -1, $n, $offen, $ohne, $hat23 ? 1 : 0, $zeilen));
+    $neu = !is_file($khist) || (int) @filesize($khist) === 0;
+    $fh = @fopen($khist, 'ab');
+    if ($fh === false) {
+        return array('nicht_schreibbar', $zeile);
+    }
+    $text = ($neu ? SM_K_KOPF . "\n" : '') . $zeile . "\n";
+    $ok = (fwrite($fh, $text) === strlen($text));
+    fclose($fh);
+    if ($neu) { @chmod($khist, 0640); }
+    if (!$ok) {
+        return array('nicht_schreibbar', $zeile);
+    }
+    return array($n ? 'geschrieben' : 'ohne_preise', $zeile);
+}
+
+/** Die Zeile des Vortags aus kosten_historie.csv als Feld (Spaltenname => Wert) oder null. */
+function sm_k_gestern_zeile($khist, $jetzt)
+{
+    if (!is_readable($khist)) { return null; }
+    $gestern = date('Y-m-d', strtotime('yesterday', $jetzt));
+    $kopf = explode(';', SM_K_KOPF);
+    $fh = @fopen($khist, 'rb');
+    if ($fh === false) { return null; }
+    $treffer = null;
+    while (($z = fgets($fh)) !== false) {
+        $z = trim($z);
+        if (strncmp($z, $gestern . ';', 11) !== 0) { continue; }
+        $f = explode(';', $z);
+        if (count($f) === count($kopf)) { $treffer = array_combine($kopf, $f); }
+    }
+    fclose($fh);
+    return $treffer;
+}
+
+/**
+ * kosten/gestern_* (Entwurf 2.4): NIE retained - Gestern-Werte werden allein
+ * durch die Uhr falsch. Sie gehen in JEDEM Lauf hinaus, solange die Zeile von
+ * gestern steht (ein verlorenes Datagramm heilt im naechsten Lauf, das
+ * MQTT-Gateway V2 entdoppelt gleiche Werte); fehlt sie nach der Frist, -1.
+ * Vor der Frist und ohne Zeile: nichts.
+ */
+function sm_k_gestern_msgs($khist, $jetzt)
+{
+    $g = sm_k_gestern_zeile($khist, $jetzt);
+    if ($g !== null) {
+        return array('kosten/gestern_eur' => $g['eur'], 'kosten/gestern_kwh' => $g['kwh'],
+                     'kosten/gestern_ct' => $g['ct'], 'kosten/gestern_stunden' => (int) $g['stunden']);
+    }
+    if ($jetzt >= strtotime('today', $jetzt) + SM_K_FRIST) {
+        return array('kosten/gestern_eur' => -1, 'kosten/gestern_kwh' => -1,
+                     'kosten/gestern_ct' => -1, 'kosten/gestern_stunden' => 0);
+    }
+    return array();
+}
+
+/* ==================================================================
  * --zeigen
  * ================================================================== */
 if ($sm_zeigen) {
@@ -217,8 +368,14 @@ if ($sm_zeigen) {
     printf("  %-34s %d\n", 'gerechnete Stunden', (int) $st['stunden']);
     printf("  %-34s %d\n", 'Stunden ohne belegte Einheit', (int) $st['offen']);
     printf("  %-34s %d\n", 'Stunden ohne Preis', (int) $st['ohne_preis']);
-    echo "\nGerechnet wird nur der HEUTIGE Tag: Stundenpreise fuer\n";
-    echo "zurueckliegende Tage fuehrt das Spotpreis-Plugin nicht.\n";
+    $sm_g = sm_k_gestern_zeile($SM_KHIST, time());
+    printf("  %-34s %s\n", 'gestern (Tagesabschluss)', $sm_g === null ? '-'
+           : ((float) $sm_g['eur'] < 0 ? 'ohne Preise (' . $sm_g['ohne_preis'] . ' Stunden)'
+              : number_format((float) $sm_g['eur'], 2, ',', '.') . ' EUR fuer '
+                . number_format((float) $sm_g['kwh'], 3, ',', '.') . ' kWh, ' . $sm_g['stunden'] . ' Stunden'));
+    echo "\nGerechnet wird der HEUTIGE Tag; den Vortag schliesst der erste Lauf\n";
+    echo "nach 0 Uhr ab (kosten_historie.csv) - mit den Preisen, die dieser Lauf\n";
+    echo "gestern selbst gemerkt hat.\n";
     exit(0);
 }
 
@@ -228,6 +385,13 @@ if ($sm_zeigen) {
 $sm_cfg = smg_cfg_lesen($SM_CFGDATEI);
 if (smg_wert($sm_cfg, 'KOSTEN', 'AKTIV', '0') !== '1') {
     if ($sm_verbose) { echo "Die Kostenrechnung ist ausgeschaltet (KOSTEN.AKTIV).\n"; }
+    exit(0);
+}
+/* Gruppe 35 (2.8.13, Entscheidung 2): ein Lauf zugleich - der Tagesabschluss ("steht der Vortag schon
+ * da?" + Anhaengen) laeuft unter dieser Sperre. fopen 'ce', LOCK_NB; belegt = still enden. */
+$sm_sperre = smg_sperre($SM_SHM, 'sm_kosten');
+if ($sm_sperre === false) {
+    sm_k_log('Ein anderer Kostenlauf haelt die Sperre - dieser endet ohne Wirkung.', 'INFO');
     exit(0);
 }
 /* Die Adresse. Leer heisst: die des Fahrplan-Abgleichs nehmen - es ist
@@ -244,6 +408,18 @@ $sm_ts_vorher = (int) $sm_stand['ts'];
 $sm_stand['ts'] = $sm_jetzt;
 
 list($sm_preise, $sm_grund) = sm_k_preise($sm_url);
+/* Gruppe 35 (2.8.13): Preise merken (nachruecken beim Datumswechsel), dann den Vortag abschliessen -
+ * auch wenn die Quelle gerade schweigt: der Abschluss braucht nur preise_vortag und historie.csv. */
+$sm_stand = sm_k_preise_merken($sm_stand, $sm_preise === null ? array() : $sm_preise, $sm_jetzt);
+list($sm_ab_lage, $sm_ab_zeile) = sm_k_tagesabschluss($SM_HIST, $SM_KHIST, $sm_stand, $sm_jetzt);
+if ($sm_ab_lage === 'geschrieben' || $sm_ab_lage === 'ohne_preise') {
+    sm_k_log('Tagesabschluss: ' . $sm_ab_zeile . ($sm_ab_lage === 'ohne_preise'
+        ? ' - ohne Preise des Vortags (Plugin war aus oder ein Update dazwischen), -1 statt eines erfundenen Preises.'
+        : ''), 'INFO');
+} elseif ($sm_ab_lage === 'nicht_schreibbar') {
+    sm_k_log('Tagesabschluss: ' . $SM_KHIST . ' liess sich nicht schreiben - naechster Versuch im naechsten Lauf.', 'ERROR');
+}
+$sm_gestern = sm_k_gestern_msgs($SM_KHIST, $sm_jetzt);
 if ($sm_preise === null) {
     /* Die alten Zahlen bleiben stehen. Sie auf 0 zu setzen waere eine
      * Aussage; "unbekannt" ist hier die richtige. */
@@ -271,7 +447,7 @@ if ($sm_preise === null) {
         . (count($sm_msgs) > 1 ? 'die Tageswerte eines frueheren Tages gelten nicht mehr.'
                                : 'der bisherige Stand bleibt stehen.'), 'WARN');
     sm_k_atomar($SM_STAND, json_encode($sm_stand), 0640);
-    sm_k_mqtt($sm_cfg, $sm_msgs);
+    sm_k_mqtt($sm_cfg, $sm_msgs + $sm_gestern);
     exit(1);
 }
 $sm_stand['quelle_ok'] = 1;
@@ -284,7 +460,7 @@ if (!is_readable($SM_HIST)) {
     /* Gruppe 1 (2.8.11, Entwurf sm 2.3 c): die Preisquelle IST erreichbar - das geht auch ohne
      * Historie hinaus. Bis 2.8.10 endete dieser Zweig ohne MQTT, und in Loxone blieb ein altes
      * quelle_ok 0 stehen. Die Kostenzahlen bleiben, wie sie sind. */
-    sm_k_mqtt($sm_cfg, array('kosten/quelle_ok' => 1));
+    sm_k_mqtt($sm_cfg, array('kosten/quelle_ok' => 1) + $sm_gestern);
     exit(0);
 }
 
@@ -293,6 +469,8 @@ if (!is_readable($SM_HIST)) {
 $sm_tagesbeginn = strtotime('today');
 $sm_wh = array();          // Stunde 0..23 => Wh
 $sm_offen = 0;
+$sm_wh23 = 0.0;            // Gruppe 35: die Stunde 23-24 Uhr des Vortags (fuer stunde_ct um 0 Uhr)
+$sm_hat23 = false;
 clearstatcache(true, $SM_HIST);
 $sm_fh = @fopen($SM_HIST, 'rb');
 if ($sm_fh === false) {
@@ -305,6 +483,10 @@ while (($sm_z = fgets($sm_fh)) !== false) {
     $sm_f = explode(';', $sm_z);
     if (count($sm_f) < 7) { continue; }
     $sm_st = (int) $sm_f[0];
+    if ($sm_st === $sm_tagesbeginn - 3600 && $sm_f[4] === 'Wh') {
+        $sm_wh23 += (float) $sm_f[2];
+        $sm_hat23 = true;
+    }
     if ($sm_st < $sm_tagesbeginn || $sm_st >= $sm_tagesbeginn + 86400) { continue; }
     // "?" heisst gemessen, aber nicht umgerechnet - daraus wird kein Geld.
     if ($sm_f[4] !== 'Wh') { $sm_offen++; continue; }
@@ -337,6 +519,12 @@ $sm_letzte = (int) date('G', $sm_jetzt) - 1;
 $sm_stunde_ct = null;
 if ($sm_letzte >= 0 && isset($sm_wh[$sm_letzte], $sm_preise[$sm_letzte])) {
     $sm_stunde_ct = round($sm_wh[$sm_letzte] / 1000.0 * $sm_preise[$sm_letzte], 3);
+} elseif ($sm_letzte < 0 && $sm_hat23
+          && isset($sm_stand['preise_vortag']['datum'], $sm_stand['preise_vortag']['ct']['23'])
+          && $sm_stand['preise_vortag']['datum'] === date('Y-m-d', $sm_tagesbeginn - 3600)) {
+    /* Gruppe 35 (2.8.13, T4-3): von 0 bis 1 Uhr ist die letzte volle Stunde 23-24 Uhr des Vortags -
+     * bis 2.8.12 stand hier -1. Preis aus preise_vortag. */
+    $sm_stunde_ct = round($sm_wh23 / 1000.0 * (float) $sm_stand['preise_vortag']['ct']['23'], 3);
 }
 
 $sm_stand['stunde_ct'] = $sm_stunde_ct;
@@ -367,7 +555,7 @@ sm_k_mqtt($sm_cfg, array(
     'kosten/stunden'    => $sm_gerechnet,
     'kosten/offen'      => $sm_offen,
     'kosten/ohne_preis' => $sm_ohne_preis,
-));
+) + $sm_gestern);
 
 if ($sm_verbose) {
     printf("%d Stunde(n) gerechnet, %d ohne Einheit, %d ohne Preis.\n",

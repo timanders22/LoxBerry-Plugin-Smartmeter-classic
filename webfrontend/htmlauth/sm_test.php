@@ -173,7 +173,7 @@ function sm_diagnose_gepuffert($cfg, $alter = 300)
         }
     }
     $zeilen = sm_diagnose($cfg);
-    if (!sm_json_schreiben($datei, array('zeilen' => $zeilen), 0640)) {
+    if (!sm_json_schreiben($datei, array('zeilen' => $zeilen), 0600)) {
         sm_log_wenn_neu('diagnosepuffer',
             'Der Puffer ' . $datei . ' liess sich nicht schreiben - die '
             . 'Diagnose laeuft bei jedem Seitenaufbau neu.', 'WARN');
@@ -229,7 +229,12 @@ function sm_endpunkt_probe($alter = 300)
     // Serverseitig ist 127.0.0.1 die RICHTIGE Adresse. Das widerspricht der
     // Regel "ein Knopf auf 127.0.0.1 kann nie funktionieren" nicht - die
     // gilt fuer einen Verweis, den ein Mensch im Browser anklickt.
-    $url = 'http://127.0.0.1/plugins/' . $p['plugin'] . '/index.php?selftest=1'
+    /* Gruppe 35 (2.8.13, T2-4): der Port des Webservers aus general.json (Webserver.Port), nicht fest 80. */
+    $sm_gen = json_decode((string) @file_get_contents($p['general']), true);
+    $sm_port = (is_array($sm_gen) && isset($sm_gen['Webserver']['Port'])) ? (int) $sm_gen['Webserver']['Port'] : 80;
+    if ($sm_port <= 0 || $sm_port > 65535) { $sm_port = 80; }
+    $sm_wirt = '127.0.0.1' . ($sm_port !== 80 ? ':' . $sm_port : '');
+    $url = 'http://' . $sm_wirt . '/plugins/' . $p['plugin'] . '/index.php?selftest=1'
          . ($token !== '' ? '&token=' . rawurlencode($token) : '');
     /* Die ANZEIGE traegt das Token nicht. Bis 2.4.2 setzten
      * EP_NICHT_MESSBAR und EP_KEINE_ANTWORT die vollstaendige Adresse
@@ -239,7 +244,7 @@ function sm_endpunkt_probe($alter = 300)
      * eine Anzeige, die jemand abfotografiert. Und der Fall ist nicht
      * selten: ein Webserver, der gerade diese Seite baut, kann sich unter
      * Umstaenden nicht selbst aufrufen. */
-    $zeig = 'http://127.0.0.1/plugins/' . $p['plugin'] . '/index.php?selftest=1'
+    $zeig = 'http://' . $sm_wirt . '/plugins/' . $p['plugin'] . '/index.php?selftest=1'
           . ($token !== '' ? '&token=…' : '');
     $erg = array(2, sprintf(sm_t('PRUEF.EP_NICHT_MESSBAR'), $zeig));
     /* Geprueft wird der GRIFF, nicht nur die Bibliothek: curl_init()
@@ -266,7 +271,7 @@ function sm_endpunkt_probe($alter = 300)
                 substr(trim(preg_replace('/\s+/', ' ', (string) $antwort)), 0, 80)));
         }
     }
-    /* 0640 wie smartmeter.cfg: die Datei liegt im Datenverzeichnis und
+    /* 0600 wie smartmeter.cfg (Gruppe 35; bis 2.8.12 0640): die Datei liegt im Datenverzeichnis und
      * traegt einen Pruefbefund, der Adressen nennt.
      *
      * Und den Rueckgabewert ansehen: sm_json_schreiben() liefert false,
@@ -274,7 +279,7 @@ function sm_endpunkt_probe($alter = 300)
      * stehen Befehlsausgaben. Ohne Puffer laeuft die Diagnose bei JEDEM
      * Seitenaufbau erneut, mit rund zwanzig Prozessstarts und einem curl
      * mit Zeitgrenze; genau das soll der Puffer vermeiden. */
-    if (!sm_json_schreiben($datei, array('ok' => $erg[0], 'text' => $erg[1]), 0640)) {
+    if (!sm_json_schreiben($datei, array('ok' => $erg[0], 'text' => $erg[1]), 0600)) {
         sm_log_wenn_neu('endpunktpuffer',
             'Der Puffer ' . $datei . ' liess sich nicht schreiben - die '
             . 'Endpunktprobe laeuft bei jedem Seitenaufbau neu.', 'WARN');
@@ -518,8 +523,11 @@ function sm_haken_probe()
             if (strpos((string) $z[0], '...') !== false) {
                 continue;
             }
-            $n = str_replace(array('/', '%'), '_', str_replace('<n>', '1', (string) $z[0]));
-            $soll[$n] = (bool) $z[4];
+            /* Gruppe 35 (2.8.13, Fremd-E2): <n> steht fuer JEDE Regel, die die Hakenliste fuehrt (1-5). */
+            foreach ((strpos((string) $z[0], '<n>') !== false) ? sm_abgleich_regeln() : array(1) as $sm_r) {
+                $n = str_replace(array('/', '%'), '_', str_replace('<n>', (string) $sm_r, (string) $z[0]));
+                $soll[$n] = (bool) $z[4];
+            }
         }
     }
     $ist = array();
@@ -546,7 +554,8 @@ function sm_haken_probe()
     }
     $pr = trim((string) sm_legacy_read()['MQTTTOPIC'], '/');
     $nc = array();
-    foreach (array('status/ok', 'kosten/quelle_ok', 'abgleich/quelle_ok') as $th) {
+    // Gruppe 35 (E-E5): dieselbe Liste wie die Namenstabelle (sm_noncached_themen()).
+    foreach (sm_noncached_themen() as $th) {
         $nc[] = str_replace(array('/', '%'), '_', $pr . '/' . $th);
     }
     foreach ($merker as $t => $m) {
@@ -691,6 +700,13 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_MUSTER'), sm_suchmuster_probe());
     $add(sm_t('PRUEF.Z_INI'), sm_ini_muster_probe());
     $add(sm_t('PRUEF.Z_HAKEN'), sm_haken_probe());
+    // Gruppe 35 (2.8.13)
+    $add(sm_t('PRUEF.Z_NONCACHED'), sm_noncached_probe());
+    $add(sm_t('PRUEF.Z_KOPF'), sm_kopf_probe());
+    $add(sm_t('PRUEF.Z_PROFILE'), sm_profile_probe());
+    $add(sm_t('PRUEF.Z_USB'), sm_usb_probe());
+    $add(sm_t('PRUEF.Z_DIENSTDATEI'), sm_dienstdatei_probe());
+    $add(sm_t('PRUEF.Z_SPEICHER'), sm_speicher_probe());
     $add(sm_t('PRUEF.Z_REITER'), sm_reiter_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_SMACTIVE'), sm_smactive_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_FORM'), sm_formularprobe($datei));
@@ -792,6 +808,128 @@ function sm_gateway_probe()
         return array(2, sm_t('PRUEF.GW_UNBEKANNT'));
     }
     return array(1, sprintf(sm_t('PRUEF.GW_OK'), (string) $f, $g['udpin']));
+}
+
+/* ==================================================================
+ * Gruppe 35 (2.8.13) - neue Zeilen des Selbsttests
+ * ================================================================== */
+
+/** T4-2 + E6: der installierte Bestand gegen die Positivlisten der Kopffelder (nur lesen). */
+function sm_kopf_probe()
+{
+    $koepfe = 0;
+    foreach (sm_cfg_read() as $ab => $w) {
+        if ($ab !== 'MAIN' && is_array($w) && isset($w['DEVICE'])) { $koepfe++; }
+    }
+    if ($koepfe === 0) {
+        return array(2, sm_t('PRUEF.KOPF_KEINER'));
+    }
+    $f = sm_kopf_bestand_pruefen();
+    if (!$f) {
+        return array(1, sprintf(sm_t('PRUEF.KOPF_OK'), $koepfe));
+    }
+    $teile = array();
+    foreach ($f as $k => $felder) {
+        $teile[] = sprintf(sm_t('PRUEF.KOPF_FELD'), sm_kopf_name_ok((string) $k) ? (string) $k : '?', implode(', ', $felder));
+    }
+    return array(0, sprintf(sm_t('PRUEF.KOPF_BEANSTANDET'), implode('; ', $teile)));
+}
+
+/** N2: die Profile der Oberflaeche gegen die 41 Zweige von sm_logger.pl (sm_protokolle()). */
+function sm_profile_probe()
+{
+    $p = array_values(array_diff(array_map('strval', array_keys(sm_profile())), array('0', 'manual')));
+    $z = sm_protokolle();
+    sort($p);
+    sort($z);
+    if ($p === $z) {
+        return array(1, sprintf(sm_t('PRUEF.PROFILE_OK'), count($z)));
+    }
+    return array(0, sprintf(sm_t('PRUEF.PROFILE_ABWEICHUNG'),
+        implode(', ', array_diff($p, $z)) ?: '-', implode(', ', array_diff($z, $p)) ?: '-'));
+}
+
+/** Pruefbericht E2: liegt die Dienstdatei? purge_installation des Originals "smartmeter" loescht sie mit. */
+function sm_dienstdatei_probe()
+{
+    $p = sm_paths();
+    $ordner = $p['home'] . '/system/daemons/plugins';
+    if ($p['home'] === '' || !is_dir($ordner)) {
+        return array(2, sm_t('PRUEF.DIENSTDATEI_NICHT_MESSBAR'));
+    }
+    $alles = sm_cfg_read();
+    $name = (isset($alles['MAIN']['SCRIPTNAME']) && preg_match('/^[A-Za-z0-9_.\-]+$/', $alles['MAIN']['SCRIPTNAME']))
+          ? $alles['MAIN']['SCRIPTNAME'] : $p['plugin'];
+    if (is_file($ordner . '/' . $name)) {
+        return array(1, sprintf(sm_t('PRUEF.DIENSTDATEI_OK'), $name));
+    }
+    return array(0, sprintf(sm_t('PRUEF.DIENSTDATEI_FEHLT'), $ordner . '/' . $name));
+}
+
+/** Entscheidung 5: der Abnehmer haus/speicher. */
+function sm_speicher_probe()
+{
+    list($z, $t) = sm_speicher_lage();
+    if ($t === '') {
+        return array(2, sm_t('PRUEF.SPEICHER_AUS'));
+    }
+    return array($z === 'ok' ? 1 : 2, $t);
+}
+
+/** T1-10 (Entscheidung 4): was steht unter /dev/serial/smartmeter/, mit welchem ID_MODEL? Nur lesen. */
+function sm_usb_probe()
+{
+    $koepfe = sm_lesekoepfe();
+    if (!$koepfe) {
+        return array(2, sm_t('PRUEF.USB_KEINE'));
+    }
+    $teile = array();
+    $fremd = array();
+    foreach ($koepfe as $d) {
+        list(, $roh) = sm_sh('udevadm info -q property -n ' . escapeshellarg($d));
+        $modell = preg_match('/^ID_MODEL=(.*)$/m', (string) $roh, $m) ? trim($m[1]) : '';
+        $teile[] = basename($d) . ' (' . ($modell !== '' ? $modell : '?') . ')';
+        if ($modell !== '' && !preg_match('/CP210|FT232|FTDI|CH34|PL2303|USB.?Serial|UART|IR|Lesekopf|optical|Hichi|Volkszaehler/i', $modell)) {
+            $fremd[] = basename($d);
+        }
+    }
+    if ($fremd) {
+        return array(2, sprintf(sm_t('PRUEF.USB_FREMD'), implode(', ', $teile), implode(', ', $fremd)));
+    }
+    return array(1, sprintf(sm_t('PRUEF.USB_OK'), implode(', ', $teile)));
+}
+
+/** N5 / E-E5: die Haken "Noncached" im MQTT-Gateway V2 fuer die eingeschalteten Gruppen. */
+function sm_noncached_probe()
+{
+    $l = sm_legacy_read();
+    if ($l['SENDMQTT'] !== '1') {
+        return array(2, sm_t('PRUEF.GW_AUS'));
+    }
+    if (!function_exists('smg_v2_noncached_lage')) {
+        return array(2, sm_t('PRUEF.NC_KEIN_V2'));
+    }
+    $alles = sm_cfg_read();
+    $vz = sm_vz_read();
+    $themen = array();
+    foreach (sm_noncached_themen() as $t) {
+        if ((strpos($t, 'status/') === 0 && ($l['READ'] === '1' || !empty($vz['enabled'])))
+            || (strpos($t, 'kosten/') === 0 && sm_cfg_get($alles, 'KOSTEN', 'AKTIV', '0') === '1')
+            || (strpos($t, 'abgleich/') === 0 && sm_cfg_get($alles, 'ABGLEICH', 'AKTIV', '0') === '1')) {
+            $themen[] = $t;
+        }
+    }
+    if (!$themen) {
+        return array(2, sm_t('PRUEF.HAKEN_KEINE'));
+    }
+    list($lage, $fehlt) = smg_v2_noncached_lage(sm_paths()['home'], $l['MQTTTOPIC'], $themen);
+    if ($lage === 'ok') {
+        return array(1, sprintf(sm_t('PRUEF.NC_OK'), count($themen)));
+    }
+    if ($lage === 'fehlt') {
+        return array(0, sprintf(sm_t('PRUEF.NC_FEHLT'), count($fehlt), implode(', ', $fehlt)));
+    }
+    return array(2, $lage === 'keine_datei' ? sm_t('PRUEF.NC_KEINE_DATEI') : sm_t('PRUEF.NC_KEIN_V2'));
 }
 
 /* ==================================================================

@@ -56,7 +56,9 @@ if [ -d "$HIST_SICHER" ]; then
 	mkdir -p "$HIST_ZIEL" 2>/dev/null
 	HIST_N=0
 	HIST_FEHL=0
-	for HIST_F in historie.csv historie_merker.json abgleich.json; do
+	# Gruppe 35 (2.8.13, N1): kosten.json (traegt die Preise des Vortags fuer den Tagesabschluss) und
+	# kosten_historie.csv (eine Zeile je Tag) gehen mit - wie in preupgrade.sh.
+	for HIST_F in historie.csv historie_merker.json abgleich.json kosten.json kosten_historie.csv; do
 		if [ -f "$HIST_SICHER/$HIST_F" ]; then
 			if cp -p "$HIST_SICHER/$HIST_F" "$HIST_ZIEL/$HIST_F" 2>/dev/null; then
 				HIST_N=$((HIST_N + 1))
@@ -240,6 +242,46 @@ fi
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# Gruppe 35 (2.8.13, Entscheidung 1: T1-1 B / Pruefbericht E1).
+#
+# Bis 2.8.12 ersetzte nur postinstall.sh die Platzhalter REPLACEBYSUBFOLDER
+# und REPLACEBYNAME und meldete "<OK> Keine Platzhalter mehr" - danach
+# kopierte dieses Skript die gesicherte Konfiguration UNGEPRUEFT darueber.
+# Trug sie selbst noch einen Platzhalter, stand er nach jedem Upgrade wieder
+# da, ohne ein Wort (Probe t1_1b.sh, Fall B). Jetzt dieselben zwei sed wie in
+# postinstall.sh NACH dem Zurueckspielen, dann nachgelesen - nie still "OK".
+# ---------------------------------------------------------------------------
+SM_CFG="$ARGV5/config/plugins/$ARGV3/smartmeter.cfg"
+if [ -f "$SM_CFG" ] && [ -s "$SM_CFG" ]; then
+	if grep -q 'REPLACEBY' "$SM_CFG" 2>/dev/null; then
+		/bin/sed -i "s#REPLACEBYSUBFOLDER#$ARGV3#" "$SM_CFG"
+		/bin/sed -i "s#REPLACEBYNAME#$ARGV2#" "$SM_CFG"
+		echo "<INFO> In der zurueckgespielten smartmeter.cfg standen Platzhalter - ersetzt."
+	fi
+	if grep -q 'REPLACEBY' "$SM_CFG" 2>/dev/null; then
+		echo "<ERROR> In $SM_CFG stehen nach dem Zurueckspielen noch Platzhalter:"
+		echo "<ERROR> $(grep -o 'REPLACEBY[A-Z]*' "$SM_CFG" | sort -u | tr '\n' ' ')- die Ersetzung ist gescheitert."
+	elif ! grep -Eq '^[[:space:]]*\[MAIN\][[:space:]]*$' "$SM_CFG" 2>/dev/null; then
+		echo "<ERROR> $SM_CFG traegt keinen Abschnitt [MAIN] - die Einstellungen sind so nicht lesbar."
+	else
+		echo "<OK> smartmeter.cfg nachgelesen: keine Platzhalter, Abschnitt [MAIN] vorhanden."
+		# Gruppe 35 (2.8.13, E-E8): eine bestehende Anlage behaelt Endpunkt und Lastgang - der Schluessel
+		# fehlt in jeder Konfiguration von 2.8.12 und aelter und wird mit 1 ergaenzt. Neuinstallation: 0
+		# (mitgelieferte smartmeter.cfg). Abschalten im Reiter Einbindung in Loxone.
+		for SM_K in ENDPUNKT_EIN LASTGANG_EIN; do
+			if ! grep -Eq "^[[:space:]]*$SM_K[[:space:]]*=" "$SM_CFG" 2>/dev/null; then
+				if /bin/sed -i "0,/^[[:space:]]*\[MAIN\][[:space:]]*\$/s//[MAIN]\n$SM_K=1/" "$SM_CFG" 2>/dev/null \
+				   && grep -q "^$SM_K=1\$" "$SM_CFG" 2>/dev/null; then
+					echo "<INFO> Konfiguration ergaenzt: $SM_K=1 (bestehende Anlage - bleibt erreichbar; abschalten im Reiter Einbindung in Loxone)."
+				else
+					echo "<WARNING> $SM_K liess sich nicht ergaenzen - es gilt die Lese-Regel (fehlt = an)."
+				fi
+			fi
+		done
+	fi
+fi
+
+# ---------------------------------------------------------------------------
 # DIE RECHTE NACH DEM ZURUECKSPIELEN (Durchgang 01.10.2026, I2)
 #
 # "cp -a" oben bringt den Modus aus der Zeit VOR dem Update zurueck - das
@@ -253,13 +295,13 @@ fi
 for SM_D in smartmeter.cfg vzlogger.json vzlogger.conf; do
 	SM_PFAD="$ARGV5/config/plugins/$ARGV3/$SM_D"
 	[ -f "$SM_PFAD" ] || continue
-	chmod 0640 "$SM_PFAD" 2>/dev/null
+	chmod 0600 "$SM_PFAD" 2>/dev/null
 	SM_MODUS=$(stat -c %a "$SM_PFAD" 2>/dev/null)
-	if [ "$SM_MODUS" = "640" ]; then
-		echo "<OK> $SM_D: Rechte 0640."
+	if [ "$SM_MODUS" = "600" ]; then
+		echo "<OK> $SM_D: Rechte 0600."
 	else
-		echo "<WARNING> $SM_D: Rechte ${SM_MODUS:-unbekannt} statt 0640 - die Datei ist fuer"
-		echo "<WARNING> andere Benutzer lesbar. Von Hand: chmod 0640 $SM_PFAD"
+		echo "<WARNING> $SM_D: Rechte ${SM_MODUS:-unbekannt} statt 0600 - die Datei ist fuer"
+		echo "<WARNING> andere Benutzer lesbar. Von Hand: chmod 0600 $SM_PFAD"
 	fi
 done
 

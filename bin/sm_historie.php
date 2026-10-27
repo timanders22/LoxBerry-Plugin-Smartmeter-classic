@@ -97,17 +97,10 @@ if (!is_file($sm_gemein)) {
 }
 require_once $sm_gemein;
 
-$sm_home = getenv('LBHOMEDIR');
-if (!$sm_home || !is_dir($sm_home)) {
-    $sm_d = __DIR__;
-    for ($sm_i = 0; $sm_i < 8; $sm_i++) {
-        if (is_dir($sm_d . '/config/plugins') && is_dir($sm_d . '/webfrontend')) { break; }
-        $sm_e = dirname($sm_d);
-        if ($sm_e === $sm_d) { $sm_d = ''; break; }
-        $sm_d = $sm_e;
-    }
-    $sm_home = $sm_d;
-}
+/* Gruppe 35 (2.8.13, T4-6): EINE Wurzelsuche fuer alle Abholer - smg_wurzel() in sm_gemein.php
+ * (LBHOMEDIR, sonst aufwaerts mit config/plugins, webfrontend UND config/system/general.json). Die
+ * Schleife hier lieferte nach acht Stufen ohne Treffer den achten Elternordner statt ''. */
+$sm_home = smg_wurzel(__DIR__);
 if ($sm_home === '' || !is_dir($sm_home)) {
     fwrite(STDERR, "Der LoxBerry-Wurzelordner liess sich nicht bestimmen.\n");
     exit(1);
@@ -120,6 +113,9 @@ $SM_FELDER = __DIR__ . '/sm_felder.json';
 $SM_HIST   = $SM_DATA . '/historie.csv';
 $SM_MERKER = $SM_DATA . '/historie_merker.json';
 $SM_LOG    = $sm_home . '/log/plugins/' . $sm_ordner . '/smartmeter.log';
+// Gruppe 35 (2.8.13): Lebenszeichen (Konfiguration) und Rueckschnitt des Tagesabschlusses.
+$SM_CFGDATEI = $sm_home . '/config/plugins/' . $sm_ordner . '/smartmeter.cfg';
+$SM_KHIST  = $SM_DATA . '/kosten_historie.csv';
 
 /* Wieviele Monate bleiben stehen. 24: damit laesst sich ein Jahr gegen das
  * Vorjahr halten, und die Datei bleibt bei einem Zaehler in der
@@ -324,6 +320,74 @@ function sm_h_putzen()
     return $ok ? $weg : -1;
 }
 
+/**
+ * Gruppe 35 (2.8.13, E-E4): das Lebenszeichen ueber das UDP-Relais des
+ * MQTT-Gateways - status/ok (jeder eingeschaltete Lesekopf juenger als die
+ * Altersgrenze, dieselbe Rechnung wie Endpunkt und healthcheck), status/ts,
+ * status/zaehler (0-999 umlaufend). Alle drei fluechtig.
+ */
+function sm_h_lebenszeichen($cfg, $vz_an)
+{
+    global $SM_SHM, $SM_VZJSON, $sm_home;
+    $praefix = trim(smg_wert($cfg, 'MAIN', 'MQTTTOPIC', 'smartmeter'), '/');
+    $vzd = $vz_an ? smg_vz_json($SM_VZJSON) : null;
+    $lage = smg_kopf_lage($SM_SHM, smg_koepfe($cfg, $vzd),
+                          smg_alter_grenze(smg_wert($cfg, 'MAIN', 'CRON', '5'), $vz_an));
+    $ok = $lage ? 1 : 0;
+    foreach ($lage as $l) {
+        if (!$l['ok']) { $ok = 0; }
+    }
+    $stand = smg_zaehler_weiter($SM_SHM . '/lebenszeichen');
+    $udp = smg_mqtt_udpport($sm_home);
+    if ($udp <= 0) {
+        sm_h_log('Lebenszeichen: kein UDP-Eingang des MQTT-Gateways in general.json - nicht gesendet.', 'WARN');
+        return;
+    }
+    $s = @stream_socket_client('udp://127.0.0.1:' . $udp, $e1, $e2, 2);
+    if (!$s) {
+        sm_h_log('Lebenszeichen: das UDP-Relais des Gateways auf Port ' . $udp . ' war nicht erreichbar.', 'WARN');
+        return;
+    }
+    $fehl = 0;
+    foreach (array('status/ok' => $ok, 'status/ts' => time(), 'status/zaehler' => $stand) as $k => $v) {
+        $t = 'publish ' . $praefix . '/' . $k . ' ' . $v;
+        if (@fwrite($s, $t) !== strlen($t)) { $fehl++; }
+    }
+    fclose($s);
+    if ($fehl) {
+        sm_h_log('Lebenszeichen: ' . $fehl . ' von 3 Zeilen liessen sich nicht schreiben.', 'WARN');
+    }
+}
+
+/**
+ * Gruppe 35 (2.8.13, Entwurf 4.2): kosten_historie.csv auf dieselben
+ * SM_HIST_MONATE zurueckschneiden wie historie.csv. Rueckgabe: entfernte
+ * Zeilen, -1 bei Fehler.
+ */
+function sm_h_kosten_putzen()
+{
+    global $SM_KHIST;
+    if (!is_readable($SM_KHIST)) { return 0; }
+    $grenze = date('Y-m-d', strtotime('-' . SM_HIST_MONATE . ' months'));
+    $alle = @file($SM_KHIST, FILE_IGNORE_NEW_LINES);
+    if ($alle === false) { return -1; }
+    $kopf = '';
+    $behalten = array();
+    $weg = 0;
+    foreach ($alle as $z) {
+        $z = rtrim($z, "\r");
+        if ($z === '') { continue; }
+        if (strncmp($z, 'datum;', 6) === 0) { $kopf = $z; continue; }
+        $d = substr($z, 0, 10);
+        if (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $d) && strcmp($d, $grenze) < 0) { $weg++; continue; }
+        $behalten[] = $z;
+    }
+    if ($weg === 0) { return 0; }
+    $ok = sm_h_atomar($SM_KHIST, ($kopf !== '' ? $kopf . "\n" : '') . implode("\n", $behalten)
+                                 . ($behalten ? "\n" : ''), 0640);
+    return $ok ? $weg : -1;
+}
+
 /* ==================================================================
  * --zeigen: nachsehen, ohne etwas zu aendern
  * ================================================================== */
@@ -378,6 +442,27 @@ if (is_readable($SM_VZJSON)) {
     $sm_vz_an = is_array($sm_vzd) && !empty($sm_vzd['enabled']);
 }
 $sm_quelle = $sm_vz_an ? 'vzlogger' : 'legacy';
+
+/* Gruppe 35 (2.8.13, Entscheidung 2, T4-3): EIN Lauf zugleich. Anhaengen und Putzen stehen unter
+ * derselben Sperre - zwei Laeufe an der Stundengrenze haengten sonst dieselbe Zeile zweimal an, und
+ * sm_kosten.php zaehlte sie doppelt (Pruefbericht T4-3). fopen 'ce', LOCK_NB: belegt = still enden. */
+$sm_sperre = smg_sperre($SM_SHM, 'sm_historie');
+if ($sm_sperre === false) {
+    sm_h_log('Ein anderer Lauf von sm_historie.php haelt die Sperre - dieser endet ohne Wirkung.', 'INFO');
+    exit(0);
+}
+
+/* Gruppe 35 (2.8.13, E-E4, N3): das Lebenszeichen status/ok, status/ts, status/zaehler im FESTEN
+ * 60-s-Takt - von hier, weil dieses Skript in beiden Betriebsarten jede Minute laeuft (cron.01min).
+ * Bis 2.8.12 sendeten es fetch.php und fetch_vzlogger.pl im Lesetakt - beim klassischen Leser alle
+ * 15 min oder (Takt "nur beim Systemstart") nie. status/zaehler zaehlt einen EIGENEN Zaehler
+ * (/dev/shm/<ordner>/lebenszeichen); ZAEHLER im Endpunkt zaehlt weiter die Leselaeufe. Fluechtig, nach
+ * der Sperre - nie doppelt in einer Minute. Im MQTT-Gateway V2 Noncached (status/ok, status/zaehler). */
+$sm_cfg = smg_cfg_lesen($SM_CFGDATEI);
+$sm_lg_an = (smg_wert($sm_cfg, 'MAIN', 'READ', '0') === '1');
+if (($sm_vz_an || $sm_lg_an) && smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '1') === '1') {
+    sm_h_lebenszeichen($sm_cfg, $sm_vz_an);
+}
 
 $sm_merker = sm_h_merker_lesen();
 $sm_jetzt  = time();
@@ -542,6 +627,14 @@ if ($sm_putzen
             . ' Monate entfernt.');
     } elseif ($sm_verbose) {
         echo "Rueckschnitt: nichts zu entfernen.\n";
+    }
+    // Gruppe 35 (2.8.13): kosten_historie.csv auf dieselben Monate.
+    $sm_kweg = sm_h_kosten_putzen();
+    if ($sm_kweg < 0) {
+        sm_h_log('Der Rueckschnitt von kosten_historie.csv ist gescheitert.', 'ERROR');
+        $sm_ok = false;
+    } elseif ($sm_kweg > 0) {
+        sm_h_log($sm_kweg . ' Tag(e) aelter als ' . SM_HIST_MONATE . ' Monate aus kosten_historie.csv entfernt.');
     }
     $sm_merker['geputzt'] = $sm_jetzt;
     $sm_geaendert = true;

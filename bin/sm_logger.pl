@@ -1436,7 +1436,31 @@ sub PARSE_DUMP
 	our $type = shift; # http://wiki.selfhtml.org/wiki/Perl/Subroutinen
 	if ($proto eq "SML") {
 		&LOG ("Parse /dev/shm/$psubfolder/$serial\.dump as SML-Protocol.", "INFO");
-		our $dumpbuffer = `php $home/bin/plugins/$psubfolder/sml_parser.php /dev/shm/$psubfolder/$serial\.dump $crc`;
+		# Gruppe 35 (2.8.13, Entscheidung 1: T4-2, T4-7/E3 Vorschlag 1).
+		# Bis 2.8.12 stand hier ein Aufruf in Backticks: $crc ging UNGEQUOTET
+		# an /bin/sh. Ein CRC "CRC16_X_25;touch <datei>" aus einer Sicherung
+		# fuehrte so im Minutentakt einen Befehl aus (Pruefbericht T4-2, Probe:
+		# Merkerdatei angelegt). Jetzt: CRC gegen die Positivliste, der Zerleger
+		# in Listenform (keine Schale dazwischen) und mit einer Zeitgrenze von
+		# 20 s (E-E2) - ein verstuemmeltes Telegramm hielt ihn vorher ohne Ende
+		# fest, und mit ihm fetch.php und daten.lock bis zum Neustart.
+		if ( !defined $crc || $crc !~ /\A(?:CRC16_X_25|CRC16_KERMIT)\z/ ) {
+			&LOG ("CRC-Verfahren unzulaessig - der SML-Zerleger wird nicht aufgerufen (erlaubt: CRC16_X_25, CRC16_KERMIT).", "WARNING");
+			return;
+		}
+		our $dumpbuffer = '';
+		my $sm_ph;
+		if ( !open($sm_ph, '-|', 'timeout', '-k', '2', '20', 'php', "$home/bin/plugins/$psubfolder/sml_parser.php", "/dev/shm/$psubfolder/$serial.dump", $crc) ) {
+			&LOG ("sml_parser.php liess sich nicht starten: $!", "ERROR");
+			return;
+		}
+		{ local $/; $dumpbuffer = <$sm_ph>; }
+		$dumpbuffer = '' if !defined $dumpbuffer;
+		close($sm_ph);
+		if ( ($? >> 8) == 124 || ($? >> 8) == 137 ) {
+			&LOG ("SML-Zerleger nach 20 s abgebrochen (ZEITGRENZE) - kein Wert in diesem Lauf.", "WARNING");
+			return;
+		}
 	# Den Rueckgabewert ansehen. sml_parser.php endet in zwei Faellen mit
 	# 1, und ein Fehler im Zerleger laesst $dumpbuffer leer oder halb -
 	# der Leser rechnete bis 2.4.2 weiter und schrieb eine Datendatei
@@ -1778,53 +1802,73 @@ sub CALCULATE_POWER
 	#
 	# Die Variablen sind LEXIKALISCH. Bis 2.4.2 waren es undeklarierte
 	# Paketvariablen, und PARSE_DUMP ruft die Funktion zweimal im selben
-	# Prozess auf - einmal fuer CONS, einmal fuer DEL. Ist die Datei
-	# <serial>.lastdel leer, laeuft die Schleife darunter kein einziges
-	# Mal, und die Werte des CONS-Aufrufs blieben stehen: der DEL-Zweig
-	# rechnete mit dem Zaehlerstand und dem Zeitstempel des Bezugs.
-	# Leer wird die Datei durch das Programm selbst (touch weiter unten),
-	# und ein Haushalt ohne Einspeisung fuellt sie nie.
+	# Prozess auf - einmal fuer CONS, einmal fuer DEL.
+	#
+	# Gruppe 35 (2.8.13, Entscheidung 1: T4-1). Bis 2.8.12:
+	#   - der Stand dieses Laufs wurde erst NACH der Rechnung geschrieben, und
+	#     jeder fruehe Ruecksprung (unlesbare Datei, Uhr zurueck) liess ihn aus;
+	#     eine leere oder kaputte .last* - etwa nach einem abgebrochenen
+	#     Schreibvorgang - blieb deshalb bis zum Neustart leer, und jeder Lauf
+	#     endete still mit "unreadable" (Pruefbericht T4-1, Probe);
+	#   - "open(F, '>')" kuerzte die Datei zuerst; ein Abbruch dazwischen liess
+	#     sie leer;
+	#   - der erste Lauf lieferte 0.0000 - eine "frische 0 W" (seit 2.8.5 offen).
+	# Jetzt: der Stand geht ZUERST und unteilbar (Nebendatei + rename) hinaus,
+	# vor jedem Ruecksprung ausser dem Waechter oben; der erste Lauf liefert
+	# keinen Wert (undef - DATA_WERT schreibt dann nichts, nichts geht hinaus).
 	my $now = time;
+	my $sm_datei = "/dev/shm/$psubfolder/$serial\.last$direction";
 	my ($lasttime, $lastreading, $period, $energy, $power);
-	if ( -e "/dev/shm/$psubfolder/$serial\.last$direction" ) {
-		open(F,"</dev/shm/$psubfolder/$serial\.last$direction");
-		my @lines = <F>;
-		foreach (@lines){
-			s/[\n\r]//g;
-			# $fields[0], nicht @fields[0]: ein einelementiger
-			# Listenausschnitt im Skalarkontext. Er liefert zufaellig das
-			# Richtige und meldet unter warnings bei jedem Lauf.
-			my @fields  = split(/\|/);
-			$lasttime = $fields[0];
-			$lastreading = $fields[1];
+	my $sm_vorher_da = -e $sm_datei;
+	if ( $sm_vorher_da ) {
+		if ( open(F, "<", $sm_datei) ) {
+			my @lines = <F>;
+			close(F);
+			foreach (@lines) {
+				s/[\n\r]//g;
+				my @fields = split(/\|/);
+				$lasttime = $fields[0];
+				$lastreading = $fields[1];
+			}
 		}
-		close(F);
-		# Steht in der Datei nichts Brauchbares, ist nichts zu rechnen.
-		if ( !defined $lasttime || !defined $lastreading
-		     || $lasttime !~ /^\d+$/ || $lastreading !~ /^-?[\d.]+$/ ) {
-			&LOG ("Last meter reading unreadable. Calculation not possible,", "WARNING");
-			return undef;
-		}
-		if ( $reading < $lastreading ) {
-			$lastreading = $reading;
-		}
-		$period = ($now - $lasttime) / 3600;
-		# Zwei Laeufe in derselben Sekunde machen $period exakt 0, und
-		# eine Division durch Null ist in Perl ein TOEDLICHER
-		# Laufzeitfehler, keine Warnung - der Leser waere weg.
-		if ( $period <= 0 ) {
-			&LOG ("Last reading is not older than this one. Calculation not possible,", "WARNING");
-			return undef;
-		}
-		$energy = $reading - $lastreading;
-		$power = $energy / $period;
-	} else {
-		&LOG ("No last meter reading available. Calculation not possible,", "WARNING");
-		system("touch /dev/shm/$psubfolder/$serial\.last$direction > /dev/null 2>&1");
-		$period = 0;
-		$energy = 0;
-		$power = 0;
 	}
+	if ( $reading > 0 ) {
+		my $sm_tmp = "$sm_datei.tmp.$$";
+		if ( open(my $sm_fh, ">", $sm_tmp) ) {
+			my $sm_ok = print $sm_fh "$now|$reading\n";
+			$sm_ok = close($sm_fh) && $sm_ok;
+			if ( !$sm_ok || !rename($sm_tmp, $sm_datei) ) {
+				unlink($sm_tmp);
+				&LOG ("Meter reading could not be saved to $sm_datei.", "WARNING");
+			}
+		} else {
+			&LOG ("Meter reading could not be saved to $sm_datei.", "WARNING");
+		}
+	}
+	if ( !$sm_vorher_da ) {
+		&LOG ("No last meter reading available. Calculation not possible (first run - no value).", "WARNING");
+		return undef;
+	}
+	# Steht in der Datei nichts Brauchbares, ist nichts zu rechnen - der
+	# Stand dieses Laufs steht aber jetzt darin, der naechste Lauf rechnet.
+	if ( !defined $lasttime || !defined $lastreading
+	     || $lasttime !~ /^\d+$/ || $lastreading !~ /^-?[\d.]+$/ ) {
+		&LOG ("Last meter reading unreadable (replaced by this reading). Calculation not possible,", "WARNING");
+		return undef;
+	}
+	if ( $reading < $lastreading ) {
+		$lastreading = $reading;
+	}
+	$period = ($now - $lasttime) / 3600;
+	# Zwei Laeufe in derselben Sekunde machen $period exakt 0, und
+	# eine Division durch Null ist in Perl ein TOEDLICHER
+	# Laufzeitfehler, keine Warnung - der Leser waere weg.
+	if ( $period <= 0 ) {
+		&LOG ("Last reading is not older than this one. Calculation not possible,", "WARNING");
+		return undef;
+	}
+	$energy = $reading - $lastreading;
+	$power = $energy / $period;
 
 	### Round
 	$energy = sprintf("%.4f", $energy);
@@ -1833,13 +1877,6 @@ sub CALCULATE_POWER
 
 	### Debug output
 	&LOG ("Last Reading: $lastreading. Saved before: $period hours. Consumption: $energy. Avg. Power: $power,", "INFO");
-
-	### Zaehlerstand und Leistung speichern
-	if ( $reading > 0 ) {
-		open(F,">/dev/shm/$psubfolder/$serial\.last$direction");
-			print F "$now|$reading\n";
-		close(F);
-	}
 
 	return ($power);
 

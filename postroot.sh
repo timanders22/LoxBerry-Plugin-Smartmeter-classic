@@ -126,12 +126,29 @@ fi
 # macht es beim Start weiterhin - schadet nicht und faengt den Fall ab, dass
 # jemand die Regeldatei entfernt. REBOOT steht jetzt auf false.
 # ---------------------------------------------------------------------------
+# Gruppe 35 (2.8.13, Entscheidung 4, Pruefbericht T1-10): die bisherige Regel trifft JEDEN USB-Seriell-
+# Adapter und macht ihn fuer alle les- und schreibbar (0666). Die engere Form (nur Geraete mit
+# Seriennummer unter ihrem Namen, Rueckfall $kernel, 0660, Gruppe loxberry) ist AN (SM_UDEV_ENG=1,
+# F1/E-E10): die lesende Messung am Geraet (27.10.2026, geraet_messung.sh usb) zeigte genau einen ttyUSB -
+# den Lesekopf, Seriennummer = Kopfname; vzlogger laeuft als loxberry. Der Name unter
+# /dev/serial/smartmeter/ bleibt die Seriennummer. Ein Kopf ohne Seriennummer hiesse ttyUSB0 statt "" -
+# Kopfname, DEVICE und MQTT-Thema aenderten sich. Rueckweg: SM_UDEV_ENG=0 (bisherige Regel).
+# daemon/daemon traegt dieselben zwei Formen (wortgleich).
+SM_UDEV_ENG=1
 REGEL=/etc/udev/rules.d/99-smartmeter.rules
 echo "<INFO> Lege die udev-Regel fuer die Lesekoepfe an: $REGEL"
+if [ "$SM_UDEV_ENG" = "1" ]; then
+{
+	echo "# LoxBerry Smartmeter classic - DO NOT EDIT BY HAND!"
+	echo "SUBSYSTEM==\"tty\",KERNEL==\"ttyUSB[0-9]*\",ENV{ID_SERIAL_SHORT}==\"?*\",GROUP=\"loxberry\",MODE=\"0660\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\""
+	echo "SUBSYSTEM==\"tty\",KERNEL==\"ttyUSB[0-9]*\",ENV{ID_SERIAL_SHORT}!=\"?*\",GROUP=\"loxberry\",MODE=\"0660\",SYMLINK+=\"serial/smartmeter/\$kernel\""
+} > "$REGEL"
+else
 {
 	echo "# LoxBerry Smartmeter classic - DO NOT EDIT BY HAND!"
 	echo "KERNEL==\"ttyUSB[0-9]*\",GROUP=\"loxberry\",MODE=\"0666\",SYMLINK+=\"serial/smartmeter/\$env{ID_SERIAL_SHORT}\""
 } > "$REGEL"
+fi
 if command -v udevadm >/dev/null 2>&1; then
 	udevadm control --reload-rules >/dev/null 2>&1
 	# trigger, damit ein bereits angesteckter Lesekopf sofort seinen

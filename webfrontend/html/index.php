@@ -68,7 +68,9 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            // Gruppe 35 (Regeln/06 :179/:531): dritte Bedingung general.json.
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -189,6 +191,16 @@ if (isset($_GET['selftest'])) {
 
 if (!$sm_token_ok) {
     sm_ende(403, 'TOKEN');
+}
+
+/* Gruppe 35 (2.8.13, E-E8): der Schalter ENDPUNKT_EIN. Neuinstallation aus (die Werte gehen ueber das
+ * MQTT-Gateway V2), eine bestehende Anlage behaelt ihn beim Update (postupgrade.sh; fehlt = an). Der
+ * Selbsttest oben bleibt erreichbar - er liefert keine Werte. */
+if (!smg_schalter_ein($sm_cfg, 'ENDPUNKT_EIN')) {
+    http_response_code(403);
+    echo "SMARTMETER;OK=0;ERR=ENDPUNKT_AUS\n";
+    echo "#EOF\n";
+    exit;
 }
 
 /* ---------------- Daten ausliefern ---------------- */

@@ -10,6 +10,49 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.13
+
+Sicherheit, Tagesabschluss der Kosten, Hausspeicher im Fahrplan-Abgleich und das MQTT-Gateway V2 als Hausform.
+
+* **Sicherung zurückspielen:** jedes Feld eines Lesekopfs wird gegen eine feste Liste erlaubter Werte geprüft
+  (Profil, Protokoll, CRC, Baudraten, Datenbits, Parität, Handshake, Fristen, Gerätepfad, Name). Eine
+  beanstandete Zeile weist die ganze Sicherung ab. Bis 2.8.12 konnte eine präparierte Sicherung über das Feld CRC
+  einen Befehl auf dem LoxBerry ausführen lassen. Der Leser ruft den SML-Zerleger jetzt ohne Schale auf und
+  prüft CRC zusätzlich selbst. Fahrplan-Abgleich und Kostenrechnung ziehen mit um.
+* **Kein Hänger mehr:** der SML-Zerleger hat eine Zeitgrenze (20 s) und bricht bei leerem Puffer ab; ein
+  verstümmeltes Telegramm hielt ihn vorher ohne Ende fest – und damit den Leser bis zum Neustart. Der klassische
+  Leseweg hat dazu eine Gesamtgrenze von 60 s je Lauf.
+* **Rechte 0600** für smartmeter.cfg, vzlogger.json und vzlogger.conf an allen Stellen. Platzhalter in einer
+  zurückgespielten Konfiguration werden nach dem Update nachgelesen – nie mehr still „OK“.
+* **Leistung nach einem Neustart:** der erste Lauf liefert keinen Wert statt „0 kW“; der Zählerstand wird
+  unteilbar gemerkt, eine leere Merkdatei heilt im nächsten Lauf.
+* **Kosten von gestern:** der erste Lauf nach 0 Uhr schließt den Vortag samt der Stunde 23–24 Uhr ab
+  (`kosten_historie.csv`, eine Zeile je Tag; MQTT `kosten/gestern_eur`, `gestern_kwh`, `gestern_ct`,
+  `gestern_stunden`, nie retained). Die letzten 14 Tage stehen im Reiter *Einbindung in Loxone*, Schritt 11,
+  auch als CSV. Von 0 bis 1 Uhr zeigt `kosten/stunde_ct` die Stunde 23–24 Uhr statt -1.
+* **Hausspeicher im Fahrplan-Abgleich** (Haken „Speicher berücksichtigen“, ab Werk aus): entlädt der Speicher
+  (`haus/speicher`, Anbieter Marstek Venus E ab 1.1.27) während einer Regel, heißt das Urteil „unsicher“ statt
+  „zieht nicht“; neu `abgleich/<n>/speicher`.
+* **MQTT-Gateway V2:** Namenstabelle und Hakenliste führen die Regeln 1–5; „Noncached“ zusätzlich an
+  `status/zaehler` und `abgleich/<n>/ok`. Das Lebenszeichen `status/*` kommt jetzt **jede Minute**, auch beim
+  klassischen Leser mit 15-Minuten-Takt. Ein weggefallener Zustand wird direkt am Broker auf -1 gesetzt und
+  zurückgelesen. Der Healthcheck warnt, wenn im Gateway V2 ein Haken fehlt.
+* **Bewusste Ausnahme von der -1-Regel:** Zählerstände und Leistungen bekommen beim Schweigen des Zählers kein -1
+  – ein -1 ließe den Zähler-Baustein und den Tagesstand springen, und bei 16.7.0 ist -1 ein echter Wert. Den
+  Ausfall sagt `status/ok`.
+* **Endpunkt und Lastgang** (`index.php`, `lastgang.php`) haben je einen Schalter: bei einer Neuinstallation aus,
+  eine bestehende Anlage behält beide beim Update.
+* Kleineres: `?form=` in den Adressen der Reiter, Hilfe-Link auf die eigene Wiki-Seite, Port des Webservers im
+  Selbsttest, Schnellknopf „+ Phasen & Spannungen“ im Reiter vzLogger, vzlogger-Installation im Hintergrund mit
+  Fristen, sudo nur noch für `vzlogger_pkg.sh install`, Fehler des Startlaufs ins Systemprotokoll.
+* **Bekannte Grenze:** Wird ein Plugin namens „smartmeter“ (das Original) aktualisiert oder deinstalliert, löscht
+  der LoxBerry-Installer auch die Dienstdatei dieses Plugins. Die Deinstallation des Originals führt unser
+  uninstall-Skript nicht mehr aus; gegen das Löschen hilft nur, dieselbe Fassung drüberzuinstallieren – der
+  Selbsttest im Reiter *Test* zeigt es („Dienstdatei vorhanden“).
+* Engere udev-Regel: Leseköpfe sind nur noch für LoxBerry (Gruppe loxberry) les- und schreibbar, 0660 statt 0666.
+  Der Name unter `/dev/serial/smartmeter/` bleibt die Seriennummer des Lesekopfs. Ein Lesekopf ohne Seriennummer
+  heißt dort jetzt wie sein Gerät (z. B. `ttyUSB0`) und muss im Reiter einmal neu gewählt werden.
+
 ## Neu in 2.8.12
 
 Die Installation meldete einen Fehler bei der Dienstdatei; behoben.

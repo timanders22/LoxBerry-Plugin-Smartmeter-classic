@@ -624,30 +624,28 @@ sub SEND_MQTT {
 		if ( $sock->send("$verb $prefix/$key $value") ) { $anzahl++; }
 		else { $fehl++; }
 	}
-	# Ein frueher retained gesendetes Zustandsfeld, das diese erfolgreiche
-	# Messung nicht mehr liefert, bekommt einmal -1 retained (Entscheidungen
-	# 5 und 8; bis 2.8.10 "-", seit Gruppe 1 E2 -1). Merker auf der Ramdisk,
-	# wie in bin/fetch.php.
+	# Gruppe 35 (2.8.13, Entscheidung 6, Pruefbericht E4): ein weggefallenes Zustandsfeld geht nicht mehr
+	# als EIN UDP-Datagramm "retain ... -1" hinaus - ging es verloren, stand der alte Zustand fuer immer im
+	# Broker, und der Merker galt trotzdem. EIN Weg fuer beide Leser: sm_mqtt_leeren.php --setzen <kopf>
+	# <zustaende dieser Messung> (Listenform, Frist 20 s) setzt -1 retained direkt am Broker (QoS 1), liest
+	# zurueck und fuehrt den Merker <kopf>.retained; offene Felder hoechstens einmal je 10 min erneut.
 	if ( defined $merker ) {
-		my %jetzt = map { $_ => 1 } @zustaende;
-		if ( open(my $r, "<", $merker) ) {
-			while ( my $z = <$r> ) {
+		my $kopf = $merker;
+		$kopf =~ s{^.*/}{};
+		$kopf =~ s{\.retained$}{};
+		my $bin = (defined $lbpbindir && $lbpbindir ne "") ? $lbpbindir : "$lbhomedir/bin/plugins/$psubfolder";
+		my $helfer = "$bin/sm_mqtt_leeren.php";
+		my $ph;
+		if ( -e $helfer && open($ph, '-|', 'timeout', '20', 'php', $helfer, '--setzen', $kopf, @zustaende) ) {
+			while ( my $z = <$ph> ) {
 				$z =~ s/\s+$//;
-				next if $z eq "" || $jetzt{$z} || !&IST_ZUSTAND($z);
-				if ( $sock->send("retain $prefix/$z -1") ) {
-					$anzahl++;
-					&LOG("$z fehlt in dieser Messung - -1 retained gesendet.", "INFO");
-				} else { $fehl++; }
+				next if $z eq "";
+				if ( $z =~ /^<(\w+)>\s*(.*)$/ ) { &LOG("MQTT: $2", $1); }
+				else { &LOG("MQTT: $z", "INFO"); }
 			}
-			close($r);
-		}
-		if ( @zustaende ) {
-			if ( open(my $w, ">", "$merker.tmp.$$") ) {
-				print $w join("\n", sort keys %jetzt) . "\n";
-				close($w) ? rename("$merker.tmp.$$", $merker) : unlink("$merker.tmp.$$");
-			}
+			close($ph);
 		} else {
-			unlink($merker);
+			&LOG("MQTT: sm_mqtt_leeren.php nicht aufrufbar - weggefallene Zustaende bleiben vorgemerkt.", "WARN");
 		}
 	}
 	close($sock);
@@ -676,14 +674,24 @@ sub IST_ZUSTAND
 
 # MQTT-Einstellung aus smartmeter.cfg - eingestellt wird sie im Reiter MQTT,
 # hier wird nur gelesen.
+#
+# Gruppe 35 (2.8.13, T3-1): nur der Abschnitt [MAIN] zaehlt, und SENDMQTT ist
+# nur bei "1" an (wie sm_legacy_read()). Bis 2.8.12 las die Schleife die ganze
+# Datei: ein SENDMQTT=0 in einem Kopfabschnitt schaltete MQTT ab, und
+# "SENDMQTT=false" galt als an (Probe t3_1.pl).
 sub MQTT_EINSTELLUNG
 {
 	my ($sendmqtt, $mqtttopic) = (1, "smartmeter");
 	if ( -e "$lbpconfigdir/smartmeter.cfg" ) {
 		if ( open(my $c, "<", "$lbpconfigdir/smartmeter.cfg") ) {
+			my $abschnitt = "MAIN";
 			while ( my $z = <$c> ) {
-				$sendmqtt  = ($1 ? 1 : 0) if $z =~ /^\s*SENDMQTT\s*=\s*(\S+)/;
-				$mqtttopic = $1           if $z =~ /^\s*MQTTTOPIC\s*=\s*(\S+)/;
+				$z =~ s/[\r\n]+$//;
+				next if $z =~ /^\s*[;#]/;
+				if ( $z =~ /^\s*\[\s*(.*?)\s*\]\s*$/ ) { $abschnitt = $1; next; }
+				next if $abschnitt ne "MAIN";
+				$sendmqtt  = ($1 eq "1" ? 1 : 0) if $z =~ /^\s*SENDMQTT\s*=\s*(\S+)/;
+				$mqtttopic = $1                  if $z =~ /^\s*MQTTTOPIC\s*=\s*(\S+)/;
 			}
 			close($c);
 		}
@@ -708,22 +716,17 @@ sub TS_DATEI
 	return $ts;
 }
 
-# Am Ende JEDES Laufs nach der Sperre: der umlaufende Zaehler, dann das
-# Lebenszeichen ueber MQTT (A7, Entscheidung 8): status/ok (1, wenn die
-# letzte Messung hoechstens 3 x 60 s alt ist - dieselbe Grenze wie
-# smg_alter_grenze() fuer den vzLogger-Weg), status/ts (Zeit dieses Laufs),
-# status/zaehler. Alle drei fluechtig. Dazu folgt die Abodatei des
-# Gateways dem Praefix (M3).
+# Am Ende JEDES Laufs nach der Sperre: der umlaufende Zaehler (ZAEHLER= im
+# Endpunkt) und die Abodatei des Gateways (M3, Rueckfall Gateway V1).
+#
+# Gruppe 35 (2.8.13, E-E4): das Lebenszeichen status/ok, status/ts,
+# status/zaehler sendet seit 2.8.13 bin/sm_historie.php im FESTEN 60-s-Takt -
+# fuer beide Lesewege gleich, mit eigenem Zaehler. Bis 2.8.12 stand es hier.
 sub LAUF_ENDE
 {
 	my $stand = ZAEHLER_WEITER();
 	my ($sendmqtt, $mqtttopic) = &MQTT_EINSTELLUNG();
 	return if !$sendmqtt;
-	my $ts = &TS_DATEI("/dev/shm/$psubfolder/$serial.data");
-	my $alter = $ts > 0 ? time() - $ts : -1;
-	my $ok = ($ts > 0 && $alter >= 0 && $alter <= 180) ? 1 : 0;
-	my @paare = ( [ "ok", $ok ], [ "ts", time() ], [ "zaehler", $stand ] );
-	&SEND_MQTT("$mqtttopic/status", \@paare);
 	&ABO_DATEI($mqtttopic);
 	return;
 }
@@ -821,15 +824,36 @@ sub upgrade_laeuft
 
 sub vz_laeuft
 {
+	# Gruppe 35 (2.8.13, T3-5): dieselbe Erkennung wie sm_vz_pids() in sm_lib.php,
+	# daemon/daemon und uninstall - Argument "-c"/"--config" GENAU vor unserer
+	# vzlogger.conf und /proc/<pid>/comm "vzlogger". Bis 2.8.12 stand hier
+	# "pgrep -f" mit einer Teilzeichenkette der ganzen Befehlszeile.
 	my ($conf) = @_;
-	my $raw = `pgrep -f -- "-c $conf" 2>/dev/null`;
-	return 0 if !defined $raw;
-	foreach my $p ( split(/\s+/, $raw) ) {
-		next if $p !~ /^\d+$/;
-		my $c = `ps -p $p -o comm= 2>/dev/null`;
-		next if !defined $c;
-		chomp $c;
-		return 1 if $c =~ /vzlogger/i;
+	return 0 if !defined $conf || $conf eq "";
+	opendir(my $dh, "/proc") or return 0;
+	my @pids = grep { /^\d+$/ } readdir($dh);
+	closedir($dh);
+	foreach my $pid (@pids) {
+		my $roh;
+		if ( open(my $f, "<", "/proc/$pid/cmdline") ) {
+			local $/;
+			$roh = <$f>;
+			close($f);
+		}
+		next if !defined $roh || $roh eq "";
+		my @a = split(/\0/, $roh);
+		my $treffer = 0;
+		for ( my $i = 0; $i + 1 < scalar(@a); $i++ ) {
+			if ( ($a[$i] eq "-c" || $a[$i] eq "--config") && $a[$i + 1] eq $conf ) { $treffer = 1; last; }
+		}
+		next if !$treffer;
+		my $comm;
+		if ( open(my $g, "<", "/proc/$pid/comm") ) {
+			$comm = <$g>;
+			close($g);
+		}
+		next if !defined $comm;
+		return 1 if $comm =~ /vzlogger/i;
 	}
 	return 0;
 }

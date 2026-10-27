@@ -58,6 +58,7 @@
  * Aufrufe von Hand:
  *     sm_abgleich.php --verbose   ein Durchlauf mit Bildschirmausgabe
  *     sm_abgleich.php --zeigen    den Stand ausgeben, nichts aendern
+ *     sm_abgleich.php --haus-lesen  (Gruppe 35) haus/speicher lesen - aus cron.01min
  *
  * Kompatibel mit PHP 7.4 und PHP 8.x.
  */
@@ -66,10 +67,12 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 
 $sm_verbose = false;
 $sm_zeigen  = false;
+$sm_haus    = false;
 foreach ($argv as $sm_i => $sm_a) {
     if ($sm_i === 0) { continue; }
     if ($sm_a === '--verbose' || $sm_a === '-v') { $sm_verbose = true; continue; }
     if ($sm_a === '--zeigen') { $sm_zeigen = true; continue; }
+    if ($sm_a === '--haus-lesen') { $sm_haus = true; continue; }
     fwrite(STDERR, "Unbekannter Schalter: " . $sm_a . "\n");
     exit(2);
 }
@@ -83,17 +86,10 @@ if (!is_file($sm_gemein)) {
 }
 require_once $sm_gemein;
 
-$sm_home = getenv('LBHOMEDIR');
-if (!$sm_home || !is_dir($sm_home)) {
-    $sm_d = __DIR__;
-    for ($sm_i = 0; $sm_i < 8; $sm_i++) {
-        if (is_dir($sm_d . '/config/plugins') && is_dir($sm_d . '/webfrontend')) { break; }
-        $sm_e = dirname($sm_d);
-        if ($sm_e === $sm_d) { $sm_d = ''; break; }
-        $sm_d = $sm_e;
-    }
-    $sm_home = $sm_d;
-}
+/* Gruppe 35 (2.8.13, T4-6): EINE Wurzelsuche fuer alle Abholer - smg_wurzel() in sm_gemein.php
+ * (LBHOMEDIR, sonst aufwaerts mit config/plugins, webfrontend UND config/system/general.json). Die
+ * Schleife hier lieferte nach acht Stufen ohne Treffer den achten Elternordner statt ''. */
+$sm_home = smg_wurzel(__DIR__);
 if ($sm_home === '' || !is_dir($sm_home)) {
     fwrite(STDERR, "Der LoxBerry-Wurzelordner liess sich nicht bestimmen.\n");
     exit(1);
@@ -273,6 +269,126 @@ function sm_ab_fahrplan($url)
 }
 
 /* ==================================================================
+ * Gruppe 35 (2.8.13, Entscheidung 5, Fremd-E1) - Abnehmer haus/speicher
+ *
+ * Ein entladender Hausspeicher drueckt den Netzbezug: die untere Schranke
+ * meldete dann "zieht nicht", obwohl die Regel zog. Mit dem Haken
+ * [ABGLEICH] SPEICHER_EIN (ab Werk aus) liest ein ABGEKOPPELTER Leser
+ * (sm_abgleich.php --haus-lesen, aus cron.01min im Hintergrund, eigene
+ * Sperre haus.lock) haus/speicher/richtung, leistung und zaehler - bis
+ * zaehler einmal LIVE kam, hoechstens 65 s (Regeln/07 Nr. 15 "Technik",
+ * Gedaechtnis abnehmer-phasenfalle-kurze-sitzung) - und schreibt die Lage
+ * nach /dev/shm/<ordner>/speicher_lage.json. Er schreibt nie unter haus/.
+ * Anbieter im Haus: Marstek Venus E 1.1.27.
+ *
+ * Urteil (E-E11): entlud der Speicher (live, richtung 2) seit Beginn der
+ * Regel, ist das Urteil "unsicher" (sicher 0, speicher 1). richtung -1
+ * (Speicher stumm) oder eine schweigende Quelle (kein live-zaehler binnen
+ * 120 s) = keine Aussage: wie bisher (speicher -1), der Reiter Test sagt es.
+ * Ein retained "2" allein macht nie unsicher.
+ * ================================================================== */
+define('SM_AB_HAUS_FRIST', 65);
+define('SM_AB_HAUS_ALTER', 120);
+
+/** Die Lage des Lesers (speicher_lage.json) oder null. */
+function sm_ab_speicher_lage_lesen()
+{
+    global $SM_SHM;
+    $d = @json_decode((string) @file_get_contents($SM_SHM . '/speicher_lage.json'), true);
+    return is_array($d) ? $d : null;
+}
+
+/**
+ * Fuer eine Regel, die seit $start_ts laeuft: 1 = der Speicher entlud in der
+ * Zeit, 0 = nein (frische Aussage), -1 = keine Aussage (Haken aus, Quelle
+ * schweigt, richtung -1).
+ */
+function sm_ab_speicher($cfg, $start_ts, $jetzt)
+{
+    if (smg_wert($cfg, 'ABGLEICH', 'SPEICHER_EIN', '0') !== '1') {
+        return -1;
+    }
+    $l = sm_ab_speicher_lage_lesen();
+    if (!$l) {
+        return -1;
+    }
+    if (isset($l['entladen_zuletzt']) && (int) $l['entladen_zuletzt'] > 0
+        && (int) $l['entladen_zuletzt'] >= (int) $start_ts) {
+        return 1;
+    }
+    $frisch = isset($l['ts']) && ($jetzt - (int) $l['ts']) <= SM_AB_HAUS_ALTER && ($jetzt - (int) $l['ts']) >= 0;
+    $u = smg_speicher_urteil($l);
+    if ($frisch && $u === 'entlaedt_nicht') {
+        return 0;
+    }
+    return -1;
+}
+
+/**
+ * Der abgekoppelte Leser (--haus-lesen). Laeuft nur mit SPEICHER_EIN = 1,
+ * eingeschaltetem Abgleich und MQTT, wenn mindestens eine Regel gerade
+ * aktiv ist, und nie waehrend einer Upgrade-Marke. Rueckgabe: Exitcode.
+ */
+function sm_ab_haus_lesen_lauf($cfg)
+{
+    global $SM_SHM, $SM_STAND, $sm_home, $sm_ordner, $sm_verbose;
+    if (smg_wert($cfg, 'ABGLEICH', 'AKTIV', '0') !== '1'
+        || smg_wert($cfg, 'ABGLEICH', 'SPEICHER_EIN', '0') !== '1'
+        || smg_wert($cfg, 'MAIN', 'SENDMQTT', '1') !== '1') {
+        if ($sm_verbose) { echo "haus/speicher: Haken aus (SPEICHER_EIN, ABGLEICH.AKTIV oder MQTT) - nichts zu lesen.\n"; }
+        return 0;
+    }
+    $marke = $sm_home . '/data/plugins/' . $sm_ordner . '.upgrade_laeuft';
+    if (is_file($marke) && (time() - (int) @filemtime($marke)) < 3600) {
+        if ($sm_verbose) { echo "haus/speicher: Upgrade laeuft - nichts zu lesen.\n"; }
+        return 0;
+    }
+    $st = @json_decode((string) @file_get_contents($SM_STAND), true);
+    $aktiv = false;
+    if (is_array($st) && isset($st['regeln']) && is_array($st['regeln'])) {
+        foreach ($st['regeln'] as $r) {
+            if (is_array($r) && !empty($r['aktiv'])) { $aktiv = true; break; }
+        }
+    }
+    if (!$aktiv) {
+        if ($sm_verbose) { echo "haus/speicher: keine Regel aktiv - nichts zu lesen.\n"; }
+        return 0;
+    }
+    $sperre = smg_sperre($SM_SHM, 'haus');
+    if ($sperre === false) {
+        // Hoechstens EIN Leser - der vorige laeuft noch (bis 65 s).
+        return 0;
+    }
+    $l = smg_haus_speicher_lesen($sm_home, SM_AB_HAUS_FRIST);
+    $jetzt = time();
+    $alt = sm_ab_speicher_lage_lesen();
+    $u = smg_speicher_urteil($l);
+    $neu = array(
+        'ts' => $jetzt, 'live' => $l['live'] ? 1 : 0,
+        'richtung' => ($l['richtung'] !== null && is_numeric($l['richtung'])) ? (int) $l['richtung'] : null,
+        'leistung' => ($l['leistung'] !== null && is_numeric($l['leistung'])) ? (float) $l['leistung'] : null,
+        'urteil' => $u, 'dauer' => $l['dauer'],
+        'entladen_seit' => null,
+        'entladen_zuletzt' => ($alt && isset($alt['entladen_zuletzt'])) ? (int) $alt['entladen_zuletzt'] : 0,
+    );
+    if ($u === 'entlaedt') {
+        $neu['entladen_seit'] = ($alt && !empty($alt['entladen_seit'])) ? (int) $alt['entladen_seit'] : $jetzt;
+        $neu['entladen_zuletzt'] = $jetzt;
+    }
+    $js = json_encode($neu);
+    $tmp = $SM_SHM . '/speicher_lage.json.tmp.' . getmypid();
+    if ($js === false || @file_put_contents($tmp, $js) === false || !@rename($tmp, $SM_SHM . '/speicher_lage.json')) {
+        @unlink($tmp);
+        sm_ab_log('haus/speicher: die Lage liess sich nicht schreiben (' . $SM_SHM . ').', 'WARN');
+        return 1;
+    }
+    if ($sm_verbose) {
+        printf("haus/speicher: %s nach %.2f s (richtung %s)\n", $u, $l['dauer'], var_export($neu['richtung'], true));
+    }
+    return 0;
+}
+
+/* ==================================================================
  * --zeigen
  * ================================================================== */
 if ($sm_zeigen) {
@@ -296,7 +412,13 @@ if ($sm_zeigen) {
                isset($r['fehlt']) ? number_format($r['fehlt'], 3, ',', '') : '-',
                isset($r['urteil']) ? $r['urteil'] : '-');
     }
-    echo "\n\"unsicher\" heisst: in der Zeit lief eine Einspeisung, oder die\n";
+    $sm_hl = sm_ab_speicher_lage_lesen();
+    if ($sm_hl) {
+        printf("\nhaus/speicher (Lage von %s): %s, richtung %s\n", date('H:i:s', (int) $sm_hl['ts']),
+               (string) $sm_hl['urteil'], var_export($sm_hl['richtung'], true));
+    }
+    echo "\n\"unsicher\" heisst: in der Zeit lief eine Einspeisung, der Hausspeicher entlud\n";
+    echo "(mit dem Haken SPEICHER_EIN), oder die\n";
     echo "Einheit des Zaehlers ist nicht belegt. Dann ist die untere Schranke\n";
     echo "keine, und es wird NICHT geurteilt.\n";
     exit(0);
@@ -309,8 +431,18 @@ $sm_cfg = smg_cfg_lesen($SM_CFGDATEI);
 $sm_an  = smg_wert($sm_cfg, 'ABGLEICH', 'AKTIV', '0') === '1';
 $sm_url = smg_wert($sm_cfg, 'ABGLEICH', 'FAHRPLAN_URL', '');
 
+if ($sm_haus) {
+    // Gruppe 35: der abgekoppelte Leser - eigene Sperre (haus.lock), nie die des Abgleichs.
+    exit(sm_ab_haus_lesen_lauf($sm_cfg));
+}
 if (!$sm_an) {
     if ($sm_verbose) { echo "Der Fahrplan-Abgleich ist ausgeschaltet (ABGLEICH.AKTIV).\n"; }
+    exit(0);
+}
+/* Gruppe 35 (2.8.13, Entscheidung 2): ein Lauf zugleich (fopen 'ce', LOCK_NB; belegt = still enden). */
+$sm_sperre = smg_sperre($SM_SHM, 'sm_abgleich');
+if ($sm_sperre === false) {
+    sm_ab_log('Ein anderer Abgleich haelt die Sperre - dieser endet ohne Wirkung.', 'INFO');
     exit(0);
 }
 
@@ -401,7 +533,7 @@ foreach ($sm_regeln as $sm_r) {
         // Sie ist aus. Lief sie vorher, bleibt das ERGEBNIS stehen; sonst
         // gibt es nichts zu sagen.
         if (empty($sm_vor['aktiv'])) {
-            foreach (array('dauer', 'soll', 'ist', 'fehlt', 'urteil', 'sicher') as $sm_k) {
+            foreach (array('dauer', 'soll', 'ist', 'fehlt', 'urteil', 'sicher', 'speicher') as $sm_k) {
                 if (isset($sm_vor[$sm_k])) { $sm_e[$sm_k] = $sm_vor[$sm_k]; }
             }
             $sm_neu[$sm_nr] = $sm_e;
@@ -452,6 +584,12 @@ foreach ($sm_regeln as $sm_r) {
         $sm_einsp = (float) $sm_zaehler['einspeisung'] - (float) $sm_e['start_einsp'];
     }
     $sm_sicher = ($sm_zaehler['einheit'] === 'kWh') && ($sm_einsp <= 0.001);
+    /* Gruppe 35 (2.8.13, Entscheidung 5): entlud der Hausspeicher seit Beginn der Regel, gibt es kein
+     * Urteil - er drueckt den Netzbezug wie eine Einspeisung. -1 = keine Aussage (wie bisher). */
+    $sm_e['speicher'] = sm_ab_speicher($sm_cfg, (int) $sm_e['start_ts'], $sm_jetzt);
+    if ($sm_e['speicher'] === 1) {
+        $sm_sicher = false;
+    }
     $sm_e['sicher'] = $sm_sicher ? 1 : 0;
 
     if (!$sm_sicher) {
@@ -505,6 +643,8 @@ foreach ($sm_neu as $sm_nr => $sm_e) {
     $sm_zeilen[] = array('publish', $sm_z . 'fehlt',  isset($sm_e['fehlt']) ? $sm_e['fehlt'] : 0);
     $sm_zeilen[] = array('publish', $sm_z . 'dauer',  isset($sm_e['dauer']) ? (int) $sm_e['dauer'] : 0);
     $sm_zeilen[] = array('publish', $sm_z . 'sicher', isset($sm_e['sicher']) ? (int) $sm_e['sicher'] : 0);
+    // Gruppe 35: 1 = Speicher entlud im Regelfenster, 0 = nein, -1 = keine Aussage; fluechtig.
+    $sm_zeilen[] = array('publish', $sm_z . 'speicher', isset($sm_e['speicher']) ? (int) $sm_e['speicher'] : -1);
     /* Ein Zahlenwert fuer Loxone - Woerter kann der Miniserver nicht
      * vergleichen. 1 = zieht, 0 = zieht nicht, -1 = kein Urteil (unsicher,
      * zu kurz, kein Zaehler, ohne Leistung). */

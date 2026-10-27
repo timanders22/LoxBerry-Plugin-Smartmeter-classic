@@ -1,5 +1,4 @@
 #!/usr/bin/php
-
 <?php
 // Copyright 2017 Michael Schlenstedt, michael@loxberry.de
 //
@@ -30,7 +29,9 @@
 ini_set('display_errors', 'stderr');
 ini_set('log_errors', '0');
 
-require_once	'php_sml_parser.class.php';
+// Gruppe 35 (2.8.13, T5-1): neben dieser Datei, nicht ueber den include_path; die Leerzeile vor <?php
+// (jeder Aufruf gab eine leere Zeile aus) ist weg.
+require_once __DIR__ . '/php_sml_parser.class.php';
 
 if ($argc != 3 || in_array($argv[1], array('--help', '-help', '-h', '-?'))) {
 ?>
@@ -61,7 +62,8 @@ foreach ($record['body']['vallist'] as $values)
 {
 	foreach($values as $key => $value) 
 	{
-		if ($key == "objName")
+		// Gruppe 35 (T5-1): ohne Kennzahl keine Zeile - vorher "(<wert>*<einheit>)" mit Warnung.
+		if ($key == "objName" && isset($values['OBIS']))
 		{
 			if ( $values['unit'] == "Wh" ) {
 				echo $values['OBIS'] . "(" . ($values['value'] * $values['scaler'] / 1000) . "*" . "kWh)\n";

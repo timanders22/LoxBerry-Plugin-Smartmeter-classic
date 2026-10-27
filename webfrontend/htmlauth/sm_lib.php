@@ -27,7 +27,9 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            // Gruppe 35 (Regeln/06 :179/:531): dritte Bedingung general.json.
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -46,7 +48,8 @@ function sm_paths()
     }
     $home = getenv('LBHOMEDIR');
     if (!$home || !is_dir($home)) {
-        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
+        // Gruppe 35 (Entscheidung 7, T2-3): kein fester Systempfad mehr (Regeln/06 :179).
+        foreach (array(lb_wurzel_ermitteln()) as $k) {
             if (is_dir($k)) { $home = $k; break; }
         }
     }
@@ -728,7 +731,8 @@ function sm_vz_lage()
 
 function sm_vz_write($cfg)
 {
-    return sm_json_schreiben(sm_paths()['vzjson'], $cfg, 0640);
+    // 0600 (Gruppe 35, T1-1 A) - wie smartmeter.cfg.
+    return sm_json_schreiben(sm_paths()['vzjson'], $cfg, 0600);
 }
 
 /** Feste UUIDs je Kanal - vzlogger verlangt sie. */
@@ -786,7 +790,8 @@ function sm_vz_conf_schreiben($cfg)
     // Bis 2.3.14 ging das Ergebnis von json_encode hier unmittelbar an
     // file_put_contents - bei ungueltigem UTF-8 waere eine leere Datei
     // entstanden, und der Rueckgabewert 0 haette Erfolg gemeldet.
-    return sm_json_schreiben($p['vzconf'], $conf);
+    // Gruppe 35 (2.8.13, T2-5): fester Modus 0600 statt umask, Rechte vor dem Inhalt (sm_atomar_schreiben).
+    return sm_json_schreiben($p['vzconf'], $conf, 0600);
 }
 
 /* ==================================================================
@@ -854,9 +859,9 @@ function sm_cfg_write($alles)
         }
         $z .= "\n";
     }
-    // 0640: die Datei fuehrt das Zugriffstoken des Endpunkts. Die Rechte
-    // gehoeren an das Anlegen, nicht hinterher.
-    return sm_atomar_schreiben(sm_paths()['legacy'], $z, 0640);
+    // 0600 (Gruppe 35, Regeln/05 :358; bis 2.8.12 0640): die Datei fuehrt das Zugriffstoken des
+    // Endpunkts. Die Rechte gehoeren an das Anlegen, nicht hinterher.
+    return sm_atomar_schreiben(sm_paths()['legacy'], $z, 0600);
 }
 
 /** Einzelne Werte in einem Abschnitt setzen. */
@@ -913,6 +918,12 @@ function sm_vorgaben()
         // ANGEMELDETEN Oberflaeche angelegt, nie vom Endpunkt, und wandert
         // NICHT in die Sicherung.
         'FORMKEY'   => '',
+        /* Gruppe 35 (2.8.13, E-E8): Schalter des unangemeldeten Endpunkts (index.php) und des Lastgangs
+         * (lastgang.php). Die mitgelieferte smartmeter.cfg traegt 0 (Neuinstallation: aus); fehlt der
+         * Schluessel, ist es eine Anlage von 2.8.12 oder aelter - dort war beides offen, also 1
+         * (postupgrade.sh schreibt ihn; diese Vorgabe ist nur der Rueckfall). */
+        'ENDPUNKT_EIN' => '1',
+        'LASTGANG_EIN' => '1',
     );
 }
 
@@ -1174,16 +1185,57 @@ function sm_vz_paket($was)
     return $c[$was];
 }
 
-/** Installation anstossen (ueber sudoers freigegeben). */
+/**
+ * Installation anstossen (ueber sudoers freigegeben, seit 2.8.13 NUR diese
+ * eine Form: "vzlogger_pkg.sh install").
+ *
+ * Gruppe 35 (2.8.13, Pruefbericht T5-2, Entscheidung 7): bis 2.8.12 lief der
+ * Aufruf im Vordergrund ohne Frist - curl und apt-get hatten keine, und die
+ * Seite hing, solange die Paketquelle nicht antwortete. Jetzt im Hintergrund
+ * (eigene Sitzung, Ein-/Ausgabe umgelenkt), hoechstens 900 s, die Ausgabe in
+ * data/plugins/<ordner>/vz_install.txt; solange die Marke vz_install.laeuft
+ * liegt, sagt der Reiter "laeuft ..." (sm_vz_install_stand()).
+ */
 function sm_vz_install()
 {
-    $h = sm_paths()['bin'] . '/vzlogger_pkg.sh';
+    $p = sm_paths();
+    $h = $p['bin'] . '/vzlogger_pkg.sh';
     if (!is_executable($h)) {
         return sprintf(sm_t('VZ.PAKETHELFER_FEHLT'), $h);
     }
-    sm_log('vzlogger-Installation angestossen.');
-    list(, $out) = sm_sh('sudo -n ' . escapeshellarg($h) . ' install');
-    return trim($out) !== '' ? $out : sm_t('ALLG.KEINE_AUSGABE');
+    $marke = $p['datadir'] . '/vz_install.laeuft';
+    $aus = $p['datadir'] . '/vz_install.txt';
+    if (is_file($marke) && (time() - (int) @filemtime($marke)) < 960) {
+        return sm_vz_install_stand();
+    }
+    if (!is_dir($p['datadir'])) {
+        @mkdir($p['datadir'], 0775, true);
+    }
+    if (@file_put_contents($marke, (string) time()) === false) {
+        return sprintf(sm_t('VZ.INSTALL_NICHT_GESTARTET'), sm_e($marke));
+    }
+    sm_log('vzlogger-Installation angestossen (im Hintergrund, hoechstens 900 s).');
+    $innen = 'timeout -k 10 900 sudo -n ' . escapeshellarg($h) . ' install > ' . escapeshellarg($aus)
+           . ' 2>&1; echo "rc=$?" >> ' . escapeshellarg($aus) . '; rm -f ' . escapeshellarg($marke);
+    sm_sh('nohup setsid sh -c ' . escapeshellarg($innen) . ' < /dev/null > /dev/null 2>&1 &');
+    return sm_t('VZ.INSTALL_GESTARTET');
+}
+
+/** Was die Installation im Hintergrund gerade sagt - '' heisst: nichts zu zeigen. */
+function sm_vz_install_stand()
+{
+    $p = sm_paths();
+    $marke = $p['datadir'] . '/vz_install.laeuft';
+    $aus = $p['datadir'] . '/vz_install.txt';
+    $text = is_readable($aus) ? (string) @file_get_contents($aus, false, null, 0, 65536) : '';
+    if (is_file($marke) && (time() - (int) @filemtime($marke)) < 960) {
+        return sprintf(sm_t('VZ.INSTALL_LAEUFT'), max(0, time() - (int) @filemtime($marke)))
+             . ($text !== '' ? "\n\n" . $text : '');
+    }
+    if ($text !== '' && (time() - (int) @filemtime($aus)) < 3600) {
+        return $text;
+    }
+    return '';
 }
 
 /**
@@ -1659,6 +1711,56 @@ function sm_kosten_stand()
     return array_merge($leer, $d);
 }
 
+/**
+ * Gruppe 35 (2.8.13, E-E14): die letzten $n Tage aus kosten_historie.csv,
+ * juengster zuerst - nur lesen. Eine Zeile ist ein Feld mit den Spalten
+ * datum, kwh, ct, eur, stunden, offen, ohne_preis, stunde23, zeilen.
+ */
+function sm_kosten_tage($n = 14)
+{
+    $datei = sm_paths()['datadir'] . '/kosten_historie.csv';
+    if (!is_readable($datei)) {
+        return array();
+    }
+    $kopf = array('datum', 'kwh', 'ct', 'eur', 'stunden', 'offen', 'ohne_preis', 'stunde23', 'zeilen');
+    $aus = array();
+    foreach ((array) @file($datei, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $z) {
+        $f = explode(';', trim((string) $z));
+        if (count($f) !== count($kopf) || !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $f[0])) {
+            continue;
+        }
+        $aus[] = array_combine($kopf, $f);
+    }
+    return array_reverse(array_slice($aus, -(int) $n));
+}
+
+/**
+ * Gruppe 35 (2.8.13, Entscheidung 5): die Lage des Lesers haus/speicher als
+ * array(Zustand fuer sm_farbe(), Text) - '' wenn der Haken aus ist.
+ */
+function sm_speicher_lage()
+{
+    if (sm_cfg_get(sm_cfg_read(), 'ABGLEICH', 'SPEICHER_EIN', '0') !== '1') {
+        return array('', '');
+    }
+    $d = json_decode((string) @file_get_contents(sm_paths()['shm'] . '/speicher_lage.json'), true);
+    if (!is_array($d) || !isset($d['ts'])) {
+        return array('warn', sm_t('AB.SL_NOCH_KEINE'));
+    }
+    $alter = time() - (int) $d['ts'];
+    $u = isset($d['urteil']) ? (string) $d['urteil'] : '';
+    if ($alter < 0 || $alter > 120 || $u === 'quelle_schweigt') {
+        return array('warn', sprintf(sm_t('AB.SL_QUELLE_SCHWEIGT'), max(0, $alter)));
+    }
+    if ($u === 'entlaedt') {
+        return array('warn', sprintf(sm_t('AB.SL_ENTLAEDT'), $alter));
+    }
+    if ($u === 'entlaedt_nicht') {
+        return array('ok', sprintf(sm_t('AB.SL_ENTLAEDT_NICHT'), $alter));
+    }
+    return array('warn', sprintf(sm_t('AB.SL_OHNE_AUSSAGE'), $alter));
+}
+
 /* ==================================================================
  * Loxone-Vorlagen
  * ================================================================== */
@@ -1806,9 +1908,11 @@ function sm_namen_gruppen()
     $alles   = sm_cfg_read();
     $praefix = $legacy['MQTTTOPIC'];
     $pr      = trim((string) $praefix, '/');
-    // Noncached an den drei Werten, die meist dauerhaft auf 1 stehen (Entwurf E7).
+    /* Noncached (Entwurf E7; Gruppe 35, E-E5, N4): EINE Liste - sm_noncached_themen() (status/ok,
+     * status/zaehler, kosten/quelle_ok, abgleich/quelle_ok, abgleich/<n>/ok je Regel). */
+    $regeln = sm_abgleich_regeln();
     $nc = array();
-    foreach (array('status/ok', 'kosten/quelle_ok', 'abgleich/quelle_ok') as $th) {
+    foreach (sm_noncached_themen() as $th) {
         $nc[] = str_replace(array('/', '%'), '_', $pr . '/' . $th);
     }
     $gr = array();
@@ -1842,21 +1946,51 @@ function sm_namen_gruppen()
     }
     $gr[] = array('status', sm_t('MQ.G_STATUS'), !empty($vz['enabled']) || $legacy['READ'] === '1', $z, '');
 
+    /* Gruppe 35 (2.8.13, Fremd-E2, Entwurf 5.3): der Fahrplan-Abgleich fuer JEDE Regel, die abgleich.json
+     * kennt (hoechstens 5), Regel 1 immer - die Musterseite baut Regel 1, die Namen fuer 2-5 stehen hier.
+     * Dazu kosten/gestern_* (Tagesabschluss) und abgleich/<n>/speicher (haus/speicher). */
     $zk = array();
     $za = array();
-    foreach (sm_vorlage_kosten_eintraege($praefix) as $e) {
-        $eh = trim((string) preg_replace('/<v[^>]*>/', '', (string) $e[3]));
-        $zeile = array($e[0], (string) $e[2], sm_bereich_text($eh, $e[4][2], $e[4][3]), false,
-                       in_array($e[0], $nc, true) ? 'Noncached' : '');
-        if (strpos((string) $e[1], 'kosten/') === 0) {
-            $zk[] = $zeile;
-        } else {
-            $za[] = $zeile;
+    foreach ($regeln as $r) {
+        foreach (sm_vorlage_kosten_eintraege($praefix, $r) as $e) {
+            $th = (string) $e[1];
+            $ist_k = (strpos($th, 'kosten/') === 0);
+            $ist_q = ($th === 'abgleich/quelle_ok');
+            $ist_r = (strpos($th, 'abgleich/' . $r . '/') === 0);
+            if ($r !== $regeln[0] && !$ist_r) {
+                continue;
+            }
+            $eh = trim((string) preg_replace('/<v[^>]*>/', '', (string) $e[3]));
+            $zeile = array($e[0], (string) $e[2], sm_bereich_text($eh, $e[4][2], $e[4][3]), false,
+                           in_array($e[0], $nc, true) ? 'Noncached' : '');
+            if ($ist_k) {
+                $zk[] = $zeile;
+            } elseif ($ist_q || $ist_r) {
+                $za[] = $zeile;
+            }
         }
     }
     $gr[] = array('kosten', sm_t('MQ.G_KOSTEN'), sm_cfg_get($alles, 'KOSTEN', 'AKTIV', '0') === '1', $zk, '');
     $gr[] = array('abgleich', sm_t('MQ.G_ABGLEICH'), sm_cfg_get($alles, 'ABGLEICH', 'AKTIV', '0') === '1', $za, '');
     return $gr;
+}
+
+/** Gruppe 35: die Regelnummern des Fahrplan-Abgleichs (abgleich.json; Regel 1 immer, hoechstens 5). */
+function sm_abgleich_regeln()
+{
+    return function_exists('smg_regeln') ? smg_regeln(sm_paths()['datadir'] . '/abgleich.json') : array(1);
+}
+
+/**
+ * Gruppe 35 (2.8.13, E-E5, N4): die Themen, die im MQTT-Gateway V2 "Noncached" brauchen - EINE Liste fuer
+ * Namenstabelle, Hakenliste, Pruefzeile im Reiter Test und bin/healthcheck (smg_noncached_themen()).
+ */
+function sm_noncached_themen()
+{
+    if (function_exists('smg_noncached_themen')) {
+        return smg_noncached_themen(sm_abgleich_regeln());
+    }
+    return array('status/ok', 'status/zaehler', 'kosten/quelle_ok', 'abgleich/quelle_ok', 'abgleich/1/ok');
 }
 
 /** Eine Zeile der Namenstabelle fuer ein Feld des Katalogs (Einheit und Grenzen je Leseweg). */
@@ -1947,6 +2081,13 @@ function sm_vorlage_kosten_eintraege($praefix, $regel = 1)
         array('abgleich/' . $r . '/dauer',  sprintf(sm_t('LOX.VE_A_DAUER'), $r), '<v> s',     array(false, 0, 0, 1000000)),
         array('abgleich/' . $r . '/sicher', sm_t('LOX.VE_A_SICHER'),             '<v>',       array(false, 0, 0, 1)),
         array('abgleich/' . $r . '/ok',     sm_t('LOX.VE_A_OK'),                 '<v>',       array(true, -1, -1, 1)),
+        // Gruppe 35 (2.8.13): angehaengt, damit die Nummern 0-15 der Baustein-Liste bleiben. 16: haus/speicher
+        // (Entscheidung 5), 17-20: Tagesabschluss (Entscheidung 2) - nie retained.
+        array('abgleich/' . $r . '/speicher', sm_t('LOX.VE_A_SPEICHER'),         '<v>',       array(true, -1, -1, 1)),
+        array('kosten/gestern_eur',     sm_t('LOX.VE_K_GESTERN_EUR'),     '<v.2> EUR', array(true, -1, -1, 10000)),
+        array('kosten/gestern_kwh',     sm_t('LOX.VE_K_GESTERN_KWH'),     '<v.2> kWh', array(true, -1, -1, 100000)),
+        array('kosten/gestern_ct',      sm_t('LOX.VE_K_GESTERN_CT'),      '<v.1> ct',  array(true, -1, -1, 1000000)),
+        array('kosten/gestern_stunden', sm_t('LOX.VE_K_GESTERN_STUNDEN'), '<v> h',     array(false, 0, 0, 25)),
     );
     $aus = array();
     foreach ($themen as $t) {
@@ -1982,6 +2123,41 @@ function sm_vorlage_kosten_eintraege($praefix, $regel = 1)
 function sm_sichern_tabu()
 {
     return array('FORMKEY', 'SUBFOLDER', 'SCRIPTNAME');
+}
+
+/**
+ * Gruppe 35 (2.8.13, T2-1): die Abschnitte [ABGLEICH] und [KOSTEN] der
+ * Sicherung - Schluessel => Wert, wenn die Datei keinen traegt. Beide sind
+ * beim Einlesen OPTIONAL: eine Sicherung aus 2.8.12 ohne sie bleibt gueltig.
+ */
+function sm_sichern_zusatz()
+{
+    return array(
+        'ABGLEICH' => array('AKTIV' => '0', 'FAHRPLAN_URL' => '', 'SPEICHER_EIN' => '0'),
+        'KOSTEN'   => array('AKTIV' => '0', 'PREIS_URL' => ''),
+    );
+}
+
+/**
+ * Spaetliste (Gruppe 35): Schluessel, die erst seit 2.8.13 in einer
+ * Sicherung stehen. Fehlen sie, bleibt der hier geltende Wert - ein
+ * Zurueckspielen setzt sie nie auf ihre Vorgabe (sonst schloesse eine alte
+ * Sicherung den Endpunkt still).
+ */
+function sm_sichern_spaetliste()
+{
+    return array('MAIN' => array('ENDPUNKT_EIN', 'LASTGANG_EIN'), 'ABGLEICH' => array('SPEICHER_EIN'));
+}
+
+/**
+ * Gruppe 35 (2.8.13, T1-6): EINE Pruefung fuer die Adressen des Fahrplans und
+ * der Preise - im Formular und beim Zurueckspielen. Die Regel steht in
+ * smg_url_ok() (bin/sm_gemein.php), weil die beiden Abholer sie auch
+ * brauchen.
+ */
+function sm_url_ok($u)
+{
+    return function_exists('smg_url_ok') ? smg_url_ok($u) : false;
 }
 
 /**
@@ -2023,6 +2199,15 @@ function sm_sichern_text($pruefen = true)
             $w = implode(',', $w);
         }
         $t .= $k . '=' . sm_wert_saeubern($w) . "\n";
+    }
+    /* Gruppe 35 (2.8.13, T2-1): Fahrplan-Abgleich und Kostenrechnung ziehen mit um - bis 2.8.12 waren beide
+     * nach einem Umzug aus und ohne Adresse. Werte wie in der Datei, leere Haken als 0. */
+    foreach (sm_sichern_zusatz() as $sm_ab => $sm_schl) {
+        $t .= "\n[" . $sm_ab . "]\n";
+        foreach ($sm_schl as $k => $sm_vg) {
+            $sm_w = (isset($alles[$sm_ab][$k]) && $alles[$sm_ab][$k] !== '') ? $alles[$sm_ab][$k] : $sm_vg;
+            $t .= $k . '=' . sm_wert_saeubern($sm_w) . "\n";
+        }
     }
     foreach (sm_koepfe() as $k) {
         $t .= "\n[KOPF " . $k['ABSCHNITT'] . "]\n";
@@ -2079,6 +2264,9 @@ function sm_sichern_einlesen($roh)
     $main = array();
     $vz   = array();
     $koepfe = array();
+    $zusatz = array('ABGLEICH' => array(), 'KOSTEN' => array());
+    $zusatz_da = array();
+    $sm_zusatz_vg = sm_sichern_zusatz();
     $abschnitt = '';
     $gefunden = 0;
     $nr = 0;
@@ -2102,7 +2290,11 @@ function sm_sichern_einlesen($roh)
                 $abschnitt = '';
                 continue;
             }
+            if ($abschnitt === 'ABGLEICH' || $abschnitt === 'KOSTEN') {
+                $zusatz_da[$abschnitt] = true;
+            }
             if ($abschnitt !== 'MAIN' && $abschnitt !== 'VZLOGGER'
+                && $abschnitt !== 'ABGLEICH' && $abschnitt !== 'KOSTEN'
                 && strncmp($abschnitt, 'KOPF ', 5) !== 0) {
                 $mangel[] = sprintf(sm_t('SICH.ABSCHNITT'), $nr, sm_e($abschnitt));
             }
@@ -2138,6 +2330,14 @@ function sm_sichern_einlesen($roh)
                 continue;
             }
             $vz[$k] = $v;
+            $gefunden++;
+        } elseif ($abschnitt === 'ABGLEICH' || $abschnitt === 'KOSTEN') {
+            /* Gruppe 35 (2.8.13, T2-1): optional - eine Sicherung aus 2.8.12 ohne diese Abschnitte bleibt gueltig. */
+            if (!array_key_exists($k, $sm_zusatz_vg[$abschnitt])) {
+                $mangel[] = sprintf(sm_t('SICH.SCHLUESSEL'), $nr, sm_e($k));
+                continue;
+            }
+            $zusatz[$abschnitt][$k] = $v;
             $gefunden++;
         } elseif (strncmp($abschnitt, 'KOPF ', 5) === 0) {
             $s = trim(substr($abschnitt, 5));
@@ -2213,7 +2413,7 @@ function sm_sichern_einlesen($roh)
     }
     /* Schalter sind 0 oder 1. Ein "ja" oder ein leeres Feld wuerde sonst
      * je nach Lesestelle verschieden ausgelegt. */
-    foreach (array('READ', 'SENDMQTT', 'SENDUDP') as $k) {
+    foreach (array('READ', 'SENDMQTT', 'SENDUDP', 'ENDPUNKT_EIN', 'LASTGANG_EIN') as $k) {
         if (isset($main[$k]) && $main[$k] !== '0' && $main[$k] !== '1') {
             $wert($k, $main[$k], $k);
         }
@@ -2252,18 +2452,48 @@ function sm_sichern_einlesen($roh)
         $mangel[] = sm_t('FEHLER.BEIDE_LESER');
         $namen[] = 'READ/enabled';
     }
+    /* Gruppe 35 (2.8.13, Entscheidung 1: T4-2 + E6): JEDES Kopffeld und der Kopfname gegen ihre
+     * Positivlisten (sm_kopf_fehler() in sm_legacy.php). Bis 2.8.12 wurde nur METER geprueft - ein
+     * CRC mit angehaengtem Befehl lief danach im Minutentakt (Pruefbericht T4-2). Eine Beanstandung
+     * weist die ganze Sicherung ab (E-E1); die Meldung nennt Kopf und Feldnamen, nie Werte. */
     $profile = sm_profile();
+    $sm_protokolle = sm_protokolle();
     foreach ($koepfe as $s => $w) {
-        if (isset($w['METER']) && $w['METER'] !== ''
-            && !array_key_exists($w['METER'], $profile)) {
-            $wert('METER ' . sm_e($s), $w['METER'], 'METER');
+        $sm_kf = sm_kopf_fehler((string) $s, $w, $profile, $sm_protokolle);
+        if ($sm_kf) {
+            $mangel[] = sprintf(sm_t('SICH.KOPF_FELDER'), sm_e(sm_kopf_name_ok((string) $s) ? $s : '?'),
+                                sm_e(implode(', ', $sm_kf)));
+            foreach ($sm_kf as $sm_n) { $namen[] = $sm_n; }
         }
+    }
+    foreach ($zusatz as $sm_ab => $sm_w) {
+        foreach ($sm_w as $k => $v) {
+            if (($k === 'AKTIV' || $k === 'SPEICHER_EIN') && $v !== '0' && $v !== '1') {
+                $wert($sm_ab . '.' . $k, $v, $k);
+            } elseif (substr($k, -4) === '_URL' && $v !== '' && !sm_url_ok($v)) {
+                $wert($sm_ab . '.' . $k, $v, $k);
+            }
+        }
+    }
+    /* Spaetliste (Gruppe 35): Schluessel, die erst 2.8.13 kennt. Fehlen sie in einer aelteren Sicherung,
+     * bleibt der hier geltende Wert - sie werden nie auf ihre Vorgabe zurueckgesetzt. */
+    $sm_spaet = array();
+    foreach (sm_sichern_spaetliste() as $sm_ab => $sm_schl) {
+        foreach ($sm_schl as $k) {
+            $sm_hat = ($sm_ab === 'MAIN') ? array_key_exists($k, $main)
+                                          : array_key_exists($k, $zusatz[$sm_ab]);
+            if (!$sm_hat) { $sm_spaet[] = $sm_ab . '.' . $k; }
+        }
+    }
+    if ($sm_spaet && $gefunden > 0) {
+        $hinweis[] = sprintf(sm_t('SICH.SPAET'), sm_e(implode(', ', $sm_spaet)));
     }
 
     if ($mangel) {
         return array(null, $mangel, $hinweis, $namen);
     }
-    return array(array('MAIN' => $main, 'VZLOGGER' => $vz, 'KOEPFE' => $koepfe),
+    return array(array('MAIN' => $main, 'VZLOGGER' => $vz, 'KOEPFE' => $koepfe,
+                       'ABGLEICH' => $zusatz['ABGLEICH'], 'KOSTEN' => $zusatz['KOSTEN']),
                  array(), $hinweis, array());
 }
 
@@ -2291,6 +2521,12 @@ function sm_sichern_uebernehmen($neu)
 
     if ($neu['MAIN']) {
         $ok = sm_cfg_set('MAIN', $neu['MAIN']) && $ok;
+    }
+    // Gruppe 35 (2.8.13, T2-1): Fahrplan-Abgleich und Kostenrechnung - nur, was die Datei nennt.
+    foreach (array('ABGLEICH', 'KOSTEN') as $sm_ab) {
+        if (!empty($neu[$sm_ab])) {
+            $ok = sm_cfg_set($sm_ab, $neu[$sm_ab]) && $ok;
+        }
     }
     foreach ($neu['KOEPFE'] as $s => $w) {
         // Ein Geraetepfad gehoert zu DIESER Anlage. Steckt der Lesekopf hier
@@ -2556,7 +2792,12 @@ function sm_mqtt_themen()
                        'heute_kwh'  => array('kWh', sm_t('MQ.B_K_HEUTE_KWH')),
                        'stunden'    => array('', sm_t('MQ.B_K_STUNDEN')),
                        'offen'      => array('', sm_t('MQ.B_K_OFFEN')),
-                       'ohne_preis' => array('', sm_t('MQ.B_K_OHNE_PREIS'))) as $t => $eb) {
+                       'ohne_preis' => array('', sm_t('MQ.B_K_OHNE_PREIS')),
+                       // Gruppe 35 (2.8.13): Tagesabschluss, nie retained.
+                       'gestern_eur' => array('EUR', sm_t('MQ.B_K_GESTERN_EUR')),
+                       'gestern_kwh' => array('kWh', sm_t('MQ.B_K_GESTERN_KWH')),
+                       'gestern_ct'  => array('ct', sm_t('MQ.B_K_GESTERN_CT')),
+                       'gestern_stunden' => array('', sm_t('MQ.B_K_GESTERN_STUNDEN'))) as $t => $eb) {
             $z[] = array($pr . '/kosten/' . $t, $eb[0], $eb[1], false, false);
         }
         $gruppen[] = array(sm_t('MQ.G_KOSTEN'), $z, '');
@@ -2570,7 +2811,8 @@ function sm_mqtt_themen()
                        'fehlt'  => array('kWh', sm_t('MQ.B_A_FEHLT')),
                        'dauer'  => array('s', sm_t('MQ.B_A_DAUER')),
                        'sicher' => array('', sm_t('MQ.B_A_SICHER')),
-                       'ok'     => array('', sm_t('MQ.B_A_OK'))) as $t => $eb) {
+                       'ok'     => array('', sm_t('MQ.B_A_OK')),
+                       'speicher' => array('', sm_t('MQ.B_A_SPEICHER'))) as $t => $eb) {
             $z[] = array($pr . '/abgleich/<n>/' . $t, $eb[0], $eb[1], $t === 'aktiv', false);
         }
         $gruppen[] = array(sm_t('MQ.G_ABGLEICH'), $z, '');
@@ -2653,11 +2895,25 @@ function sm_fassung()
         $v = (string) LBSystem::pluginversion(basename(__DIR__));
     }
     if ($v === '') {
+        /* Gruppe 35 (2.8.13, T2-6): der Rueckfall ausserhalb der Weboberflaeche (Befehlszeile) fragt die
+         * Plugindatenbank des LoxBerry - config/plugins/<ordner>/plugin.cfg gab es installiert nie. */
+        $sm_db = json_decode((string) @file_get_contents(sm_paths()['home'] . '/data/system/plugindatabase.json'), true);
+        if (is_array($sm_db) && isset($sm_db['plugins']) && is_array($sm_db['plugins'])) {
+            foreach ($sm_db['plugins'] as $sm_e) {
+                if (is_array($sm_e) && isset($sm_e['folder'], $sm_e['version'])
+                    && (string) $sm_e['folder'] === sm_paths()['plugin']) {
+                    $v = (string) $sm_e['version'];
+                    break;
+                }
+            }
+        }
+    }
+    if ($v === '') {
         // Die plugin.cfg kommentiert mit "#". PHPs INI-Zerleger kennt als
         // Kommentarzeichen nur ";" und bricht sonst ab - deshalb die
         // Kommentarzeilen vorher entfernen.
-        foreach (array(sm_paths()['home'] . '/config/plugins/' . sm_paths()['plugin'] . '/plugin.cfg',
-                       dirname(dirname(dirname(__FILE__))) . '/plugin.cfg') as $k) {
+        // Nur noch der Archivfall (entpacktes Paket, Pruefstand).
+        foreach (array(dirname(dirname(dirname(__FILE__))) . '/plugin.cfg') as $k) {
             if (!is_readable($k)) {
                 continue;
             }

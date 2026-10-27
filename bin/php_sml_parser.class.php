@@ -54,6 +54,9 @@ class SML_PARSER {
     );
 	
     private $data;
+    /* Gruppe 35 (2.8.13, E3): true, sobald der Puffer leer ist oder eine Laenge nicht passen kann - jede
+     * weitere Rekursion endet dann sofort (vorher lief eine verstuemmelte TL-Kette ohne Grenze). */
+    public $leer = false;
     private $crc16_global;
     private $crc16_message;
     private $crctab = array( # Hilfsarray zur Berechnung der CRC
@@ -170,6 +173,7 @@ class SML_PARSER {
     }
     private function parse_sml_data($list_item=0) {
         global $list_indent;
+        if ($this->leer || (string) $this->data === '') { $this->leer = true; return; }
         $TYPE_LEN = $this->read(1);
 		$this->debug('Type_LEN: ('.$TYPE_LEN.')');
         if($TYPE_LEN=='00') {
@@ -190,6 +194,7 @@ class SML_PARSER {
         # also die langen Listen, die der Kommentar bei Zeile 411 selbst
         # nennt ("manche DTZ41 vom Bayernwerk schicken 20 OBIS-Kennzahlen").
         while(hexdec($TYPE[0]) & 0x8) {  # Multi-Byte TypeLen-Field
+            if ((string) $this->data === '') { $this->leer = true; return; }
             $LEN = $LEN * 0x10;
             $TYPE_LEN = $this->read(1);
             $TYPE = $TYPE_LEN[0].'x';     # only high-nibble
@@ -286,7 +291,8 @@ class SML_PARSER {
                 break;
             case '7x': # List
                 $list_indent++;
-                for($i=1;$i<=$LEN;$i++) $this->parse_sml_data($i);
+                if ($LEN > strlen((string) $this->data) / 2 + 1) { $this->leer = true; $list_indent--; return; }
+                for($i=1;$i<=$LEN && !$this->leer;$i++) $this->parse_sml_data($i);
                 $list_indent--;
                 break;
             default :
@@ -548,6 +554,7 @@ class SML_PARSER {
     # =============================================================================================
     public function parse_sml_hexdata($hexdata,$crc) {
         $this->files = array();
+        $this->leer = false;
         $this->data = strtoupper($hexdata);
         $sml_header='1B1B1B1B01010101';
         $sml_footer='0000001B1B1B1B1A';

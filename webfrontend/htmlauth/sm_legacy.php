@@ -47,6 +47,147 @@ function sm_kopf_felder()
                  'HANDSHAKE', 'DATABITS', 'STOPBITS', 'PARITY', 'CRC');
 }
 
+/* ==================================================================
+ * Gruppe 35 (2.8.13, Entscheidung 1: T4-2 + E6) - Positivlisten fuer die
+ * Kopffelder
+ *
+ * Bis 2.8.12 nahm eine Sicherung jedes Kopffeld ungeprueft an; geprueft
+ * wurde nur METER. Ein CRC "CRC16_X_25;touch <datei>" ging so in die
+ * Konfiguration, von dort ueber fetch.php an sm_logger.pl und dort in eine
+ * Befehlszeile (Pruefbericht T4-2, Probe: Merkerdatei angelegt). Jetzt hat
+ * jedes Feld eine Regel; was keine besteht, weist die GANZE Sicherung ab
+ * (E-E1). Dieselbe Pruefung zeigt der Reiter Test fuer den installierten
+ * Bestand - nur lesend.
+ * ================================================================== */
+
+/** Ein Kopfname (Abschnittsname, Ende des Geraetepfads, Teil des MQTT-Themas). */
+function sm_kopf_name_ok($s)
+{
+    return is_string($s) && preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}\z/', $s)
+        && strpos($s, '..') === false;
+}
+
+/** Abschnittsnamen, die nie ein Lesekopf sein duerfen - sm_cfg_set() schriebe sonst in sie. */
+function sm_kopf_name_belegt($s)
+{
+    return in_array(strtoupper((string) $s), array('MAIN', 'VZLOGGER', 'ABGLEICH', 'KOSTEN'), true);
+}
+
+/**
+ * Die Protokollzweige von bin/sm_logger.pl ($protocol eq "..."), fest
+ * ausgeschrieben - 41 Stueck. Der Reiter Test haelt sie gegen
+ * array_keys(sm_profile()) (ohne 0 und manual); laufen beide auseinander,
+ * zeigt er es rot.
+ */
+function sm_protokolle()
+{
+    return array(
+        'apatornorax3dsml', 'apatorpicusehz060sml', 'bauerbsmqd36ad0', 'dzgdvs7410sml',
+        'dzgdvs7420sml', 'easymeteresy5q3dad0', 'easymeterq3asml', 'efrsgmc2sml', 'efrsgmc4sml',
+        'efrsgmddsml', 'elsteras3000d0', 'emhed300sml', 'emhehzksml', 'genericd0', 'genericsml',
+        'hagerehz363sml', 'holleydtz541sml', 'iskra173d0', 'iskra173sml', 'iskra174d0',
+        'iskra174sml', 'iskra175d0', 'iskra175sml', 'iskra382d0', 'iskra681sml', 'iskra691sml',
+        'itronace3000type260d0', 'landisgyre220sml', 'landisgyre320d0', 'landisgyre350d0',
+        'landisgyret550d0', 'logarexlk13bdd0', 'logarexlk13be8030d0', 'pafal20ec3grd0',
+        'sagemcomsmartybzsml', 'sagemcomt210d0', 'sagemcomt211d0', 'sagemcomt211d0f',
+        'siemenstd3511d0', 'siemensuh50do', 'zpagh305sml',
+    );
+}
+
+/**
+ * Welche Felder eines Lesekopfs verletzen ihre Regel? Rueckgabe: Liste der
+ * FELDNAMEN (nie Werte - wie X-3); 'KOPF' steht fuer den Abschnittsnamen.
+ *
+ * $profile: Schluessel von sm_profile() als Feld (Schluessel => egal),
+ * $protokolle: sm_protokolle(). Regeln (Entwurf G35 3.2, Probe
+ * probe_kopf_g35b.php 20/20):
+ *   Kopfname   \A[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}\z, kein "..", nicht MAIN/VZLOGGER/ABGLEICH/KOSTEN
+ *   DEVICE     genau /dev/serial/smartmeter/<Kopfname> (fetch.php liest <Kopfname>.data,
+ *              sm_logger.pl schreibt <basename(DEVICE)>.data)
+ *   METER      leer oder ein Profil; PROTOCOL leer oder einer der 41 Zweige
+ *   Baudraten  300 ... 115200 (Liste); DATABITS 5-8; STOPBITS 1/2; PARITY none/odd/even;
+ *   HANDSHAKE  none/rts/xoff/dtr; CRC CRC16_X_25/CRC16_KERMIT; TIMEOUT 1-600; DELAY 0-60
+ *   NAME       hoechstens 64 Zeichen; SERIAL leer oder wie ein Kopfname
+ *   Steuerzeichen nie; ein unbekanntes Feld ist beanstandet.
+ */
+function sm_kopf_fehler($name, array $w, array $profile, array $protokolle)
+{
+    $f = array();
+    if (!sm_kopf_name_ok($name) || sm_kopf_name_belegt($name)) {
+        $f[] = 'KOPF';
+    }
+    $zahl = function ($v, $lo, $hi) {
+        return preg_match('/\A[0-9]{1,6}\z/', $v) && (int) $v >= $lo && (int) $v <= $hi;
+    };
+    $baud = array('300', '600', '1200', '2400', '4800', '9600', '19200', '38400', '57600', '115200');
+    $listen = array(
+        'STARTBAUDRATE' => $baud,
+        'BAUDRATE'      => $baud,
+        'DATABITS'      => array('5', '6', '7', '8'),
+        'STOPBITS'      => array('1', '2'),
+        'PARITY'        => array('none', 'odd', 'even'),
+        'HANDSHAKE'     => array('none', 'rts', 'xoff', 'dtr'),
+        'CRC'           => array('CRC16_X_25', 'CRC16_KERMIT'),
+        'PROTOCOL'      => $protokolle,
+    );
+    foreach ($w as $k => $v) {
+        $v = (string) $v;
+        if (preg_match('/[\x00-\x1F\x7F]/', $v)) { $f[] = $k; continue; }
+        switch ($k) {
+            case 'NAME':
+                if (strlen($v) > 64) { $f[] = $k; }
+                break;
+            case 'SERIAL':
+                if ($v !== '' && !sm_kopf_name_ok($v)) { $f[] = $k; }
+                break;
+            case 'DEVICE':
+                if (!preg_match('#\A/dev/serial/smartmeter/([^/]+)\z#', $v, $mm)
+                    || $mm[1] !== (string) $name || !sm_kopf_name_ok($mm[1])) {
+                    $f[] = $k;
+                }
+                break;
+            case 'METER':
+                if ($v !== '' && !array_key_exists($v, $profile)) { $f[] = $k; }
+                break;
+            case 'TIMEOUT':
+                if ($v !== '' && !$zahl($v, 1, 600)) { $f[] = $k; }
+                break;
+            case 'DELAY':
+                if ($v !== '' && !$zahl($v, 0, 60)) { $f[] = $k; }
+                break;
+            default:
+                if (isset($listen[$k])) {
+                    if ($v !== '' && !in_array($v, $listen[$k], true)) { $f[] = $k; }
+                } else {
+                    $f[] = $k;
+                }
+        }
+    }
+    return array_values(array_unique($f));
+}
+
+/**
+ * Der installierte Bestand gegen dieselben Regeln - nur lesend, fuer den
+ * Reiter Test. Rueckgabe array(Kopfname => array(Feldnamen)), nur Koepfe
+ * mit Beanstandung.
+ */
+function sm_kopf_bestand_pruefen()
+{
+    $aus = array();
+    $profile = sm_profile();
+    $protokolle = sm_protokolle();
+    foreach (sm_cfg_read() as $abschnitt => $werte) {
+        if ($abschnitt === 'MAIN' || !is_array($werte) || !isset($werte['DEVICE'])) {
+            continue;
+        }
+        $f = sm_kopf_fehler((string) $abschnitt, $werte, $profile, $protokolle);
+        if ($f) {
+            $aus[(string) $abschnitt] = $f;
+        }
+    }
+    return $aus;
+}
+
 /**
  * Fuer jeden angesteckten Lesekopf einen Abschnitt anlegen, falls er fehlt.
  * Liefert true, wenn etwas geschrieben wurde.
