@@ -321,6 +321,19 @@ function sm_h_putzen()
 }
 
 /**
+ * Die Ansage "Zaehler antwortet nicht" (seit 2.8.15): an die Bruecke, nur wenn es etwas zu sagen geben kann: gestoert in jedem Lauf (die Frist rechnet die Bruecke), in Ordnung nur beim Wechsel.
+ * Der Merker liegt im Speicher; nach einem Neustart fragt der erste Lauf einmal nach. Die Bruecke legt nur hin, gesprochen wird in einem eigenen Vorgang.
+ */
+function sm_h_ansage($gestoert)
+{
+    global $SM_SHM, $sm_ordner;
+    $f = $SM_SHM . '/ansage_merk';
+    if (!$gestoert && (string) @file_get_contents($f) === '0') { return; }
+    @file_put_contents($f, $gestoert ? '1' : '0');
+    @exec('php ' . escapeshellarg(__DIR__ . '/sm_ansage.php') . ' zaehler ' . ($gestoert ? '1' : '0') . ' ' . escapeshellarg((string) $sm_ordner) . " '' 900 >/dev/null 2>&1");
+}
+
+/**
  * Gruppe 35 (2.8.13, E-E4): das Lebenszeichen ueber das UDP-Relais des
  * MQTT-Gateways - status/ok (jeder eingeschaltete Lesekopf juenger als die
  * Altersgrenze, dieselbe Rechnung wie Endpunkt und healthcheck), status/ts,
@@ -337,6 +350,7 @@ function sm_h_lebenszeichen($cfg, $vz_an)
     foreach ($lage as $l) {
         if (!$l['ok']) { $ok = 0; }
     }
+    if ($lage) { sm_h_ansage($ok === 0); }     // nur mit eingerichtetem Lesekopf
     $stand = smg_zaehler_weiter($SM_SHM . '/lebenszeichen');
     $udp = smg_mqtt_udpport($sm_home);
     if ($udp <= 0) {

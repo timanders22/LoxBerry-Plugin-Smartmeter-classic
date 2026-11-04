@@ -188,6 +188,19 @@ $sm_legacy = sm_legacy_read();
  * traegt das Zugriffstoken; ohne es stuenden nach dem Zurueckspielen alle
  * Felder richtig, und der Miniserver bekaeme weiterhin 403.
  * ---------------------------------------------------------------- */
+/* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+if ($sm_ist_post && isset($_POST['ansage_test'])) {
+    list($sm_at, $sm_ag) = sm_ansage_test();
+    if ($sm_at) { $sm_meldung = sm_e(sm_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $sm_fehler[] = sm_e(sm_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $sm_ag); }
+    $sm_tab = 'tab-settings';
+}
+if ($sm_ist_post && isset($_POST['ansage_speichern'])) {
+    list($sm_ao, $sm_af, $sm_ah) = sm_ansage_post($_POST);
+    if ($sm_af) { foreach ($sm_af as $sm_ax) { $sm_fehler[] = sm_e($sm_ax); } }
+    elseif ($sm_ao) { $sm_meldung = sm_e(trim(sm_t('ANSAGEPLUGIN.M_OK') . ' ' . implode(' ', $sm_ah))); }
+    else { $sm_fehler[] = sm_e(sm_t('ANSAGEPLUGIN.M_FEHL')); }
+    $sm_tab = 'tab-settings';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sichern'])) {
     $sm_txt = sm_sichern_text();
     sm_log('Einstellungen gesichert (Download).');
@@ -828,6 +841,9 @@ if (class_exists('LBWeb')) {
 .sm-wrap h2 { color: #4f7d17; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px;
   font-size: 1.15em; margin: 22px 0 8px; }
 .sm-small { font-size: 0.88em; color: #555; }
+.sm-feld { margin: 10px 0; }
+.sm-feld > label:first-child { display: block; font-weight: 600; margin-bottom: 4px; }
+.sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; }
 .sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
     padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-mono { font-family: monospace; }
@@ -1190,6 +1206,7 @@ if (!$gefunden && $sm_vz_dev !== '') {
 </div>
 </form>
 
+<?php echo sm_ansage_form_html(sm_fmt() . '<input data-role="none" type="hidden" name="activetab" value="tab-settings">'); ?>
 <h2><?php echo sm_t('EINST.H_SICHERUNG'); ?></h2>
 <div class="sm-small"><?php echo sm_t('EINST.SICHERUNG_HINT'); ?></div>
 <div class="sm-alert sm-warn"><?php echo sm_t('EINST.SICHERUNG_GEHEIM'); ?></div>

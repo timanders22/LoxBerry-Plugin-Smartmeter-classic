@@ -172,7 +172,9 @@ if ($sm_soll !== '') {
  * Ort und Stelle begruendet: bei diesem Plugin ist das Token FREIWILLIG. Ein
  * leeres Soll ist hier kein Fehler, sondern eine Einstellung - die Antwort
  * sagt es trotzdem, statt zu schweigen. */
-if (isset($_GET['selftest'])) {
+/* 2.8.15 (Nachzug 01.11.2026, wie Renault NG 2.1.23): !empty statt isset - bis 2.8.14 galt auch ?selftest=0 und ?selftest= als Selbsttest,
+ * und eine Adresse mit diesem Anhang tat nie etwas anderes. */
+if (!empty($_GET['selftest'])) {
     if ($sm_soll === '') {
         echo "SELFTEST;OK=1;TOKEN=OFFEN\n";
         echo "#EOF\n";
