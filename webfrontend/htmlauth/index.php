@@ -204,6 +204,7 @@ if ($sm_ist_post && isset($_POST['ansage_speichern'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sichern'])) {
     $sm_txt = sm_sichern_text();
     sm_log('Einstellungen gesichert (Download).');
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="smartmeter-classic_einstellungen.txt"');
     header('Content-Length: ' . strlen($sm_txt));
@@ -219,6 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ko_csv'])) {
     $sm_kh = sm_paths()['datadir'] . '/kosten_historie.csv';
     $sm_txt = is_readable($sm_kh) ? (string) @file_get_contents($sm_kh)
             : "datum;kwh;ct;eur;stunden;offen;ohne_preis;stunde23;zeilen\n";
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="smartmeter-classic_kosten_historie.csv"');
     header('Content-Length: ' . strlen($sm_txt));
