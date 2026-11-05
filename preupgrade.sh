@@ -75,6 +75,16 @@ ARGV6=$6 # Sechstes Argument ist der Arbeitsordner des Installers (absolut)
 # als 3600 s ist; postroot.sh entfernt sie ueber einen trap, uninstall
 # raeumt sie weg.
 # ===========================================================================
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$ARGV3" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$ARGV3' - nichts angefasst."; exit 2 ;;
+esac
+# 05.11.2026: ohne Wurzel wird nichts gesichert; Rueckgabewert 2, sonst liefe der Purge weiter.
+if [ -z "$ARGV5" ] || [ ! -d "$ARGV5/config/plugins" ] || [ ! -d "$ARGV5/data/plugins" ] \
+   || [ ! -f "$ARGV5/config/system/general.json" ]; then
+    echo "<FAIL> Kein LoxBerry-Wurzelverzeichnis erkannt ('$ARGV5') - nichts gesichert, das Update wird abgebrochen."
+    exit 2
+fi
 if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
 	SM_MARKE="$ARGV5/data/plugins/$ARGV3.upgrade_laeuft"
 	mkdir -p "$ARGV5/data/plugins" 2>/dev/null
@@ -86,9 +96,11 @@ if [ -n "$ARGV3" ] && [ -n "$ARGV5" ]; then
 	if [ -s "$SM_MARKE" ]; then
 		echo "<OK> Der Start von vzlogger ist bis zum Ende der Installation gesperrt."
 	else
-		echo "<WARNING> Die Marke $SM_MARKE liess sich nicht anlegen."
-		echo "<WARNING> Faellt ein Systemstart in die Installation, kann ein zweites"
-		echo "<WARNING> vzlogger neben dem laufenden starten."
+		# 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+		rm -f "$SM_MARKE" 2>/dev/null
+		echo "<FAIL> Die Marke $SM_MARKE liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+		echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+		exit 2
 	fi
 fi
 
@@ -216,6 +228,37 @@ HIST_SICHER="$ARGV5/data/plugins/$ARGV3.upgrade_sicherung"
 # nichts gesichert: die aeltere, vollstaendigere Sicherung hat Vorrang vor
 # dem duennen Stand von jetzt, und postupgrade.sh spielt sie zurueck.
 # ---------------------------------------------------------------------------
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if ( : > "$zs_neu" ) 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_sichere() {   # $1 Quelle, $2 Ziel: fehlt die Datei oder ist sie leer, ist ein Fehlschlag keiner
+    [ -f "$1" ] || return 0
+    zs_hinlegen "$1" "$2" && return 0
+    [ -s "$1" ] || return 1
+    echo "<WARNING> $(basename "$1") liess sich nicht sichern ($2)."
+    ZS_FEHL="$ZS_FEHL $(basename "$1")"
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    rm -f "$ARGV5/data/plugins/$ARGV3.upgrade_laeuft" 2>/dev/null
+    exit 2
+}
 SM_SICH_OK=1
 if [ -d "$HIST_SICHER" ] && [ -n "$(ls -A "$HIST_SICHER" 2>/dev/null)" ]; then
 	SM_BEISEITE="$HIST_SICHER.liegengeblieben-$(date '+%Y%m%d-%H%M%S' 2>/dev/null)"
@@ -226,6 +269,7 @@ if [ -d "$HIST_SICHER" ] && [ -n "$(ls -A "$HIST_SICHER" 2>/dev/null)" ]; then
 		echo "<WARNING> Bitte hineinsehen und den Ordner danach von Hand entfernen."
 	else
 		SM_SICH_OK=0
+        ZS_FEHL="$ZS_FEHL Historie"
 		echo "<WARNING> Unter $HIST_SICHER liegt eine Sicherung aus einem frueheren,"
 		echo "<WARNING> nicht abgeschlossenen Upgrade, und sie liess sich nicht"
 		echo "<WARNING> beiseite legen. Sie wird nicht ueberschrieben; in diesem Lauf"
@@ -242,10 +286,11 @@ if [ "$SM_SICH_OK" = "1" ]; then
 	# kosten.json die Preise des Vortags; ein Update kurz vor Mitternacht verloere sonst einen Tag.
 	for HIST_F in historie.csv historie_merker.json abgleich.json kosten.json kosten_historie.csv; do
 		if [ -f "$HIST_QUELLE/$HIST_F" ]; then
-			if cp -p "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F" 2>/dev/null; then
+			if cp -p "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F" 2>/dev/null && cmp -s "$HIST_QUELLE/$HIST_F" "$HIST_SICHER/$HIST_F"; then
 				HIST_N=$((HIST_N + 1))
 			else
 				echo "<WARNING> $HIST_F liess sich nicht sichern - die Historie geht beim Update verloren."
+                ZS_FEHL="$ZS_FEHL $HIST_F"
 			fi
 		fi
 	done
@@ -338,7 +383,7 @@ echo "<INFO> Backing up existing config files"
 # bis dahin "<OK> Konfiguration gesichert" - gesichert war nichts. Gemessen
 # am 17.09.2026 (messe_nebenbefunde.sh, Fall P1c). Gemeldet wird jetzt, was
 # danach wirklich in der Sicherung liegt.
-if cp -a "$ARGV5/config/plugins/$ARGV3/." "$SICHERUNG/config/"; then
+if cp -a "$ARGV5/config/plugins/$ARGV3/." "$SICHERUNG/config/" && diff -rq "$ARGV5/config/plugins/$ARGV3" "$SICHERUNG/config" >/dev/null 2>&1; then
 	if [ -s "$SICHERUNG/config/smartmeter.cfg" ]; then
 		echo "<OK> Konfiguration gesichert nach $SICHERUNG/config"
 	else
@@ -349,6 +394,7 @@ if cp -a "$ARGV5/config/plugins/$ARGV3/." "$SICHERUNG/config/"; then
 	fi
 else
 	echo "<WARNING> Die Konfiguration liess sich NICHT sichern."
+    ZS_FEHL="$ZS_FEHL Konfiguration"
 	echo "<WARNING> Nach dem Update bitte die Einstellungen im Reiter"
 	echo "<WARNING> Smartmeter (klassisch) nachsehen."
 fi
@@ -407,12 +453,12 @@ netz_zweitschrift() {
         return 0
     fi
     tmp="$zweit.tmp.$$"
-    if cp "$quelle" "$tmp" 2>/dev/null && chmod 0600 "$tmp" 2>/dev/null \
-       && grep -qF -- "$2" "$tmp" 2>/dev/null && mv -f "$tmp" "$zweit" 2>/dev/null; then
+    if zs_hinlegen "$quelle" "$zweit"; then
         echo "<OK> Zweitschrift $1 angelegt."
     else
         rm -f "$tmp" 2>/dev/null
         echo "<WARNING> Die Zweitschrift $1 liess sich nicht anlegen."
+        ZS_FEHL="$ZS_FEHL $1"
     fi
 }
 
@@ -423,4 +469,5 @@ netz_zweitschrift smartmeter.cfg "[MAIN]"
 netz_zweitschrift vzlogger.json '"enabled"'
 netz_zweitschrift vzlogger.conf '"meters"'
 
+zs_schluss
 exit 0

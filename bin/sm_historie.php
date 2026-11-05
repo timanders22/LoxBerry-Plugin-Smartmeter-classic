@@ -482,6 +482,7 @@ $sm_merker = sm_h_merker_lesen();
 $sm_jetzt  = time();
 $sm_stunde_jetzt = $sm_jetzt - ($sm_jetzt % 3600);
 $sm_geaendert = false;
+$sm_fertig = array();   // 2.8.17 (SM-1): auch die beim Stundenwechsel in der Schleife geretteten Stunden
 
 $sm_dateien = is_dir($SM_SHM) ? glob($SM_SHM . '/*.data') : array();
 if ($sm_dateien === false) { $sm_dateien = array(); }
@@ -583,6 +584,13 @@ foreach ($sm_dateien as $sm_datei) {
         $sm_k = $sm_serial;
         if (!isset($sm_merker['offen'][$sm_k])
             || (int) $sm_merker['offen'][$sm_k]['stunde'] !== $sm_stunde) {
+            /* 2.8.17 (SM-1): die offene Vorstunde erst retten. Bis 2.8.16 wurde sie hier ersetzt, BEVOR der
+             * Abschluss unten sie anhaengen konnte - sobald der nebenlaeufige Leser zur vollen Stunde schneller
+             * war oder ein Lauf ausfiel, war die ganze Stunde still weg (gemessen: 500 Wh, keine Zeile). */
+            if (isset($sm_merker['offen'][$sm_k])
+                && (int) $sm_merker['offen'][$sm_k]['stunde'] < $sm_stunde) {
+                $sm_fertig[] = sm_h_zeile($sm_merker['offen'][$sm_k]);
+            }
             $sm_merker['offen'][$sm_k] = array(
                 'stunde' => $sm_stunde, 'serial' => $sm_serial,
                 'bezug' => 0.0, 'einspeisung' => 0.0,
@@ -605,7 +613,6 @@ foreach ($sm_dateien as $sm_datei) {
  *
  * Eine Stunde ist abgeschlossen, sobald die laufende eine andere ist. Sie
  * wird EINMAL angehaengt und danach aus dem Merker entfernt. */
-$sm_fertig = array();
 foreach ($sm_merker['offen'] as $sm_k => $sm_o) {
     if ((int) $sm_o['stunde'] >= $sm_stunde_jetzt) { continue; }
     $sm_fertig[] = sm_h_zeile($sm_o);
