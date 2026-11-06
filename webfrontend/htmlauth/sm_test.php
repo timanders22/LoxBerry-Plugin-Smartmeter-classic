@@ -708,6 +708,7 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_DIENSTDATEI'), sm_dienstdatei_probe());
     $add(sm_t('PRUEF.Z_SPEICHER'), sm_speicher_probe());
     $add(sm_t('PRUEF.Z_HAUS_ENERGIE'), sm_haus_energie_probe());
+    $add(sm_t('PRUEF.Z_HAUS_FREI'), sm_haus_frei_probe());
     $add(sm_t('PRUEF.Z_REITER'), sm_reiter_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_SMACTIVE'), sm_smactive_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_FORM'), sm_formularprobe($datei));
@@ -886,6 +887,20 @@ function sm_speicher_probe()
 function sm_haus_energie_probe()
 {
     list($z, $t) = sm_he_lage();
+    if ($z === '' || $z === 'warte') {
+        return array(2, $t);
+    }
+    return array($z === 'ok' ? 1 : 0, $t);
+}
+
+/**
+ * 2.8.19: haus/energie/frei_w - mit welcher Quelle (netz / netz+speicher) oder warum gerade nicht.
+ * Aus und vor dem ersten Minutenlauf = Strich (2). Zurueckgehalten (Akku war da und schweigt) oder
+ * ohne Zaehlerwert = Kreuz (0): die Abnehmer fallen dann auf ueberschuss_w/bezug_w zurueck.
+ */
+function sm_haus_frei_probe()
+{
+    list($z, $t) = sm_he_frei_lage();
     if ($z === '' || $z === 'warte') {
         return array(2, $t);
     }

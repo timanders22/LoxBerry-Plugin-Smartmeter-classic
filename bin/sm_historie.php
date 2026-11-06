@@ -380,13 +380,15 @@ function sm_h_lebenszeichen($cfg, $vz_an)
  */
 function sm_h_haus_energie($cfg, $vz_an)
 {
-    global $SM_SHM, $SM_VZJSON, $SM_FELDER, $sm_home;
+    global $SM_SHM, $SM_VZJSON, $SM_FELDER, $SM_DATA, $sm_home;
     $vor = is_file(smg_he_merker_datei($SM_SHM))
          ? json_decode((string) @file_get_contents(smg_he_merker_datei($SM_SHM)), true) : null;
     $vor_grund = (is_array($vor) && isset($vor['grund'])) ? (string) $vor['grund'] : '';
     $vzd = $vz_an ? smg_vz_json($SM_VZJSON) : null;
     $grenze = smg_alter_grenze(smg_wert($cfg, 'MAIN', 'CRON', '5'), $vz_an);
-    $m = smg_he_lauf($sm_home, $SM_SHM, $cfg, $vzd, smg_katalog($SM_FELDER), $grenze);
+    $vor_frei = (is_array($vor) && isset($vor['frei']['grund'])) ? (string) $vor['frei']['grund'] : '';
+    // 2.8.19: der Datenordner traegt den Merker "Speicher gesehen" (frei_w).
+    $m = smg_he_lauf($sm_home, $SM_SHM, $cfg, $vzd, smg_katalog($SM_FELDER), $grenze, $SM_DATA);
     if ($m['gesendet'] < 0) {
         sm_h_log('haus/energie: der Broker war nicht erreichbar - nichts gesendet.', 'WARN');
     } elseif ($m['gesendet'] < $m['soll']) {
@@ -396,6 +398,14 @@ function sm_h_haus_energie($cfg, $vz_an)
         sm_h_log('haus/energie: Lage jetzt "' . $m['grund'] . '"'
             . ($m['quelle'] !== '' ? ' (Quelle OBIS ' . $m['quelle'] . ')' : '')
             . ($vor_grund !== '' ? ', vorher "' . $vor_grund . '"' : '') . '.', $m['ok'] ? 'OK' : 'WARN');
+    }
+    // 2.8.19: frei_w - ebenfalls nur der Wechsel. speicher_still ist die Lage, in der frei_w mit
+    // Absicht fehlt (ein Akku war da und schweigt jetzt); die Abnehmer fallen dann zurueck.
+    $frei = isset($m['frei']['grund']) ? (string) $m['frei']['grund'] : '';
+    if ($m['ok'] && $frei !== $vor_frei) {
+        sm_h_log('haus/energie/frei_w: Lage jetzt "' . $frei . '"'
+            . ($frei === 'speicher_still' ? ' (haus/speicher: ' . $m['frei']['speicher_grund'] . ') - frei_w wird zurueckgehalten' : '')
+            . ($vor_frei !== '' ? ', vorher "' . $vor_frei . '"' : '') . '.', $frei === 'speicher_still' ? 'WARN' : 'OK');
     }
 }
 

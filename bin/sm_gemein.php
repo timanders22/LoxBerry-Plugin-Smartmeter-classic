@@ -1245,6 +1245,8 @@ function smg_he_themen()
         'netz_w'          => array('W',   'MQ.B_HE_NETZ'),
         'bezug_w'         => array('W',   'MQ.B_HE_BEZUG'),
         'ueberschuss_w'   => array('W',   'MQ.B_HE_UEBERSCHUSS'),
+        'frei_w'          => array('W',   'MQ.B_HE_FREI'),
+        'frei_quelle'     => array('',    'MQ.B_HE_FREI_QUELLE'),
         'bezug_kwh'       => array('kWh', 'MQ.B_HE_BEZUG_KWH'),
         'einspeisung_kwh' => array('kWh', 'MQ.B_HE_EINSP_KWH'),
         'stand'           => array('s',   'MQ.B_HE_STAND'),
@@ -1450,6 +1452,151 @@ function smg_he_lage($shm, $cfg, $vzd, array $katalog, $jetzt, $grenze)
     return $l;
 }
 
+/* ==================================================================
+ * 2.8.19: haus/energie/frei_w und frei_quelle - "Sonnenstrom uebrig?"
+ *
+ * Der Einwand, der dazu fuehrte: ein Abnehmer (Midea2Lox, Vorkuehlen)
+ * schaute auf die EINSPEISUNG. Laedt ein Hausakku, ist die Einspeisung 0,
+ * obwohl Sonnenstrom uebrig ist - und entlaedt er, um ein Geraet zu decken,
+ * ist der NETZBEZUG 0, obwohl das Geraet auf Akkukosten laeuft. Beides sieht
+ * ein Netzzaehler nicht. frei_w rechnet den Akku dazu:
+ *
+ *     frei_w = -netz_w + akku_w      (W, ganz; + = Sonnenstrom uebrig,
+ *                                     - = das Haus deckt sich aus Netz oder Akku)
+ *     akku_w = +leistung bei richtung 1 (laedt), -leistung bei 2 (entlaedt), 0 bei 0
+ *
+ * Woher der Akku kommt: haus/speicher (Anbieter z. B. Marstek Venus E), ueber
+ * den abgekoppelten Leser in sm_abgleich.php --haus-lesen, der die Lage nach
+ * /dev/shm/<ordner>/speicher_lage.json legt. Gueltig ist sie nach dem Vertrag
+ * von haus/speicher: zaehler kam LIVE, die Lage ist hoechstens 120 s alt,
+ * richtung ist 0/1/2 (-1 = ohne Aussage), bei 1/2 ist leistung eine Zahl >= 0.
+ *
+ * Die drei Lagen:
+ *   - Speicher gueltig                -> frei_w mit Akku, frei_quelle "netz+speicher"
+ *   - nie ein gueltiger Speicher       -> frei_w = -netz_w, frei_quelle "netz"
+ *     gesehen (seit der Installation)
+ *   - Speicher war gueltig, ist jetzt  -> frei_w wird NICHT gesendet. Sonst
+ *     still oder ungueltig                verschwaende ein entladender Akku aus der
+ *                                         Rechnung, und ein Abnehmer hielte
+ *                                         Akkustrom fuer Sonnenstrom.
+ * "Speicher gesehen" steht dauerhaft im Datenordner (haus_speicher_gesehen,
+ * reist beim Update mit), damit ein Neustart nicht auf "netz" zurueckfaellt.
+ * Vergessen nur von Hand (Knopf im Reiter MQTT).
+ *
+ * GRENZE: Wallbox, Waermepumpe und andere Grossverbraucher stecken im
+ * Hausverbrauch und werden NICHT herausgerechnet - laedt das Auto mit 11 kW,
+ * ist frei_w entsprechend kleiner. Ebenso nicht: ein zweiter Akku ohne
+ * haus/speicher-Anbieter. Die Akku-Lage ist bis etwa eine Minute aelter als
+ * die Zaehlerwerte (Leser im Minutentakt).
+ * ================================================================== */
+
+/** Wie alt die Lage des Speicherlesers hoechstens sein darf (s) - wie die Frist des Vertrags. */
+function smg_frei_frist()
+{
+    return 120;
+}
+
+/** Die Lage des Speicherlesers (speicher_lage.json) oder null. */
+function smg_speicher_lage_lesen($shm)
+{
+    $d = @json_decode((string) @file_get_contents($shm . '/speicher_lage.json'), true);
+    return is_array($d) ? $d : null;
+}
+
+/**
+ * Ist diese Lage ein gueltiger Speicher? Rein, ohne Datei (das Probeskript ruft
+ * sie direkt). Rueckgabe array(gueltig, akku_w oder null, Grund):
+ *   ok | keine_lage | quelle_schweigt | zu_alt | ohne_aussage | leistung_fehlt
+ */
+function smg_speicher_gueltig($lage, $jetzt)
+{
+    if (!is_array($lage) || !isset($lage['ts'])) {
+        return array(false, null, 'keine_lage');
+    }
+    if (empty($lage['live'])) {
+        return array(false, null, 'quelle_schweigt');
+    }
+    $alter = (int) $jetzt - (int) $lage['ts'];
+    if ($alter < 0 || $alter > smg_frei_frist()) {
+        return array(false, null, 'zu_alt');
+    }
+    $r = isset($lage['richtung']) && is_numeric($lage['richtung']) ? (int) $lage['richtung'] : -1;
+    if (!in_array($r, array(0, 1, 2), true)) {
+        return array(false, null, 'ohne_aussage');
+    }
+    if ($r === 0) {
+        return array(true, 0, 'ok');
+    }
+    if (!isset($lage['leistung']) || !is_numeric($lage['leistung']) || (float) $lage['leistung'] < 0
+        || (float) $lage['leistung'] > 1000000.0) {
+        return array(false, null, 'leistung_fehlt');
+    }
+    $p = (int) round((float) $lage['leistung']);
+    return array(true, ($r === 1) ? $p : -$p, 'ok');
+}
+
+/**
+ * Die Rechnung von frei_w - rein. $netz_w: Text aus smg_he_rechnen() oder null.
+ * Rueckgabe: frei_w/frei_quelle (Text oder null = nicht senden), grund
+ * (netz+speicher | netz | kein_netz | speicher_still), speicher_grund, akku_w,
+ * gesehen (der neue Zustand "Speicher gesehen").
+ */
+function smg_he_frei($netz_w, $lage, $jetzt, $gesehen)
+{
+    list($gueltig, $akku, $sg) = smg_speicher_gueltig($lage, $jetzt);
+    $aus = array('frei_w' => null, 'frei_quelle' => null, 'grund' => '', 'speicher_grund' => $sg,
+                 'akku_w' => $akku, 'gesehen' => ($gesehen || $gueltig));
+    if ($netz_w === null || !is_numeric($netz_w)) {
+        $aus['grund'] = 'kein_netz';
+        return $aus;
+    }
+    $n = (int) $netz_w;
+    if ($gueltig) {
+        $aus['frei_w'] = (string) (-$n + (int) $akku);
+        $aus['frei_quelle'] = 'netz+speicher';
+        $aus['grund'] = 'netz+speicher';
+    } elseif (!$gesehen) {
+        $aus['frei_w'] = (string) (-$n);
+        $aus['frei_quelle'] = 'netz';
+        $aus['grund'] = 'netz';
+    } else {
+        $aus['grund'] = 'speicher_still';
+    }
+    return $aus;
+}
+
+/** Die Datei "Speicher gesehen" im Datenordner (Unix-Sekunden des ersten gueltigen Speichers). */
+function smg_speicher_gesehen_datei($data)
+{
+    return rtrim((string) $data, '/') . '/haus_speicher_gesehen';
+}
+
+/** Seit wann ein gueltiger Speicher gesehen wurde - 0 = nie (oder kein Datenordner). */
+function smg_speicher_gesehen($data)
+{
+    if ((string) $data === '') { return 0; }
+    $f = smg_speicher_gesehen_datei($data);
+    $t = is_file($f) ? trim((string) @file_get_contents($f)) : '';
+    // Eine leere oder kaputte Datei heisst trotzdem "gesehen": lieber frei_w zurueckhalten
+    // als einen entladenden Akku ueberhoeren.
+    if ($t === '') { return is_file($f) ? 1 : 0; }
+    return preg_match('/\A[0-9]{1,12}\z/', $t) ? max(1, (int) $t) : 1;
+}
+
+/** "Speicher gesehen" dauerhaft merken (unteilbar). Rueckgabe: true = steht in der Datei. */
+function smg_speicher_gesehen_merken($data, $jetzt)
+{
+    if ((string) $data === '' || !is_dir($data)) { return false; }
+    $f = smg_speicher_gesehen_datei($data);
+    if (is_file($f)) { return true; }
+    $tmp = $f . '.tmp.' . getmypid();
+    if (@file_put_contents($tmp, (string) (int) $jetzt . "\n") !== false && @rename($tmp, $f)) {
+        return true;
+    }
+    @unlink($tmp);
+    return false;
+}
+
 /**
  * Fluechtig (QoS 0, ohne Retain) direkt am Broker veroeffentlichen, in der
  * Reihenfolge von $tw. Rueckgabe: Zahl der geschriebenen Pakete, -1 = keine
@@ -1484,7 +1631,8 @@ function smg_he_merker_datei($shm)
 function smg_he_folge(array $l, $zaehler)
 {
     $tw = array();
-    foreach (array('netz_w', 'bezug_w', 'ueberschuss_w', 'bezug_kwh', 'einspeisung_kwh', 'stand') as $k) {
+    // 2.8.19: frei_w/frei_quelle stehen nur in werte, wenn sie gesendet werden duerfen (smg_he_lauf).
+    foreach (array('netz_w', 'bezug_w', 'ueberschuss_w', 'frei_w', 'frei_quelle', 'bezug_kwh', 'einspeisung_kwh', 'stand') as $k) {
         if (isset($l['werte'][$k])) { $tw['haus/energie/' . $k] = (string) $l['werte'][$k]; }
     }
     $tw['haus/energie/ok'] = (string) (int) $l['ok'];
@@ -1498,14 +1646,31 @@ function smg_he_folge(array $l, $zaehler)
  * zaehler gehen in JEDER Minute hinaus, auch wenn der Zaehler schweigt.
  * Rueckgabe: der Merker.
  */
-function smg_he_lauf($home, $shm, $cfg, $vzd, array $katalog, $grenze)
+function smg_he_lauf($home, $shm, $cfg, $vzd, array $katalog, $grenze, $data = '')
 {
-    $l = smg_he_lage($shm, $cfg, $vzd, $katalog, time(), $grenze);
+    $jetzt = time();
+    $l = smg_he_lage($shm, $cfg, $vzd, $katalog, $jetzt, $grenze);
+    /* 2.8.19: frei_w - nur bei ok = 1 (sonst gehen ohnehin keine Werte hinaus). "Speicher gesehen"
+     * wird auch gemerkt, wenn der Zaehler gerade schweigt: ein gueltiger Speicher ist ein Befund
+     * ueber das Haus, nicht ueber den Zaehler. */
+    $vorher = smg_speicher_gesehen($data) > 0;
+    $f = smg_he_frei(($l['ok'] && isset($l['werte']['netz_w'])) ? $l['werte']['netz_w'] : null,
+                     smg_speicher_lage_lesen($shm), $jetzt, $vorher);
+    if ($f['gesehen'] && !$vorher) {
+        smg_speicher_gesehen_merken($data, $jetzt);
+    }
+    if ($l['ok'] && $f['frei_w'] !== null) {
+        // Vor bezug_kwh einsortieren: smg_he_folge() nimmt die feste Reihenfolge.
+        $l['werte']['frei_w'] = $f['frei_w'];
+        $l['werte']['frei_quelle'] = $f['frei_quelle'];
+    }
     $tw = smg_he_folge($l, smg_zaehler_weiter($shm . '/haus_energie_zaehler'));
     $n = smg_mq_senden($home, $tw);
     $m = array('ts' => time(), 'gesendet' => $n, 'soll' => count($tw), 'ok' => $l['ok'],
                'grund' => $l['grund'], 'kopf' => $l['kopf'], 'alter' => $l['alter'],
-               'quelle' => $l['quelle'], 'werte' => $l['werte']);
+               'quelle' => $l['quelle'], 'werte' => $l['werte'],
+               'frei' => array('grund' => $l['ok'] ? $f['grund'] : 'kein_netz', 'speicher_grund' => $f['speicher_grund'],
+                               'akku_w' => $f['akku_w'], 'gesehen' => smg_speicher_gesehen($data)));
     $tmp = smg_he_merker_datei($shm) . '.tmp.' . getmypid();
     if (@file_put_contents($tmp, (string) json_encode($m)) !== false) {
         if (!@rename($tmp, smg_he_merker_datei($shm))) { @unlink($tmp); }

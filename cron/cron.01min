@@ -67,8 +67,9 @@ fi
 # Gruppe 35 (2.8.13, Entscheidung 5): der Abnehmer haus/speicher - ein abgekoppelter Leser, der bis
 # 65 s auf ein LIVE-Lebenszeichen des Anbieters wartet. Er laeuft DOPPELT abgekoppelt (die aeussere
 # Unterschale endet sofort), damit das "wait" darunter nie auf ihn wartet; Deskriptoren 8 und 9 zu
-# (Gedaechtnis sperre-vererbt-sich-an-kinder). Ob er etwas tut (Haken SPEICHER_EIN, eine Regel aktiv,
-# keine Upgrade-Marke) und dass hoechstens einer laeuft (haus.lock), entscheidet sm_abgleich.php selbst.
+# (Gedaechtnis sperre-vererbt-sich-an-kinder). Ob er etwas tut (Haken SPEICHER_EIN und eine Regel aktiv,
+# oder seit 2.8.19 HAUS_ENERGIE_EIN fuer haus/energie/frei_w; keine Upgrade-Marke) und dass hoechstens
+# einer laeuft (haus.lock), entscheidet sm_abgleich.php selbst.
 if [ -x "$BIN/sm_abgleich.php" ]; then
     ( ( "$BIN/sm_abgleich.php" --haus-lesen 2>&1 >/dev/null </dev/null | logger -t smartmeter-classic ) 8<&- 9<&- & )
 fi

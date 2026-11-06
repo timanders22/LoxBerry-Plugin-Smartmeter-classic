@@ -3341,7 +3341,8 @@ function sm_mqtt_themen()
      * (Pruefung der Sprachschluessel); Reihenfolge und Einheiten aus smg_he_themen(). */
     if ($legacy['SENDMQTT'] === '1' && $legacy['HAUS_ENERGIE_EIN'] === '1' && function_exists('smg_he_themen')) {
         $sm_he_b = array('netz_w' => sm_t('MQ.B_HE_NETZ'), 'bezug_w' => sm_t('MQ.B_HE_BEZUG'),
-                         'ueberschuss_w' => sm_t('MQ.B_HE_UEBERSCHUSS'), 'bezug_kwh' => sm_t('MQ.B_HE_BEZUG_KWH'),
+                         'ueberschuss_w' => sm_t('MQ.B_HE_UEBERSCHUSS'), 'frei_w' => sm_t('MQ.B_HE_FREI'),
+                         'frei_quelle' => sm_t('MQ.B_HE_FREI_QUELLE'), 'bezug_kwh' => sm_t('MQ.B_HE_BEZUG_KWH'),
                          'einspeisung_kwh' => sm_t('MQ.B_HE_EINSP_KWH'), 'stand' => sm_t('MQ.B_HE_STAND'),
                          'ok' => sm_t('MQ.B_HE_OK'), 'zaehler' => sm_t('MQ.B_HE_ZAEHLER'));
         $z = array();
@@ -3397,6 +3398,47 @@ function sm_he_lage()
     }
     return array('ok', sprintf(sm_t('MQ.HE_L_OK'), $wann, implode(', ', $teile),
                                isset($d['quelle']) ? (string) $d['quelle'] : '?'));
+}
+
+/**
+ * 2.8.19: die Lage von haus/energie/frei_w als array(Zustand: ok|warn|fail|warte|'', Text) - fuer
+ * den Reiter MQTT und die Pruefzeile im Reiter Test. Liest denselben Merker wie sm_he_lage().
+ * '' = Schalter aus; warte = noch kein Minutenlauf. fail = frei_w wird gerade NICHT gesendet,
+ * obwohl der Zaehler liefert (Akku war da und schweigt) - die Abnehmer fallen dann zurueck.
+ */
+function sm_he_frei_lage()
+{
+    list($z, $t) = sm_he_lage();
+    if ($z === '' || $z === 'warte') {
+        return array($z, $z === '' ? sm_t('MQ.HEF_L_AUS') : sm_t('MQ.HE_L_NOCH_NICHT'));
+    }
+    if ($z !== 'ok') {
+        return array($z === 'warn' ? 'warn' : 'fail', sm_t('MQ.HEF_L_OHNE_ZAEHLER'));
+    }
+    $d = json_decode((string) @file_get_contents(sm_paths()['shm'] . '/haus_energie.json'), true);
+    $f = (is_array($d) && isset($d['frei']) && is_array($d['frei'])) ? $d['frei'] : array();
+    $w = (is_array($d) && isset($d['werte']) && is_array($d['werte'])) ? $d['werte'] : array();
+    $grund = isset($f['grund']) ? (string) $f['grund'] : '';
+    $sg = isset($f['speicher_grund']) ? (string) $f['speicher_grund'] : '';
+    $sgruende = array('keine_lage' => sm_t('MQ.HEF_S_KEINE_LAGE'), 'quelle_schweigt' => sm_t('MQ.HEF_S_SCHWEIGT'),
+                      'zu_alt' => sm_t('MQ.HEF_S_ZU_ALT'), 'ohne_aussage' => sm_t('MQ.HEF_S_OHNE_AUSSAGE'),
+                      'leistung_fehlt' => sm_t('MQ.HEF_S_LEISTUNG'));
+    $sg_text = isset($sgruende[$sg]) ? $sgruende[$sg] : $sg;
+    if ($grund === 'netz+speicher' && isset($w['frei_w'])) {
+        return array('ok', sprintf(sm_t('MQ.HEF_L_SPEICHER'), $w['frei_w'], isset($w['netz_w']) ? $w['netz_w'] : '?',
+                                   isset($f['akku_w']) ? (int) $f['akku_w'] : 0));
+    }
+    if ($grund === 'netz' && isset($w['frei_w'])) {
+        return array('ok', sprintf(sm_t('MQ.HEF_L_NETZ'), $w['frei_w']));
+    }
+    if ($grund === 'speicher_still') {
+        $seit = (isset($f['gesehen']) && (int) $f['gesehen'] > 1) ? date('d.m.Y', (int) $f['gesehen']) : '?';
+        return array('fail', sprintf(sm_t('MQ.HEF_L_STILL'), $seit, $sg_text));
+    }
+    if ($grund === 'kein_netz') {
+        return array('fail', sm_t('MQ.HEF_L_KEIN_NETZ'));
+    }
+    return array('warte', sm_t('MQ.HE_L_NOCH_NICHT'));
 }
 
 /**

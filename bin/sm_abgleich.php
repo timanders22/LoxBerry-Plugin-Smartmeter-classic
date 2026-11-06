@@ -325,17 +325,27 @@ function sm_ab_speicher($cfg, $start_ts, $jetzt)
 }
 
 /**
- * Der abgekoppelte Leser (--haus-lesen). Laeuft nur mit SPEICHER_EIN = 1,
- * eingeschaltetem Abgleich und MQTT, wenn mindestens eine Regel gerade
- * aktiv ist, und nie waehrend einer Upgrade-Marke. Rueckgabe: Exitcode.
+ * Der abgekoppelte Leser (--haus-lesen). Laeuft, wenn ihn einer der beiden
+ * Abnehmer braucht, nur mit MQTT und nie waehrend einer Upgrade-Marke:
+ *   - der Fahrplan-Abgleich: SPEICHER_EIN = 1, Abgleich an, mindestens eine
+ *     Regel gerade aktiv (seit 2.8.13);
+ *   - 2.8.19: der Anbieter haus/energie (HAUS_ENERGIE_EIN = 1) fuer frei_w -
+ *     dann in JEDER Minute, denn ein entladender Akku muss auch ohne Regel
+ *     auffallen.
+ * Rueckgabe: Exitcode.
  */
 function sm_ab_haus_lesen_lauf($cfg)
 {
     global $SM_SHM, $SM_STAND, $sm_home, $sm_ordner, $sm_verbose;
-    if (smg_wert($cfg, 'ABGLEICH', 'AKTIV', '0') !== '1'
-        || smg_wert($cfg, 'ABGLEICH', 'SPEICHER_EIN', '0') !== '1'
-        || smg_wert($cfg, 'MAIN', 'SENDMQTT', '1') !== '1') {
-        if ($sm_verbose) { echo "haus/speicher: Haken aus (SPEICHER_EIN, ABGLEICH.AKTIV oder MQTT) - nichts zu lesen.\n"; }
+    if (smg_wert($cfg, 'MAIN', 'SENDMQTT', '1') !== '1') {
+        if ($sm_verbose) { echo "haus/speicher: MQTT aus - nichts zu lesen.\n"; }
+        return 0;
+    }
+    $fuer_frei = smg_wert($cfg, 'MAIN', 'HAUS_ENERGIE_EIN', '0') === '1';
+    $fuer_abgleich = smg_wert($cfg, 'ABGLEICH', 'AKTIV', '0') === '1'
+                  && smg_wert($cfg, 'ABGLEICH', 'SPEICHER_EIN', '0') === '1';
+    if (!$fuer_frei && !$fuer_abgleich) {
+        if ($sm_verbose) { echo "haus/speicher: Haken aus (HAUS_ENERGIE_EIN, SPEICHER_EIN oder ABGLEICH.AKTIV) - nichts zu lesen.\n"; }
         return 0;
     }
     $marke = $sm_home . '/data/plugins/' . $sm_ordner . '.upgrade_laeuft';
@@ -343,16 +353,18 @@ function sm_ab_haus_lesen_lauf($cfg)
         if ($sm_verbose) { echo "haus/speicher: Upgrade laeuft - nichts zu lesen.\n"; }
         return 0;
     }
-    $st = @json_decode((string) @file_get_contents($SM_STAND), true);
-    $aktiv = false;
-    if (is_array($st) && isset($st['regeln']) && is_array($st['regeln'])) {
-        foreach ($st['regeln'] as $r) {
-            if (is_array($r) && !empty($r['aktiv'])) { $aktiv = true; break; }
+    if (!$fuer_frei) {
+        $st = @json_decode((string) @file_get_contents($SM_STAND), true);
+        $aktiv = false;
+        if (is_array($st) && isset($st['regeln']) && is_array($st['regeln'])) {
+            foreach ($st['regeln'] as $r) {
+                if (is_array($r) && !empty($r['aktiv'])) { $aktiv = true; break; }
+            }
         }
-    }
-    if (!$aktiv) {
-        if ($sm_verbose) { echo "haus/speicher: keine Regel aktiv - nichts zu lesen.\n"; }
-        return 0;
+        if (!$aktiv) {
+            if ($sm_verbose) { echo "haus/speicher: keine Regel aktiv - nichts zu lesen.\n"; }
+            return 0;
+        }
     }
     $sperre = smg_sperre($SM_SHM, 'haus');
     if ($sperre === false) {

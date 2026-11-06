@@ -10,6 +10,13 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.19
+
+- **Sonnenstrom übrig – auch mit Hausakku (`haus/energie/frei_w`):** Ein Netzzähler allein täuscht, sobald ein Hausakku im Spiel ist: Lädt der Akku, fließt nichts ins Netz, obwohl Sonnenstrom übrig ist; entlädt er, holt das Haus nichts aus dem Netz, obwohl Akkustrom verbraucht wird. Mit eingeschaltetem `haus/energie` sendet das Plugin deshalb zusätzlich `haus/energie/frei_w` (ganze W, **+ = Sonnenstrom übrig, − = das Haus deckt sich aus Netz oder Akku**) und `haus/energie/frei_quelle` (`netz` oder `netz+speicher`). Gerechnet wird frei_w = −netz_w + Akku; den Akku liest das Plugin aus `haus/speicher` (+ Ladeleistung, − Entladeleistung). Beispiel: Akku lädt 3.000 W, Einspeisung 0 → `frei_w = 3000`; Akku entlädt 1.500 W, Bezug 0 → `frei_w = -1500`.
+- **Wenn der Akku schweigt:** Hat das Plugin nie einen Hausakku gesehen, ist frei_w einfach −netz_w (`frei_quelle = netz`). War ein Akku da und schweigt er jetzt, wird frei_w **nicht** gesendet – sonst würde ein entladender Akku übersehen. Das „Akku gesehen“ übersteht Neustart und Update; der Knopf „Hausakku vergessen“ im Reiter *MQTT* setzt es zurück, wenn der Akku abgebaut ist.
+- **Grenze:** Wallbox, Wärmepumpe und andere Großverbraucher werden nicht herausgerechnet.
+- **Reiter Test:** neue Prüfzeile „haus/energie/frei_w“ – womit gerechnet wird oder warum frei_w gerade fehlt.
+
 ## Neu in 2.8.18
 
 - **Werte für andere Plugins (`haus/energie`):** Neuer Schalter im Reiter *MQTT*, ab Werk **aus** (nur ein Anbieter je Haus). Eingeschaltet sendet das Plugin jede Minute direkt an den MQTT-Broker: `haus/energie/netz_w` (+ Bezug, − Einspeisung), `bezug_w`, `ueberschuss_w` (ganze W, nie negativ), `bezug_kwh` und `einspeisung_kwh` (Zählerstände 1.8.0/2.8.0), `stand` (Zeitpunkt der Messung), `ok` und `zaehler` (Lebenszeichen). Gerechnet wird aus 1.7.0/2.7.0, sonst aus 16.7.0 – nur was der Zähler wirklich liefert und dessen Einheit bekannt ist. Alle Themen flüchtig: fällt der Zähler aus, geht nur `ok = 0` hinaus, nie ein alter Wert; beim Ausschalten bleibt nichts im Broker stehen. Die PV-Erzeugung liefert ein Netzzähler nicht. Bei mehreren Leseköpfen wird der Zähler am Hausanschluss gewählt.

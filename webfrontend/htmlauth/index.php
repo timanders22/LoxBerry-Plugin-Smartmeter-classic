@@ -528,6 +528,21 @@ if (isset($_POST['he_speichern'])) {
     $sm_tab = 'tab-mqtt';
 }
 
+/* 2.8.19: "Speicher gesehen" vergessen - nur noetig, wenn der Hausakku dauerhaft weg ist. Bis dahin
+ * haelt das Plugin frei_w zurueck, sobald haus/speicher schweigt (ein entladender Akku darf nicht
+ * verschwinden). Danach rechnet es wieder ohne Akku (frei_quelle "netz"), bis ein Speicher wieder
+ * gueltig auftaucht. Der Merker liegt im Datenordner. */
+if (isset($_POST['he_vergessen'])) {
+    $sm_hv = sm_paths()['datadir'] . '/haus_speicher_gesehen';
+    if (!is_file($sm_hv) || @unlink($sm_hv)) {
+        $sm_meldung = sm_t('MQ.HEF_VERGESSEN_OK');
+        sm_log('haus/energie/frei_w: Hausakku vergessen (von Hand) - bis ein Speicher wieder gueltig ist, ohne Akku gerechnet.');
+    } else {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'), '<span class="sm-mono">haus_speicher_gesehen</span>');
+    }
+    $sm_tab = 'tab-mqtt';
+}
+
 if (isset($_POST['test']) && is_string($_POST['test'])) {
     list($sm_test_titel, $sm_test_text) = sm_test_ausfuehren($_POST['test'], $sm_cfg);
     $sm_tab = 'tab-test';
@@ -1439,6 +1454,7 @@ if ($sm_x3) { ?>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.MQ_SPEICHERN'); ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.HE_SPEICHERN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.HE_VERGESSEN'); ?></span>
 </div>
 <?php $sm_gw = sm_mqtt_gateway_info(); ?>
 <?php if ($sm_gw !== null && !$sm_gw['autostart']) { ?>
@@ -1523,6 +1539,25 @@ if ($sm_he_wahl !== '' && !$sm_he_gesehen) { ?>
 <?php list($sm_he_z, $sm_he_t) = sm_he_lage();
 if ($sm_he_z !== '') { ?>
 <div class="sm-alert <?php echo $sm_he_z === 'ok' ? 'sm-ok' : 'sm-warn'; ?>"><?php echo sm_e($sm_he_t); ?></div>
+<?php } ?>
+
+<h3><?php echo sm_t('MQ.H_HAUS_FREI'); ?></h3>
+<p class="sm-small"><?php echo sm_t('MQ.HEF_ERKLAERUNG'); ?></p>
+<div class="sm-alert sm-info"><?php echo sm_t('MQ.HEF_BEISPIEL'); ?></div>
+<p class="sm-small"><?php echo sm_t('MQ.HEF_GRENZE'); ?></p>
+<?php list($sm_hf_z, $sm_hf_t) = sm_he_frei_lage();
+if ($sm_hf_z !== '') { ?>
+<div class="sm-alert <?php echo $sm_hf_z === 'ok' ? 'sm-ok' : 'sm-warn'; ?>"><?php echo sm_e($sm_hf_t); ?></div>
+<?php }
+if (is_file(sm_paths()['datadir'] . '/haus_speicher_gesehen')) { ?>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<?php echo sm_fmt(); ?>
+<p class="sm-small"><?php echo sm_t('MQ.HEF_VERGESSEN_HINT'); ?></p>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="he_vergessen" value="1"><?php echo sm_t('MQ.HEF_VERGESSEN'); ?></button>
+</div>
+</form>
 <?php } ?>
 
 <h2><?php echo sm_t('MQ.H_ABO'); ?></h2>
