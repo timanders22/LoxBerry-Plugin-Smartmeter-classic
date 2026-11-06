@@ -10,6 +10,10 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.20
+
+- Gemeinsames Sprachmodul 1.4.2: Wird eine Ansage bewusst nicht gesprochen (gerade eben schon gesagt, gesperrt oder Ruhezeit), steht das im Protokoll jetzt so – und nicht mehr als Fehler.
+
 ## Neu in 2.8.19
 
 - **Sonnenstrom übrig – auch mit Hausakku (`haus/energie/frei_w`):** Ein Netzzähler allein täuscht, sobald ein Hausakku im Spiel ist: Lädt der Akku, fließt nichts ins Netz, obwohl Sonnenstrom übrig ist; entlädt er, holt das Haus nichts aus dem Netz, obwohl Akkustrom verbraucht wird. Mit eingeschaltetem `haus/energie` sendet das Plugin deshalb zusätzlich `haus/energie/frei_w` (ganze W, **+ = Sonnenstrom übrig, − = das Haus deckt sich aus Netz oder Akku**) und `haus/energie/frei_quelle` (`netz` oder `netz+speicher`). Gerechnet wird frei_w = −netz_w + Akku; den Akku liest das Plugin aus `haus/speicher` (+ Ladeleistung, − Entladeleistung). Beispiel: Akku lädt 3.000 W, Einspeisung 0 → `frei_w = 3000`; Akku entlädt 1.500 W, Bezug 0 → `frei_w = -1500`.
