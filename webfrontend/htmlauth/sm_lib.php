@@ -925,6 +925,10 @@ function sm_vorgaben()
          * (postupgrade.sh schreibt ihn; diese Vorgabe ist nur der Rueckfall). */
         'ENDPUNKT_EIN' => '1',
         'LASTGANG_EIN' => '1',
+        /* 2.8.18: Anbieter haus/energie (ab Werk aus - nur ein Anbieter je Haus) und der Lesekopf am
+         * Netzanschluss (leer = der einzige eingeschaltete). Fehlt der Schluessel, gilt aus. */
+        'HAUS_ENERGIE_EIN' => '0',
+        'HAUS_ENERGIE_ZAEHLER' => '',
     );
 }
 
@@ -2147,7 +2151,9 @@ function sm_sichern_zusatz()
  */
 function sm_sichern_spaetliste()
 {
-    return array('MAIN' => array('ENDPUNKT_EIN', 'LASTGANG_EIN'), 'ABGLEICH' => array('SPEICHER_EIN'));
+    // 2.8.18: HAUS_ENERGIE_* - eine aeltere Sicherung schaltet den Anbieter nie still aus.
+    return array('MAIN' => array('ENDPUNKT_EIN', 'LASTGANG_EIN', 'HAUS_ENERGIE_EIN', 'HAUS_ENERGIE_ZAEHLER'),
+                 'ABGLEICH' => array('SPEICHER_EIN'));
 }
 
 /**
@@ -2920,10 +2926,16 @@ function sm_sichern_einlesen_kern($roh)
     }
     /* Schalter sind 0 oder 1. Ein "ja" oder ein leeres Feld wuerde sonst
      * je nach Lesestelle verschieden ausgelegt. */
-    foreach (array('READ', 'SENDMQTT', 'SENDUDP', 'ENDPUNKT_EIN', 'LASTGANG_EIN') as $k) {
+    foreach (array('READ', 'SENDMQTT', 'SENDUDP', 'ENDPUNKT_EIN', 'LASTGANG_EIN', 'HAUS_ENERGIE_EIN') as $k) {
         if (isset($main[$k]) && $main[$k] !== '0' && $main[$k] !== '1') {
             $wert($k, $main[$k], $k);
         }
+    }
+    /* 2.8.18: der Netzzaehler fuer haus/energie - leer oder ein Kopfname nach DERSELBEN Regel wie die
+     * Lesekoepfe (sm_kopf_name_ok); dass es den Kopf hier gibt, prueft erst der Minutenlauf. */
+    if (isset($main['HAUS_ENERGIE_ZAEHLER']) && $main['HAUS_ENERGIE_ZAEHLER'] !== ''
+        && !sm_kopf_name_ok($main['HAUS_ENERGIE_ZAEHLER'])) {
+        $wert('HAUS_ENERGIE_ZAEHLER', $main['HAUS_ENERGIE_ZAEHLER'], 'HAUS_ENERGIE_ZAEHLER');
     }
     foreach (array('enabled', 'localtime', 'sendudp') as $k) {
         if (isset($vz[$k]) && (string) $vz[$k] !== '0' && (string) $vz[$k] !== '1') {
@@ -3324,7 +3336,67 @@ function sm_mqtt_themen()
         }
         $gruppen[] = array(sm_t('MQ.G_ABGLEICH'), $z, '');
     }
+
+    /* 2.8.18: Anbieter haus/energie - ohne Praefix, alle fluechtig. Die Sprachschluessel woertlich
+     * (Pruefung der Sprachschluessel); Reihenfolge und Einheiten aus smg_he_themen(). */
+    if ($legacy['SENDMQTT'] === '1' && $legacy['HAUS_ENERGIE_EIN'] === '1' && function_exists('smg_he_themen')) {
+        $sm_he_b = array('netz_w' => sm_t('MQ.B_HE_NETZ'), 'bezug_w' => sm_t('MQ.B_HE_BEZUG'),
+                         'ueberschuss_w' => sm_t('MQ.B_HE_UEBERSCHUSS'), 'bezug_kwh' => sm_t('MQ.B_HE_BEZUG_KWH'),
+                         'einspeisung_kwh' => sm_t('MQ.B_HE_EINSP_KWH'), 'stand' => sm_t('MQ.B_HE_STAND'),
+                         'ok' => sm_t('MQ.B_HE_OK'), 'zaehler' => sm_t('MQ.B_HE_ZAEHLER'));
+        $z = array();
+        foreach (smg_he_themen() as $t => $eb) {
+            $z[] = array('haus/energie/' . $t, $eb[0], isset($sm_he_b[$t]) ? $sm_he_b[$t] : $t, false, false);
+        }
+        $gruppen[] = array(sm_t('MQ.G_HAUS_ENERGIE'), $z, sm_t('MQ.HE_THEMEN_HINT'));
+    }
     return $gruppen;
+}
+
+/**
+ * 2.8.18: die Lage des Anbieters haus/energie als array(Zustand: ok|warn|fail|warte|'', Text).
+ * '' = Schalter aus, warte = eingeschaltet, erster Minutenlauf steht noch aus. Liest den
+ * Merker des letzten Minutenlaufs (bin/sm_historie.php -> smg_he_lauf).
+ */
+function sm_he_lage()
+{
+    $l = sm_legacy_read();
+    if ($l['HAUS_ENERGIE_EIN'] !== '1') {
+        return array('', sm_t('MQ.HE_L_AUS'));
+    }
+    if ($l['SENDMQTT'] !== '1') {
+        return array('warn', sm_t('MQ.HE_L_OHNE_MQTT'));
+    }
+    // Erst nachsehen, dann lesen: vor dem ersten Minutenlauf (und nach einem Neustart) fehlt der Merker.
+    $sm_he_datei = sm_paths()['shm'] . '/haus_energie.json';
+    $d = is_file($sm_he_datei) ? json_decode((string) @file_get_contents($sm_he_datei), true) : null;
+    if (!is_array($d) || !isset($d['ts'])) {
+        return array('warte', sm_t('MQ.HE_L_NOCH_NICHT'));
+    }
+    $vor = time() - (int) $d['ts'];
+    $wann = date('d.m.Y H:i:s', (int) $d['ts']);
+    if ($vor < 0 || $vor > 150) {
+        return array('fail', sprintf(sm_t('MQ.HE_L_STILL'), $wann));
+    }
+    if ((int) $d['gesendet'] < 0) {
+        return array('fail', sprintf(sm_t('MQ.HE_L_BROKER'), $wann));
+    }
+    $grund = isset($d['grund']) ? (string) $d['grund'] : '';
+    $gruende = array('kein_leser' => sm_t('MQ.HE_G_KEIN_LESER'), 'waehlen' => sm_t('MQ.HE_G_WAEHLEN'),
+                     'weg' => sm_t('MQ.HE_G_WEG'), 'keine_messung' => sm_t('MQ.HE_G_KEINE_MESSUNG'),
+                     'zu_alt' => sm_t('MQ.HE_G_ZU_ALT'), 'nur_start' => sm_t('MQ.HE_G_NUR_START'),
+                     'keine_leistung' => sm_t('MQ.HE_G_KEINE_LEISTUNG'));
+    if ((int) $d['ok'] !== 1) {
+        return array('warn', sprintf(sm_t('MQ.HE_L_OHNE_WERTE'), $wann,
+                                     isset($gruende[$grund]) ? $gruende[$grund] : $grund));
+    }
+    $w = (isset($d['werte']) && is_array($d['werte'])) ? $d['werte'] : array();
+    $teile = array();
+    foreach (array('netz_w' => 'W', 'bezug_w' => 'W', 'ueberschuss_w' => 'W') as $k => $e) {
+        if (isset($w[$k])) { $teile[] = $k . ' ' . $w[$k] . ' ' . $e; }
+    }
+    return array('ok', sprintf(sm_t('MQ.HE_L_OK'), $wann, implode(', ', $teile),
+                               isset($d['quelle']) ? (string) $d['quelle'] : '?'));
 }
 
 /**

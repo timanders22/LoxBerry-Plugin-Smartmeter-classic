@@ -508,6 +508,26 @@ if (isset($_POST['mq_speichern'])) {
     $sm_tab = 'tab-mqtt';
 }
 
+/* 2.8.18: Anbieter haus/energie - eigenes Formular im Reiter MQTT. Der Zaehler wird nach derselben
+ * Regel wie ein Kopfname geprueft und ABGEWIESEN, nicht zurechtgebogen. Ausschalten raeumt nichts ab:
+ * alle haus/energie-Themen sind fluechtig, im Broker bleibt nichts stehen. */
+if (isset($_POST['he_speichern'])) {
+    $sm_he_z = (isset($_POST['he_zaehler']) && is_string($_POST['he_zaehler'])) ? trim($_POST['he_zaehler']) : '';
+    if ($sm_he_z !== '' && !sm_kopf_name_ok($sm_he_z)) {
+        $sm_fehler[] = sm_t('MQ.HE_FEHLER_ZAEHLER');
+        $sm_eingaben = sm_eingaben_sammeln('he', array('he_an', 'he_zaehler'), array('he_zaehler'));
+    } elseif (sm_cfg_set('MAIN', array('HAUS_ENERGIE_EIN' => isset($_POST['he_an']) ? '1' : '0',
+                                       'HAUS_ENERGIE_ZAEHLER' => $sm_he_z))) {
+        $sm_legacy = sm_legacy_read();
+        $sm_meldung = sm_t('MELD.GESPEICHERT');
+        sm_log('haus/energie ' . (isset($_POST['he_an']) ? 'eingeschaltet' : 'ausgeschaltet')
+             . ($sm_he_z !== '' ? ' (Netzzaehler ' . $sm_he_z . ')' : '') . '.');
+    } else {
+        $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN'), '<span class="sm-mono">smartmeter.cfg</span>');
+    }
+    $sm_tab = 'tab-mqtt';
+}
+
 if (isset($_POST['test']) && is_string($_POST['test'])) {
     list($sm_test_titel, $sm_test_text) = sm_test_ausfuehren($_POST['test'], $sm_cfg);
     $sm_tab = 'tab-test';
@@ -1418,6 +1438,7 @@ if ($sm_x3) { ?>
      Knopf vorkommen (lesen, technische Hilfe, schaltend). Bis 2.8.12 stand je Formular eine eigene. -->
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.MQ_SPEICHERN'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo sm_t('LEGENDE.HE_SPEICHERN'); ?></span>
 </div>
 <?php $sm_gw = sm_mqtt_gateway_info(); ?>
 <?php if ($sm_gw !== null && !$sm_gw['autostart']) { ?>
@@ -1457,6 +1478,52 @@ if ($sm_x3) { ?>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mq_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
 </div>
 </form>
+
+<h2><?php echo sm_t('MQ.H_HAUS_ENERGIE'); ?></h2>
+<p class="sm-small"><?php echo sm_t('MQ.HE_ERKLAERUNG'); ?></p>
+<div class="sm-alert sm-info"><?php echo sm_t('MQ.HE_BEISPIEL'); ?></div>
+<?php
+/* 2.8.18: die Lesekoepfe, die als Netzzaehler in Frage kommen - dieselbe Liste wie im Minutenlauf
+ * (smg_koepfe). Beim klassischen Leser steht der Name des Kopfes dabei. */
+$sm_he_alles = sm_cfg_read();
+$sm_he_vz = sm_vz_read();
+$sm_he_koepfe = function_exists('smg_koepfe') ? smg_koepfe($sm_he_alles, $sm_he_vz) : array();
+$sm_he_wahl = sm_fw('he', 'he_zaehler', $sm_legacy['HAUS_ENERGIE_ZAEHLER']);
+?>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<?php echo sm_fmt(); ?>
+<div class="sm-row">
+  <label><input data-role="none" type="checkbox" name="he_an" value="1"<?php
+    echo sm_fh('he', 'he_an', $sm_legacy['HAUS_ENERGIE_EIN'] === '1') ? ' checked' : ''; ?>> <?php echo sm_t('MQ.HE_LABEL_AN'); ?></label>
+  <p class="sm-small"><?php echo sm_t('MQ.HE_HINT_AN'); ?></p>
+</div>
+<div class="sm-row">
+  <label for="he_zaehler"><?php echo sm_t('MQ.HE_LABEL_ZAEHLER'); ?></label>
+  <select data-role="none"<?php echo sm_fm('he_zaehler'); ?> id="he_zaehler" name="he_zaehler">
+    <option value=""<?php echo $sm_he_wahl === '' ? ' selected' : ''; ?>><?php echo sm_t('MQ.HE_ZAEHLER_AUTO'); ?></option>
+<?php $sm_he_gesehen = false;
+foreach ($sm_he_koepfe as $sm_he_k) {
+    $sm_he_n = (isset($sm_he_alles[$sm_he_k]['NAME']) && $sm_he_alles[$sm_he_k]['NAME'] !== ''
+                && $sm_he_alles[$sm_he_k]['NAME'] !== $sm_he_k) ? $sm_he_alles[$sm_he_k]['NAME'] . ' – ' : '';
+    if ($sm_he_k === $sm_he_wahl) { $sm_he_gesehen = true; } ?>
+    <option value="<?php echo sm_e($sm_he_k); ?>"<?php echo $sm_he_k === $sm_he_wahl ? ' selected' : ''; ?>><?php
+      echo sm_e($sm_he_n . $sm_he_k); ?></option>
+<?php }
+if ($sm_he_wahl !== '' && !$sm_he_gesehen) { ?>
+    <option value="<?php echo sm_e($sm_he_wahl); ?>" selected><?php echo sm_e($sm_he_wahl . ' – ' . sm_t('MQ.HE_ZAEHLER_WEG')); ?></option>
+<?php } ?>
+  </select>
+  <p class="sm-small"><?php echo sm_t('MQ.HE_HINT_ZAEHLER'); ?></p>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="he_speichern" value="1"><?php echo sm_t('ALLG.SPEICHERN'); ?></button>
+</div>
+</form>
+<?php list($sm_he_z, $sm_he_t) = sm_he_lage();
+if ($sm_he_z !== '') { ?>
+<div class="sm-alert <?php echo $sm_he_z === 'ok' ? 'sm-ok' : 'sm-warn'; ?>"><?php echo sm_e($sm_he_t); ?></div>
+<?php } ?>
 
 <h2><?php echo sm_t('MQ.H_ABO'); ?></h2>
 <!-- EINE Stelle fuer den Abo-Satz: sm_abo_text() haengt ihn an die Fassung

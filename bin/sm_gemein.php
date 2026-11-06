@@ -1210,4 +1210,307 @@ function smg_abraeumen($home, $shm, $praefix, $kopf, array $jetzt)
     return $aus;
 }
 
+/* ==================================================================
+ * 2.8.18: Anbieter fuer haus/energie (Regeln/07, Haus-Themen)
+ *
+ * Andere Plugins (Midea2Lox Vorkuehlen, EVCC, Bewaesserung, Dashboard)
+ * lesen Netzbezug und Ueberschuss aus EINEM Hausthema, statt je einen
+ * eigenen Zaehlerweg zu bauen. Quelle sind ausschliesslich die Werte, die
+ * der Leser ohnehin auf die Ramdisk legt (/dev/shm/<ordner>/<kopf>.data).
+ *
+ * Gesendet wird aus bin/sm_historie.php (Minutentakt, beide Lesewege) ueber
+ * eine kurze Sitzung DIREKT am Broker (QoS 0, ohne Retain) - nicht ueber den
+ * UDP-Eingang des Gateways (Regeln/07 Nr. 15, "Technik").
+ *
+ * Alle Themen sind FLUECHTIG: Momentanwerte und Zaehlerstaende sind
+ * Messwerte mit Zeitbezug, ok und zaehler sind Aussagen des Dienstes ueber
+ * sich. Es bleibt also nie ein alter Wert im Broker stehen, und beim
+ * Ausschalten oder Deinstallieren gibt es nichts abzuraeumen.
+ *
+ * Was NICHT gesendet wird: die berechneten Leistungen (1.99.0/2.99.0 - die
+ * rechnet das Plugin aus zwei Zaehlerstaenden, der Zaehler liefert sie
+ * nicht), und die PV-Erzeugung - die kennt ein Netzzaehler nicht.
+ * ================================================================== */
+
+/**
+ * Die Themen unter haus/energie/ - EINE Liste fuer Sender, Themen-Tabelle
+ * im Reiter MQTT und Probeskript. Thema => array(Einheit, Sprachschluessel).
+ * Retain: bei allen nein (siehe oben). Die Sprachschluessel stehen zusaetzlich
+ * woertlich in sm_mqtt_themen() - die Pruefung der Sprachschluessel findet nur,
+ * was woertlich dasteht.
+ */
+function smg_he_themen()
+{
+    return array(
+        'netz_w'          => array('W',   'MQ.B_HE_NETZ'),
+        'bezug_w'         => array('W',   'MQ.B_HE_BEZUG'),
+        'ueberschuss_w'   => array('W',   'MQ.B_HE_UEBERSCHUSS'),
+        'bezug_kwh'       => array('kWh', 'MQ.B_HE_BEZUG_KWH'),
+        'einspeisung_kwh' => array('kWh', 'MQ.B_HE_EINSP_KWH'),
+        'stand'           => array('s',   'MQ.B_HE_STAND'),
+        'ok'              => array('',    'MQ.B_HE_OK'),
+        'zaehler'         => array('',    'MQ.B_HE_ZAEHLER'),
+    );
+}
+
+/** Die Felder des Katalogs, aus denen gerechnet wird. */
+function smg_he_felder()
+{
+    return array(
+        'p_bezug' => 'Consumption_Power_OBIS_1.7.0',
+        'p_einsp' => 'Delivery_Power_OBIS_2.7.0',
+        'p_saldo' => 'Total_Power_OBIS_16.7.0',
+        'e_bezug' => 'Consumption_Total_OBIS_1.8.0',
+        'e_einsp' => 'Delivery_Total_OBIS_2.8.0',
+    );
+}
+
+/**
+ * Die Einheit eines Feldes auf DIESEM Leseweg, aus dem Katalog: klassisch
+ * 'einheit', vzLogger 'einheit_vz'. '' = nicht belegt - dann wird der Wert
+ * NICHT verwendet (vzlogger reicht den Wert des Zaehlers ungeprueft durch;
+ * geraten wird keine Einheit).
+ */
+function smg_he_einheit(array $katalog, $feld, $vz_an)
+{
+    if (!isset($katalog['felder'][$feld]) || !is_array($katalog['felder'][$feld])) {
+        return '';
+    }
+    $md = $katalog['felder'][$feld];
+    $k = $vz_an ? 'einheit_vz' : 'einheit';
+    return isset($md[$k]) ? (string) $md[$k] : '';
+}
+
+/** Ein Leistungswert in W - oder null (fehlt, keine Zahl, Einheit unbelegt). */
+function smg_he_watt(array $werte, $feld, $einheit)
+{
+    if (!isset($werte[$feld])) { return null; }
+    $roh = trim((string) $werte[$feld]);
+    if ($roh === '' || !is_numeric($roh)) { return null; }
+    if ($einheit === 'kW') {
+        $w = (float) $roh * 1000.0;
+    } elseif ($einheit === 'W') {
+        $w = (float) $roh;
+    } else {
+        return null;
+    }
+    // 1 MW ist fuer einen Hausanschluss kein Messwert, sondern ein Lesefehler.
+    return (abs($w) <= 1000000.0) ? $w : null;
+}
+
+/** Ein Zaehlerstand in kWh - oder null. Ein negativer Stand ist kein Stand. */
+function smg_he_kwh(array $werte, $feld, $einheit)
+{
+    if (!isset($werte[$feld])) { return null; }
+    $roh = trim((string) $werte[$feld]);
+    if ($roh === '' || !is_numeric($roh)) { return null; }
+    if ($einheit === 'kWh') {
+        $k = (float) $roh;
+    } elseif ($einheit === 'Wh') {
+        $k = (float) $roh / 1000.0;
+    } else {
+        return null;
+    }
+    return ($k >= 0) ? $k : null;
+}
+
+/**
+ * Die Rechnung - rein, ohne Datei und ohne Uhr (das Probeskript ruft sie
+ * direkt). $werte: Feldname => Rohwert aus der .data-Datei.
+ *
+ * Reihenfolge der Quellen fuer die Leistung:
+ *   1. 1.7.0 UND 2.7.0 (getrennte Richtungen) - eindeutig:
+ *      netz = bezug - einspeisung
+ *   2. sonst 16.7.0 (saldierte Wirkleistung, vorzeichenbehaftet, + = Bezug)
+ *   3. sonst nur 1.7.0: nur bezug_w - ob eingespeist wird, sagt der Zaehler
+ *      nicht, also kein netz_w und kein ueberschuss_w
+ *   4. sonst nur 2.7.0: nur ueberschuss_w
+ * Negative 1.7.0/2.7.0 sind keine Richtungsleistung und werden verworfen.
+ * Aus netz folgen bezug_w = max(netz, 0) und ueberschuss_w = max(-netz, 0),
+ * gerundet auf ganze W - es gilt immer netz = bezug - ueberschuss.
+ *
+ * Rueckgabe: Thema => Text (nur, was bestimmbar ist) und unter '_quelle' die
+ * benutzte Kennzahl ('1.7.0/2.7.0', '16.7.0', '1.7.0', '2.7.0' oder '').
+ */
+function smg_he_rechnen(array $werte, $vz_an, array $katalog)
+{
+    $f = smg_he_felder();
+    $eh = array();
+    foreach ($f as $k => $feld) {
+        $eh[$k] = smg_he_einheit($katalog, $feld, $vz_an);
+    }
+    $b = smg_he_watt($werte, $f['p_bezug'], $eh['p_bezug']);
+    $e = smg_he_watt($werte, $f['p_einsp'], $eh['p_einsp']);
+    $s = smg_he_watt($werte, $f['p_saldo'], $eh['p_saldo']);
+    if ($b !== null && $b < 0) { $b = null; }
+    if ($e !== null && $e < 0) { $e = null; }
+
+    $aus = array();
+    $netz = null;
+    $quelle = '';
+    if ($b !== null && $e !== null) {
+        $netz = $b - $e;
+        $quelle = '1.7.0/2.7.0';
+    } elseif ($s !== null) {
+        $netz = $s;
+        $quelle = '16.7.0';
+    } elseif ($b !== null) {
+        $aus['bezug_w'] = (string) (int) round($b);
+        $quelle = '1.7.0';
+    } elseif ($e !== null) {
+        $aus['ueberschuss_w'] = (string) (int) round($e);
+        $quelle = '2.7.0';
+    }
+    if ($netz !== null) {
+        $n = (int) round($netz);
+        $aus['netz_w'] = (string) $n;
+        $aus['bezug_w'] = (string) max($n, 0);
+        $aus['ueberschuss_w'] = (string) max(-$n, 0);
+    }
+    $kb = smg_he_kwh($werte, $f['e_bezug'], $eh['e_bezug']);
+    $ke = smg_he_kwh($werte, $f['e_einsp'], $eh['e_einsp']);
+    if ($kb !== null) { $aus['bezug_kwh'] = number_format($kb, 3, '.', ''); }
+    if ($ke !== null) { $aus['einspeisung_kwh'] = number_format($ke, 3, '.', ''); }
+    $aus['_quelle'] = $quelle;
+    return $aus;
+}
+
+/**
+ * Welcher Lesekopf ist der Netzzaehler? [MAIN] HAUS_ENERGIE_ZAEHLER nennt ihn;
+ * leer heisst "der einzige eingeschaltete". Bei mehreren ohne Wahl wird NICHT
+ * geraten (ein Waermepumpenzaehler als Netzbezug waere eine Falschaussage).
+ * Rueckgabe array(Kopf oder '', Grund: ok|kein_leser|waehlen|weg).
+ */
+function smg_he_kopf($cfg, $vzd)
+{
+    $koepfe = smg_koepfe($cfg, $vzd);
+    if (!$koepfe) { return array('', 'kein_leser'); }
+    $wahl = trim(smg_wert($cfg, 'MAIN', 'HAUS_ENERGIE_ZAEHLER', ''));
+    if ($wahl === '') {
+        return (count($koepfe) === 1) ? array($koepfe[0], 'ok') : array('', 'waehlen');
+    }
+    return in_array($wahl, $koepfe, true) ? array($wahl, 'ok') : array('', 'weg');
+}
+
+/**
+ * Die Lage fuer diesen Minutenlauf: was hinausgeht und warum.
+ * $jetzt und $grenze kommen von aussen (Probeskript). Rueckgabe:
+ *   'ok'     1 = frische Messung mit mindestens einem Leistungswert, sonst 0
+ *   'grund'  ok|kein_leser|waehlen|weg|keine_messung|zu_alt|nur_start|keine_leistung
+ *   'kopf', 'alter' (-1 = unbekannt), 'quelle'
+ *   'werte'  Thema => Text, NUR bei ok = 1 (sonst leer: kein alter Wert geht
+ *            hinaus - Regeln/07 "bei einer Stoerung nur das Signal")
+ */
+function smg_he_lage($shm, $cfg, $vzd, array $katalog, $jetzt, $grenze)
+{
+    $l = array('ok' => 0, 'grund' => '', 'kopf' => '', 'alter' => -1, 'quelle' => '', 'werte' => array());
+    list($kopf, $grund) = smg_he_kopf($cfg, $vzd);
+    $l['kopf'] = $kopf;
+    if ($grund !== 'ok') {
+        $l['grund'] = $grund;
+        return $l;
+    }
+    $vz_an = is_array($vzd) && !empty($vzd['enabled']);
+    $werte = array();
+    $roh = @file_get_contents($shm . '/' . $kopf . '.data');
+    if (is_string($roh)) {
+        foreach (preg_split('/\R/', $roh) as $z) {
+            $t = explode(':', trim($z), 3);
+            if (count($t) === 3 && $t[0] === $kopf) { $werte[$t[1]] = $t[2]; }
+        }
+    }
+    $ts = (isset($werte['Last_UpdateUnix']) && preg_match('/^[0-9]+$/', trim($werte['Last_UpdateUnix'])))
+        ? (int) trim($werte['Last_UpdateUnix']) : 0;
+    if ($ts <= 0) {
+        $l['grund'] = 'keine_messung';
+        return $l;
+    }
+    $alter = (int) $jetzt - $ts;
+    $l['alter'] = ($alter >= 0) ? $alter : -1;
+    if ((int) $grenze <= 0) {
+        // Takt "nur beim Systemstart": dort gibt es keine Momentanwerte.
+        $l['grund'] = 'nur_start';
+        return $l;
+    }
+    if ($alter < 0 || $alter > (int) $grenze) {
+        $l['grund'] = 'zu_alt';
+        return $l;
+    }
+    $r = smg_he_rechnen($werte, $vz_an, $katalog);
+    $l['quelle'] = $r['_quelle'];
+    unset($r['_quelle']);
+    if (!isset($r['netz_w']) && !isset($r['bezug_w']) && !isset($r['ueberschuss_w'])) {
+        $l['grund'] = 'keine_leistung';
+        return $l;
+    }
+    $r['stand'] = (string) $ts;
+    $l['ok'] = 1;
+    $l['grund'] = 'ok';
+    $l['werte'] = $r;
+    return $l;
+}
+
+/**
+ * Fluechtig (QoS 0, ohne Retain) direkt am Broker veroeffentlichen, in der
+ * Reihenfolge von $tw. Rueckgabe: Zahl der geschriebenen Pakete, -1 = keine
+ * Verbindung. Leere Werte gehen nie hinaus (Regeln/07).
+ */
+function smg_mq_senden($home, array $tw)
+{
+    $s = smg_mq_verbinden($home, 'smenergie');
+    if (!$s) { return -1; }
+    $n = 0;
+    foreach ($tw as $t => $w) {
+        $t = (string) $t;
+        $w = (string) $w;
+        if ($t === '' || $w === '') { continue; }
+        $r = pack('n', strlen($t)) . $t . $w;
+        $p = chr(0x30) . smg_mq_laenge(strlen($r)) . $r;
+        if (@fwrite($s, $p) !== strlen($p)) { break; }
+        $n++;
+    }
+    @fwrite($s, chr(0xE0) . chr(0));
+    fclose($s);
+    return $n;
+}
+
+/** Der Merker des letzten Versands (Ramdisk) - fuer die Reiter MQTT und Test. */
+function smg_he_merker_datei($shm)
+{
+    return $shm . '/haus_energie.json';
+}
+
+/** Die zu sendende Folge aus einer Lage: Werte, dann stand, dann ok und zaehler. */
+function smg_he_folge(array $l, $zaehler)
+{
+    $tw = array();
+    foreach (array('netz_w', 'bezug_w', 'ueberschuss_w', 'bezug_kwh', 'einspeisung_kwh', 'stand') as $k) {
+        if (isset($l['werte'][$k])) { $tw['haus/energie/' . $k] = (string) $l['werte'][$k]; }
+    }
+    $tw['haus/energie/ok'] = (string) (int) $l['ok'];
+    $tw['haus/energie/zaehler'] = (string) (int) $zaehler;
+    return $tw;
+}
+
+/**
+ * Ein Minutenlauf des Anbieters: Lage bestimmen, senden, Merker schreiben.
+ * stand ist das letzte Thema des Wertesatzes (wie haus/sonne/ts); ok und
+ * zaehler gehen in JEDER Minute hinaus, auch wenn der Zaehler schweigt.
+ * Rueckgabe: der Merker.
+ */
+function smg_he_lauf($home, $shm, $cfg, $vzd, array $katalog, $grenze)
+{
+    $l = smg_he_lage($shm, $cfg, $vzd, $katalog, time(), $grenze);
+    $tw = smg_he_folge($l, smg_zaehler_weiter($shm . '/haus_energie_zaehler'));
+    $n = smg_mq_senden($home, $tw);
+    $m = array('ts' => time(), 'gesendet' => $n, 'soll' => count($tw), 'ok' => $l['ok'],
+               'grund' => $l['grund'], 'kopf' => $l['kopf'], 'alter' => $l['alter'],
+               'quelle' => $l['quelle'], 'werte' => $l['werte']);
+    $tmp = smg_he_merker_datei($shm) . '.tmp.' . getmypid();
+    if (@file_put_contents($tmp, (string) json_encode($m)) !== false) {
+        if (!@rename($tmp, smg_he_merker_datei($shm))) { @unlink($tmp); }
+    }
+    return $m;
+}
+
 }

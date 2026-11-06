@@ -10,6 +10,11 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.18
+
+- **Werte für andere Plugins (`haus/energie`):** Neuer Schalter im Reiter *MQTT*, ab Werk **aus** (nur ein Anbieter je Haus). Eingeschaltet sendet das Plugin jede Minute direkt an den MQTT-Broker: `haus/energie/netz_w` (+ Bezug, − Einspeisung), `bezug_w`, `ueberschuss_w` (ganze W, nie negativ), `bezug_kwh` und `einspeisung_kwh` (Zählerstände 1.8.0/2.8.0), `stand` (Zeitpunkt der Messung), `ok` und `zaehler` (Lebenszeichen). Gerechnet wird aus 1.7.0/2.7.0, sonst aus 16.7.0 – nur was der Zähler wirklich liefert und dessen Einheit bekannt ist. Alle Themen flüchtig: fällt der Zähler aus, geht nur `ok = 0` hinaus, nie ein alter Wert; beim Ausschalten bleibt nichts im Broker stehen. Die PV-Erzeugung liefert ein Netzzähler nicht. Bei mehreren Leseköpfen wird der Zähler am Hausanschluss gewählt.
+- **Reiter Test:** neue Prüfzeile „haus/energie“ – an/aus, zuletzt gesendet, mit welchen Werten oder warum ohne.
+
 ## Neu in 2.8.17
 
 - **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.

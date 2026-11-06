@@ -707,6 +707,7 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_USB'), sm_usb_probe());
     $add(sm_t('PRUEF.Z_DIENSTDATEI'), sm_dienstdatei_probe());
     $add(sm_t('PRUEF.Z_SPEICHER'), sm_speicher_probe());
+    $add(sm_t('PRUEF.Z_HAUS_ENERGIE'), sm_haus_energie_probe());
     $add(sm_t('PRUEF.Z_REITER'), sm_reiter_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_SMACTIVE'), sm_smactive_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_FORM'), sm_formularprobe($datei));
@@ -874,6 +875,21 @@ function sm_speicher_probe()
         return array(2, sm_t('PRUEF.SPEICHER_AUS'));
     }
     return array($z === 'ok' ? 1 : 2, $t);
+}
+
+/**
+ * 2.8.18: der Anbieter haus/energie - "an/aus, zuletzt gesendet ...". Aus = Strich (2), keine
+ * Beanstandung: ab Werk aus ist der gewollte Zustand; ebenso vor dem ersten Minutenlauf. Eingeschaltet
+ * und ohne Werte (Zaehler stumm, Zaehler nicht gewaehlt, MQTT aus, Broker weg, Lauf still) = Kreuz (0):
+ * die Abnehmer bekommen dann nichts.
+ */
+function sm_haus_energie_probe()
+{
+    list($z, $t) = sm_he_lage();
+    if ($z === '' || $z === 'warte') {
+        return array(2, $t);
+    }
+    return array($z === 'ok' ? 1 : 0, $t);
 }
 
 /** T1-10 (Entscheidung 4): was steht unter /dev/serial/smartmeter/, mit welchem ID_MODEL? Nur lesen. */

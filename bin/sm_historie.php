@@ -374,6 +374,32 @@ function sm_h_lebenszeichen($cfg, $vz_an)
 }
 
 /**
+ * 2.8.18: ein Minutenlauf des Anbieters haus/energie (smg_he_lauf in
+ * sm_gemein.php). Protokolliert wird nur ein WECHSEL des Grundes oder ein
+ * gescheiterter Versand - sonst stuenden 1440 Zeilen am Tag im Protokoll.
+ */
+function sm_h_haus_energie($cfg, $vz_an)
+{
+    global $SM_SHM, $SM_VZJSON, $SM_FELDER, $sm_home;
+    $vor = is_file(smg_he_merker_datei($SM_SHM))
+         ? json_decode((string) @file_get_contents(smg_he_merker_datei($SM_SHM)), true) : null;
+    $vor_grund = (is_array($vor) && isset($vor['grund'])) ? (string) $vor['grund'] : '';
+    $vzd = $vz_an ? smg_vz_json($SM_VZJSON) : null;
+    $grenze = smg_alter_grenze(smg_wert($cfg, 'MAIN', 'CRON', '5'), $vz_an);
+    $m = smg_he_lauf($sm_home, $SM_SHM, $cfg, $vzd, smg_katalog($SM_FELDER), $grenze);
+    if ($m['gesendet'] < 0) {
+        sm_h_log('haus/energie: der Broker war nicht erreichbar - nichts gesendet.', 'WARN');
+    } elseif ($m['gesendet'] < $m['soll']) {
+        sm_h_log('haus/energie: nur ' . $m['gesendet'] . ' von ' . $m['soll'] . ' Themen gesendet.', 'WARN');
+    }
+    if ($m['grund'] !== $vor_grund) {
+        sm_h_log('haus/energie: Lage jetzt "' . $m['grund'] . '"'
+            . ($m['quelle'] !== '' ? ' (Quelle OBIS ' . $m['quelle'] . ')' : '')
+            . ($vor_grund !== '' ? ', vorher "' . $vor_grund . '"' : '') . '.', $m['ok'] ? 'OK' : 'WARN');
+    }
+}
+
+/**
  * Gruppe 35 (2.8.13, Entwurf 4.2): kosten_historie.csv auf dieselben
  * SM_HIST_MONATE zurueckschneiden wie historie.csv. Rueckgabe: entfernte
  * Zeilen, -1 bei Fehler.
@@ -476,6 +502,14 @@ $sm_cfg = smg_cfg_lesen($SM_CFGDATEI);
 $sm_lg_an = (smg_wert($sm_cfg, 'MAIN', 'READ', '0') === '1');
 if (($sm_vz_an || $sm_lg_an) && smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '1') === '1') {
     sm_h_lebenszeichen($sm_cfg, $sm_vz_an);
+}
+
+/* 2.8.18: Anbieter haus/energie - nur mit HAUS_ENERGIE_EIN = 1 (ab Werk 0, nur ein Anbieter je Haus)
+ * und eingeschaltetem MQTT. Auch ohne laufenden Leser: dann geht ok = 0 hinaus, und die Abnehmer
+ * sehen "Anbieter lebt, Zaehler liefert nicht" statt Stille. */
+if (smg_wert($sm_cfg, 'MAIN', 'SENDMQTT', '1') === '1'
+    && smg_wert($sm_cfg, 'MAIN', 'HAUS_ENERGIE_EIN', '0') === '1') {
+    sm_h_haus_energie($sm_cfg, $sm_vz_an);
 }
 
 $sm_merker = sm_h_merker_lesen();
