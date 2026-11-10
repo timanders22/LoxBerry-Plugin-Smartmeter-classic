@@ -48,6 +48,7 @@ our $verbose = 0;
 our $device = "";
 our $serial = "";
 our $protocol = "";
+our $frist = 0;
 
 GetOptions (    "verbose"          => \$verbose,
                 "device=s"         => \$device,
@@ -62,8 +63,19 @@ GetOptions (    "verbose"          => \$verbose,
                 "stopbits=i"       => \$stopbits,
                 "parity=s"         => \$parity,
                 "crc=s"            => \$crc,
+                "frist=i"          => \$frist,
                 "help"             => \$help,
 );
+# --frist (2.8.21, Issue #1): die Sekunden, die fetch.php diesem Aufruf
+# gibt, bevor "timeout -k 5" ihn hart beendet. Seit 2.8.13 begrenzt
+# fetch.php einen Lauf auf 60 s; mehrere SML-Profile tragen aber 60 oder
+# 120 s als eigene Lesegrenze. Ein Zaehler, der ununterbrochen sendet,
+# beendet die Leseschleife nie von selbst - sie lief bis zur eigenen
+# Grenze, und fetch.php beendete den Prozess im selben Augenblick, also
+# bevor ausgewertet war. READ_SERIAL hoert jetzt spaetestens 5 s vor der
+# Frist auf. Ohne --frist (Aufruf von Hand) gilt wie bisher die Grenze
+# des Profils.
+our $frist_ende = ($frist && $frist > 0) ? time() + $frist : 0;
 
 ### Usage
 if ( $help ) {
@@ -1358,9 +1370,28 @@ sub READ_SERIAL
 	my $MAXRUNDEN = 100000;    # Notbremse gegen Dauerlieferer
 	my $MAXPUFFER = 1048576;   # 1 MiB - ein Telegramm ist ein Bruchteil davon
 	our $buffer = "";
+	# Lesegrenze: die des Profils, aber nie ueber die Frist von fetch.php
+	# hinaus (siehe --frist oben).
+	my $grenze = $timeout;
+	if ($frist_ende) {
+		my $rest = $frist_ende - time() - 5;
+		$rest = 1 if $rest < 1;
+		if ($grenze > $rest) {
+			&LOG ("READ_SERIAL: Lesegrenze des Profils $timeout s, wegen der Frist des Abrufs $rest s.", "INFO");
+			$grenze = $rest;
+		}
+	}
+	# SML-Zaehler senden meist ununterbrochen (etwa ein Telegramm je
+	# Sekunde); fuer sie gibt es nie eine Leerlesung. Sie sind fertig,
+	# sobald drei vollstaendige Telegramme im Puffer stehen: Endsequenz
+	# 1B1B1B1B 1A plus drei Byte (Fuellzahl und Pruefsumme). Drei statt
+	# eines, damit Zaehler, die abwechselnd verschiedene Werte senden,
+	# beide Arten liefern. Bis 2.8.20 las die Schleife bis zur Lesegrenze.
+	my $SMLENDE = "\x1b\x1b\x1b\x1b\x1a";
+	my $smlfertig = 0;
 	local $SIG{ALRM} = sub { die };
 	eval {
-  		alarm($timeout);
+  		alarm($grenze);
 		while ($leerlauf > 0) {
 			if (++$runden > $MAXRUNDEN) {
 				&LOG ("READ_SERIAL: Rundengrenze erreicht - Lesen abgebrochen.", "WARN");
@@ -1372,6 +1403,17 @@ sub READ_SERIAL
 				if (length($buffer) > $MAXPUFFER) {
 					&LOG ("READ_SERIAL: Puffergrenze erreicht - Lesen abgebrochen.", "WARN");
 					last;
+				}
+				if (defined($hex) && $hex eq "HEX") {
+					my ($n, $pos) = (0, 0);
+					while (($pos = index($buffer, $SMLENDE, $pos)) >= 0) {
+						$n++ if length($buffer) >= $pos + length($SMLENDE) + 3;
+						$pos += length($SMLENDE);
+					}
+					if ($n >= 3) {
+						$smlfertig = 1;
+						last;
+					}
 				}
 				### Debug: print received signs
 				if ($verbose){
@@ -1393,7 +1435,10 @@ sub READ_SERIAL
 	# echter Laufzeitfehler in der Schleife wird verschluckt. Die beiden
 	# anderen Notbremsen protokollieren; dieser Ausgang tat es nicht.
 	if ( $@ ) {
-		&LOG ("Read timeout ($timeout s) reached or read error: $@", "WARNING");
+		&LOG ("Read timeout ($grenze s) reached or read error: $@", "WARNING");
+	}
+	if ( $smlfertig ) {
+		&LOG ("READ_SERIAL: drei vollstaendige SML-Telegramme gelesen, " . length($buffer) . " Byte.", "INFO");
 	}
 
 	if ($verbose){

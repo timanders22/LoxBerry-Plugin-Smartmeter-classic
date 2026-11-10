@@ -287,6 +287,9 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
      * Nur wenn er danach gewachsen ist, hat dieser Lauf etwas gemessen. */
     $sm_ts_vorher = smg_ts_datei($sm_shm . '/' . $sm_serial . '.data');
     $sm_aus = array(); $sm_rc = 0;
+    /* 2.8.21 (Issue #1, Iskra MT681): die Frist geht an sm_logger.pl mit. Profile mit 60 oder 120 s Lesegrenze
+     * wurden sonst von timeout im selben Augenblick beendet, in dem ihre Leseschleife endete - vor der Auswertung. */
+    $sm_befehl .= ' --frist ' . (int) $sm_rest;
     @exec('timeout -k 5 ' . (int) $sm_rest . ' perl ' . $sm_befehl . ' 2>&1', $sm_aus, $sm_rc);
     if ($sm_rc === 124 || $sm_rc === 137) {
         sm_fetch_log($sm_serial . ': sm_logger.pl nach ' . (int) $sm_rest . ' s abgebrochen (ZEITGRENZE).', 'WARN');
