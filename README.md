@@ -10,6 +10,11 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.22
+
+- **Ansage-Brücke des Dienstes:** `bin/sm_ansage.php` nimmt eine LoxBerry-Wurzel nur noch an, wenn `config/plugins`, `data/plugins` und `config/system/general.json` vorhanden sind; sonst antwortet es mit `KENNUNG=WURZEL` und Rückgabewert 1.
+- **Gemeinsames Sprachmodul 1.4.3:** Als LoxBerry-Wurzel aus `LBHOMEDIR` gilt für die Sprachausgabe nur noch ein Ordner mit `config/plugins`, `data/plugins` und `config/system/general.json`; bis 1.4.2 genügte `config/system`, und ein Prüfstand oder Rest mit diesem Ordner wurde wie ein LoxBerry gelesen. Auf einem LoxBerry ändert sich nichts.
+
 ## Neu in 2.8.21
 
 - Perl-Leser: SML-Zähler, die ununterbrochen senden (gemeldet am Iskra MT681, Profil `iskra681sml`), lieferten seit 2.8.13 keine Werte mehr. Die Leseschleife lief bis zur Grenze des Profils (60 oder 120 s), und der Abruf beendete den Leser im selben Augenblick – vor der Auswertung (Issue #1). Jetzt endet das Lesen nach drei vollständigen SML-Telegrammen, und der Abruf gibt dem Leser seine Frist mit: er hört spätestens 5 s vorher auf und wertet aus, was angekommen ist. Zähler, die einmal antworten und dann schweigen, lesen wie bisher.

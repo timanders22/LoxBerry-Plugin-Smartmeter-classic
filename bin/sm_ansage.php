@@ -17,9 +17,19 @@ if (!in_array($sm_a, array('zaehler'), true) || ($sm_g !== '0' && $sm_g !== '1')
     echo "ANSAGE;STAND=0;KENNUNG=AUFRUF\n";
     exit(1);
 }
+// 2.8.22: als LoxBerry-Wurzel gilt nur ein Ordner mit config/plugins, data/plugins und config/system/general.json.
+// Bis 2.8.21 genuegte config/plugins, und der Rueckfall (drei Ebenen ueber bin/plugins/<ordner>) galt ungeprueft.
+$sm_wurzel = function ($h) {
+    return is_string($h) && $h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')
+        && is_file($h . '/config/system/general.json');
+};
 $sm_h = getenv('LBHOMEDIR');
-if (!$sm_h || !is_dir($sm_h . '/config/plugins')) {
+if (!$sm_wurzel($sm_h)) {
     $sm_h = dirname(dirname(dirname(__DIR__)));
+    if (!$sm_wurzel($sm_h)) {
+        echo "ANSAGE;STAND=0;KENNUNG=WURZEL\n";
+        exit(1);
+    }
 }
 $sm_lib = $sm_h . '/webfrontend/htmlauth/plugins/' . $sm_o . '/sm_lib.php';
 if (!is_file($sm_lib)) {
