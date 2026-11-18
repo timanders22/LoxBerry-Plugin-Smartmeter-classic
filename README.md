@@ -10,6 +10,12 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.24
+
+- **Geändert – Takt ruht während des Updates schon in der Schale:** Alle 2 Takte (Minutentakt, Takt alle fünf Minuten) endet bei laufender Aktualisierung jetzt, bevor ein Programm startet. Bis 2.8.23 hielt erst das aufgerufene Skript an; Daten gingen dabei nicht verloren. Ist die Marke eine Stunde oder älter, liegt sie in der Zukunft oder enthält sie keine Unixzeit, gilt sie nicht, damit eine abgebrochene Aktualisierung den Takt nicht dauerhaft stilllegt. Alle Plugins dieser Reihe fragen die Marke mit demselben Block ab. Es wirkt schon beim Update auf diese Fassung, denn der Installer legt die Takte der neuen Fassung vor der Lücke an, und das `preupgrade.sh` der neuen Fassung legt die Marke an. Gemessen in einer Nachstellung des Update-Ablaufs auf dem Arbeitsrechner (WSL); am Gerät nicht gemessen.
+- **Gemeinsames Sprachmodul 1.4.4:** Das Modul bringt einen gemeinsamen Weg mit, die Einstellungen der Sprachausgabe in der Konfiguration zu prüfen: unbekannte Einträge verwerfen, jeden ungültigen Eintrag einzeln nennen und alles mit denselben Sätzen melden. Dieses Plugin ruft diesen Weg nicht auf; an seinem Verhalten ändert sich dadurch nichts. Gemessen auf dem Arbeitsrechner: Abschrift byte-gleich mit der Stammfassung 1.4.4, Abschnitt [ANSAGE] der Sprachdateien um die drei Sätze dieses Wegs ergänzt und gleich der Textdatei 1.4.4 (317 Schlüssel), Syntax unter PHP 7.4 und 8.4; am Gerät nicht gemessen.
+- **Geändert – Sprachdateien aufgeräumt:** Fünf Sprachtexte der früheren eigenen Prüfung alter Textsicherungen sind entfallen; seit dem gemeinsamen Sicherungsmodul 1.2.11 prüft und meldet das Modul diese Dateien selbst. Am Verhalten ändert sich nichts. Gemessen auf dem Arbeitsrechner: beide Sprachdateien unter PHP 7.4 und 8.4 gelesen, Prüfung der Sprachschlüssel und Platzhalter vorher und nachher gleich; am Gerät nicht gemessen.
+
 ## Neu in 2.8.23
 
 - **Verhalten geändert – Einstellungen sichern und zurückspielen über das gemeinsame Sicherungsmodul 1.2.11:** Beide Knöpfe im Reiter Smartmeter (vzLogger) verhalten sich jetzt wie in den übrigen Plugins dieser Reihe.
