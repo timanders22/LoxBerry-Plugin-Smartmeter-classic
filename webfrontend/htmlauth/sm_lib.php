@@ -1,5 +1,16 @@
 <?php
 require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der Sprachansagen schon beim ersten Lesen der Konfiguration
+/* 2.8.23: die Abschrift des gemeinsamen Sicherungsmoduls (Stammfassung Werkzeuge/gemeinsam/sicherung.php, byte-gleich,
+ * Werkzeuge/sicherung_einbauen.py) liegt neben dieser Datei. "Einstellungen sichern" und "Einstellungen zurueckspielen"
+ * laufen darueber, in allen Linien gleich (Auftrag des Hausherrn 12.11.2026); diese Linie uebergibt nur ihre
+ * Beschreibung (sm_sicherung_beschreibung()). Antwortet als Einstieg mit 403. */
+require_once __DIR__ . '/sicherung.php';
+/* 2.8.23: die erste Zeile jeder Textsicherung bis 2.8.22. sm_sicherung_text_wandeln() erkennt sie daran und setzt sie in
+ * den Kopf _aus_textsicherung der umgewandelten Datei; der Uebersetzer sm_sicherung_alt_erkennen() erkennt diese daran
+ * (Form wie WOLF-ISM-NG 3.1.22 und Kodi-NG 1.2.29; Entscheidung des Hausherrn 18.11.2026, Frage 37 der Nacht). Seit
+ * Modul 1.2.11 wertet das Modul die Koepfe _aus_textsicherung und _text_mangel selbst aus (Regel 21; Fragen 52 und 53
+ * der Nacht, "ins Modul"). */
+if (!defined('SM_TEXT_KOPF')) { define('SM_TEXT_KOPF', '; Smartmeter classic - Sicherung der Einstellungen'); }
 /**
  * Smartmeter classic - gemeinsame Funktionen der Oberflaeche
  *
@@ -63,6 +74,13 @@ function sm_paths()
         // neben diesem installiert sein kann. Der Rueckfall zeigte damit auf
         // dessen Konfiguration, dessen /dev/shm und dessen Protokoll.
         $ordner = 'smartmeter-classic';
+        /* 2.8.23: nennt der Aufrufer den Ordner ausdruecklich (LBPPLUGINDIR - so arbeitet der gemeinsame
+         * Sicherungs-Pruefstand mit seiner Attrappe), gilt er. Nur hier im Rueckfall: installiert liegt diese Datei
+         * unter webfrontend/htmlauth/plugins/<ordner>/, und der Ablageort entscheidet wie bisher. */
+        $sm_env = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}\z/', $sm_env) && strpos($sm_env, '..') === false) {
+            $ordner = $sm_env;
+        }
     }
     $p = array(
         'home'    => $home,
@@ -733,7 +751,11 @@ function sm_vz_lage()
 function sm_vz_write($cfg)
 {
     // 0600 (Gruppe 35, T1-1 A) - wie smartmeter.cfg.
-    return sm_json_schreiben(sm_paths()['vzjson'], $cfg, 0600);
+    if (!sm_json_schreiben(sm_paths()['vzjson'], $cfg, 0600)) {
+        return false;
+    }
+    sm_zweitschrift_ziehen('vzlogger.json');     // 2.8.23: bei jedem Speichern
+    return true;
 }
 
 /** Feste UUIDs je Kanal - vzlogger verlangt sie. */
@@ -792,7 +814,11 @@ function sm_vz_conf_schreiben($cfg)
     // file_put_contents - bei ungueltigem UTF-8 waere eine leere Datei
     // entstanden, und der Rueckgabewert 0 haette Erfolg gemeldet.
     // Gruppe 35 (2.8.13, T2-5): fester Modus 0600 statt umask, Rechte vor dem Inhalt (sm_atomar_schreiben).
-    return sm_json_schreiben($p['vzconf'], $conf, 0600);
+    if (!sm_json_schreiben($p['vzconf'], $conf, 0600)) {
+        return false;
+    }
+    sm_zweitschrift_ziehen('vzlogger.conf');     // 2.8.23: bei jedem Speichern
+    return true;
 }
 
 /* ==================================================================
@@ -862,7 +888,59 @@ function sm_cfg_write($alles)
     }
     // 0600 (Gruppe 35, Regeln/05 :358; bis 2.8.12 0640): die Datei fuehrt das Zugriffstoken des
     // Endpunkts. Die Rechte gehoeren an das Anlegen, nicht hinterher.
-    return sm_atomar_schreiben(sm_paths()['legacy'], $z, 0600);
+    if (!sm_atomar_schreiben(sm_paths()['legacy'], $z, 0600)) {
+        return false;
+    }
+    // 2.8.23 (Entscheidung des Hausherrn 18.11.2026 "Ja, beim Speichern"): jedes Speichern zieht die Zweitschrift mit.
+    sm_zweitschrift_ziehen('smartmeter.cfg');
+    return true;
+}
+
+/** 2.8.23: die Zweitschrift einer Datei des Konfigordners - NEBEN dem Ordner, Name wie in preupgrade.sh/postinstall.sh. */
+function sm_zweitschrift_pfad($name)
+{
+    $p = sm_paths();
+    return $p['home'] . '/config/plugins/' . $p['plugin'] . '.backup.' . $name;
+}
+
+/**
+ * 2.8.23 (Entscheidung des Hausherrn 18.11.2026 "Ja, beim Speichern"): die Zweitschrift nach jedem Schreiben
+ * nachziehen - bis 2.8.22 entstand sie nur in preupgrade.sh, und eine Aenderung in der Oberflaeche ueberlebte ein
+ * gescheitertes postupgrade.sh nicht. Wie dort (netz_zweitschrift) nur aus einer Datei, die ihr Merkmal traegt
+ * ([MAIN], "enabled", "meters"), und wie dort nie aus einer Datei, die noch einen Platzhalter traegt (REPLACEBY...):
+ * sie ist die Werkseinstellung, keine Einstellung dieser Anlage, und eine gute Zweitschrift bleibt dann stehen
+ * (Entscheidung des Hausherrn 18.11.2026, Frage 41 der Nacht: "Ich folge deinen Empfehlungen"; bis dahin fehlte diese
+ * Wache hier). Byte-gleich mit dem Original, mit dessen Rechten (0600), unteilbar geschrieben. Ein Fehlschlag oder
+ * eine uebergangene Datei steht im Protokoll; das Speichern selbst ist dann gelungen, und beim Zurueckspielen meldet
+ * das Modul die abweichende Zweitschrift.
+ */
+function sm_zweitschrift_ziehen($name)
+{
+    $p = sm_paths();
+    $merkmal = array('smartmeter.cfg' => '[MAIN]', 'vzlogger.json' => '"enabled"', 'vzlogger.conf' => '"meters"');
+    if ((string) $p['home'] === '' || !isset($merkmal[$name])) {
+        return false;
+    }
+    $quelle = $p['config'] . '/' . $name;
+    clearstatcache(true, $quelle);
+    $inhalt = @file_get_contents($quelle);
+    if (!is_string($inhalt) || $inhalt === '' || strpos($inhalt, $merkmal[$name]) === false) {
+        sm_log_wenn_neu('zweitschrift_' . $name, 'Zweitschrift ' . $name . ' nicht nachgezogen: die Datei fehlt, ist leer '
+                        . 'oder traegt ihr Merkmal nicht.', 'WARN');
+        return false;
+    }
+    if (strpos($inhalt, 'REPLACEBY') !== false) {
+        sm_log_wenn_neu('zweitschrift_' . $name, 'Zweitschrift ' . $name . ' nicht nachgezogen: die Datei traegt noch '
+                        . 'Platzhalter (REPLACEBY...); die bisherige Zweitschrift bleibt.', 'WARN');
+        return false;
+    }
+    $rechte = @fileperms($quelle);
+    $rechte = is_int($rechte) ? ($rechte & 0777) : 0600;
+    if (!sm_atomar_schreiben(sm_zweitschrift_pfad($name), $inhalt, $rechte)) {
+        sm_log('Zweitschrift ' . $name . ' liess sich nicht schreiben.', 'WARN');
+        return false;
+    }
+    return true;
 }
 
 /** Einzelne Werte in einem Abschnitt setzen. */
@@ -2102,38 +2180,17 @@ function sm_vorlage_kosten_eintraege($praefix, $regel = 1)
 }
 
 /* ==================================================================
- * Einstellungen sichern und zurueckspielen
- *
- * Zweck ist der UMZUG auf einen zweiten LoxBerry, nicht die Sicherung
- * gegen Verlust - dafuer gibt es die Zweitschrift aus preupgrade.sh.
- *
- * Die Datei traegt das TOKEN. Ohne es stuenden nach dem Zurueckspielen
- * alle Felder richtig, und der Miniserver bekaeme weiterhin 403 - die
- * Datei waere wertlos. Damit traegt sie ein Geheimnis, und der Text am
- * Knopf sagt das.
- *
- * NICHT hinein gehoeren:
- *   FORMKEY              das Merkmal gegen fremde Absender. Es lebt fuer
- *                        diese Anlage; in einer Datei hat es nichts zu
- *                        suchen.
- *   SUBFOLDER, SCRIPTNAME   sie gehoeren zur Installation. sm_cron_setzen()
- *                        raeumt zu Beginn JEDE Verknuepfung dieses Namens
- *                        aus allen cron.*-Ordnern weg - ein aus einer
- *                        fremden Anlage mitgebrachter SCRIPTNAME liesse
- *                        das Plugin die Cron-Eintraege eines ANDEREN
- *                        Plugins loeschen.
+ * Einstellungen sichern und zurueckspielen - seit 2.8.23 ueber das
+ * gemeinsame Sicherungsmodul, Beschreibung in sm_sicherung_beschreibung()
+ * weiter unten. Was nicht hinein gehoert (FORMKEY, SUBFOLDER, SCRIPTNAME),
+ * steht dort; bis 2.8.22 stand es in sm_sichern_tabu().
  * ================================================================== */
-
-/** Schluessel, die nie in eine Sicherung wandern. */
-function sm_sichern_tabu()
-{
-    return array('FORMKEY', 'SUBFOLDER', 'SCRIPTNAME');
-}
 
 /**
  * Gruppe 35 (2.8.13, T2-1): die Abschnitte [ABGLEICH] und [KOSTEN] der
  * Sicherung - Schluessel => Wert, wenn die Datei keinen traegt. Beide sind
- * beim Einlesen OPTIONAL: eine Sicherung aus 2.8.12 ohne sie bleibt gueltig.
+ * beim Einlesen OPTIONAL: eine Sicherung aus 2.8.12 ohne sie bleibt gueltig
+ * (seit 2.8.23 'fehlt' => 'behalten' in sm_sicherung_beschreibung()).
  */
 function sm_sichern_zusatz()
 {
@@ -2141,19 +2198,6 @@ function sm_sichern_zusatz()
         'ABGLEICH' => array('AKTIV' => '0', 'FAHRPLAN_URL' => '', 'SPEICHER_EIN' => '0'),
         'KOSTEN'   => array('AKTIV' => '0', 'PREIS_URL' => ''),
     );
-}
-
-/**
- * Spaetliste (Gruppe 35): Schluessel, die erst seit 2.8.13 in einer
- * Sicherung stehen. Fehlen sie, bleibt der hier geltende Wert - ein
- * Zurueckspielen setzt sie nie auf ihre Vorgabe (sonst schloesse eine alte
- * Sicherung den Endpunkt still).
- */
-function sm_sichern_spaetliste()
-{
-    // 2.8.18: HAUS_ENERGIE_* - eine aeltere Sicherung schaltet den Anbieter nie still aus.
-    return array('MAIN' => array('ENDPUNKT_EIN', 'LASTGANG_EIN', 'HAUS_ENERGIE_EIN', 'HAUS_ENERGIE_ZAEHLER'),
-                 'ABGLEICH' => array('SPEICHER_EIN'));
 }
 
 /**
@@ -2167,15 +2211,6 @@ function sm_url_ok($u)
     return function_exists('smg_url_ok') ? smg_url_ok($u) : false;
 }
 
-/**
- * Die Konfiguration als Text - dieselbe Schreibweise wie smartmeter.cfg.
- *
- * X-3 (Durchgang 01.10.2026): wuerde ein gespeicherter Wert das eigene
- * Zurueckspielen nicht bestehen, traegt die Datei eine Zeile
- * "; _warnung: <Namen>" - nur Namen, nie Werte. Geliefert wird sie trotzdem;
- * die Oberflaeche warnt gelb am Knopf. $pruefen = false fuer die Pruefung
- * selbst (sonst rief sie sich im Kreis).
- */
 /** Die Sprachansagen aus dem Feld der Hauptkonfiguration: was fehlt, kommt aus den Vorgaben (ab Werk EIN). */
 function sm_ansage_block_lesen()
 {
@@ -2648,464 +2683,627 @@ function sm_ansage_flanke($anlass, $gestoert, $name = '', $frist = 0, $jetzt = n
     return sm_ansage_legen(array($ein));
 }
 
-/** Die Sicherung als Text: der Abschnitt [ANSAGE] traegt die Einstellungen ohne Sprechtoken und Vermerk. */
-function sm_sichern_text($pruefen = true)
+/* ==================================================================
+ * 2.8.23: Einstellungen sichern und zurueckspielen ueber das gemeinsame
+ * Sicherungsmodul (sicherung.php neben dieser Datei, Stammfassung 1.2.9,
+ * Auftrag des Hausherrn 18.11.2026 "Ja, umbauen"). Diese Linie uebergibt nur
+ * ihre Beschreibung (sm_sicherung_beschreibung()); Lesen, Pruefen, Speichern,
+ * Zweitschrift messen und die Protokollzeile macht das Modul.
+ *
+ * Bis 2.8.22 war die Sicherung eine Textdatei in der Schreibweise der
+ * smartmeter.cfg (Kopf "; Smartmeter classic - Sicherung der Einstellungen",
+ * Abschnitte [MAIN], [VZLOGGER], [ABGLEICH], [KOSTEN], [KOPF <name>],
+ * [ANSAGE]). Das Modul liest nur JSON (K_KEIN_JSON). Eine solche Textdatei
+ * wandelt sm_sicherung_text_wandeln() VOR dem Modul in die JSON-Form dieser
+ * Fassung um (Entscheidung des Hausherrn 18.11.2026 "Linie wandelt vorweg
+ * um"); alles Weitere entscheidet das Modul wie bei einer neuen Sicherung.
+ *
+ * Aufbau der Sicherung (JSON):
+ *   MAIN       Block: die Schluessel aus sm_vorgaben() - darunter TOKEN, das
+ *              Zugriffstoken des Endpunkts. Nie darin: FORMKEY (Merkmal gegen
+ *              fremde Absender), SUBFOLDER und SCRIPTNAME (gehoeren zur
+ *              Installation; sm_cron_setzen() raeumt Verknuepfungen dieses
+ *              Namens weg). Sie behalten beim Zurueckspielen ihren geltenden
+ *              Wert ('nie_aus_datei' mit Pfad, Modul 1.2.7).
+ *   ABGLEICH, KOSTEN  Bloecke (sm_sichern_zusatz()).
+ *   KOEPFE     die Lesekoepfe als Liste: je Kopf ABSCHNITT (der Name des
+ *              Abschnitts) und die Felder aus sm_kopf_felder(); zugeordnet wird
+ *              ueber ABSCHNITT. Ein unbekanntes Feld wird verworfen und genannt
+ *              (Regel 2 im Listeneintrag; bis 2.8.22 wies es die ganze Datei
+ *              ab), jeder Wert geht durch sm_kopf_fehler() wie bis 2.8.22.
+ *   tts, ansage_regeln, ansage_haken  die Sprachansagen (in smartmeter.cfg im
+ *              Abschnitt [ANSAGE] als base64-JSON); nie darin: die
+ *              Sprechtoken, ansage_token_herkunft, ansage_aus_datei.
+ *   VZLOGGER   Teil ('teile'): vzlogger.json ohne uuids - eine eigene Datei
+ *              mit eigenem Lese- und Schreibweg (sm_vz_read()/sm_vz_write(),
+ *              daraus vzlogger.conf), keine Einstellung der smartmeter.cfg.
+ *
+ * Was fehlen darf: alles behaelt fehlend den geltenden Wert und wird genannt
+ * ('fehlt' => 'behalten'). So las schon sm_sichern_einlesen_kern() bis
+ * 2.8.22: kein Schluessel war Pflicht, was die Datei nicht nannte, blieb
+ * (sm_cfg_set() schrieb nur Genanntes; die Spaetliste nannte nur einen Teil
+ * davon). Jeder Wert geht durch dieselben Regeln wie bis 2.8.22.
+ * ================================================================== */
+
+/** Die Abschnittsnamen der smartmeter.cfg, die kein Lesekopf sind. */
+function sm_sicherung_abschnitte()
 {
-    return sm_sichern_text_kern($pruefen) . "\n[ANSAGE]\nBLOCK=" . base64_encode((string) json_encode(sm_ansage_fuer_sicherung(sm_ansage_cfg()))) . "\n";
+    return array('MAIN', 'ABGLEICH', 'KOSTEN', 'ANSAGE', 'VZLOGGER');
 }
 
-/** Zurueckspielen: [ANSAGE] wird vor dem Kern herausgenommen und eigens geprueft. Fehlt er (aeltere Sicherung), bleibt der geltende Stand. */
-function sm_sichern_einlesen($roh)
+/** Die Schluessel des Teils VZLOGGER - die Vorgaben von vzlogger.json ohne uuids (aus den Kanaelen gebildet). */
+function sm_sicherung_vz_schluessel()
 {
-    $b = null;
-    $roh = (string) preg_replace_callback('/^\[ANSAGE\]\s*\R(?:BLOCK=(\S*)\R?)?/m', function ($m) use (&$b) { $b = isset($m[1]) ? $m[1] : ''; return ''; }, (string) $roh);
-    $r = sm_sichern_einlesen_kern($roh);
-    if ($b === null || $b === '') { return $r; }
-    $j = json_decode(sm_ansage_sicherung_vor((string) base64_decode($b)), true);
-    $gut = is_array($j);
-    foreach (is_array($j) ? $j : array() as $a => $w) { if (sm_ansage_wert($a, $w) !== true) { $gut = false; } }
-    if (!$gut) {
-        $r[0] = null;
-        $r[1][] = sm_t('ANSAGEPLUGIN.M_FEHL');
-    } elseif ($r[0] !== null) {
-        $r[0]['ANSAGE'] = array('BLOCK' => base64_encode((string) json_encode($j)));
-    }
-    return $r;
+    return array_values(array_diff(array_keys(sm_vz_vorgaben()), array('uuids')));
 }
 
-function sm_sichern_uebernehmen($neu)
+/** Ein Einzelwert der Sicherung als Text: Zeichenkette oder ganze Zahl, sonst null (Feld, Wahrheitswert, null). */
+function sm_sicherung_text($w)
 {
-    $a = isset($neu['ANSAGE']) ? $neu['ANSAGE'] : null;
-    unset($neu['ANSAGE']);
-    $r = sm_sichern_uebernehmen_kern($neu);
-    if ($a !== null) { sm_cfg_set('ANSAGE', $a); }
-    return $r;
+    if (is_string($w)) { return $w; }
+    if (is_int($w)) { return (string) $w; }
+    return null;
 }
 
-function sm_sichern_text_kern($pruefen = true)
+/** Ist $a ein Feld mit Namen (kein JSON-Array)? */
+function sm_sicherung_objekt($a)
 {
-    $tabu = sm_sichern_tabu();
-    $main = sm_legacy_read();
-    $vz   = sm_vz_read();
+    return is_array($a) && ($a === array() || array_keys($a) !== range(0, count($a) - 1));
+}
+
+/**
+ * Der geltende Stand fuer das Modul. MAIN, ABGLEICH und KOSTEN wie sie gelten
+ * (sm_legacy_read(), Vorgabe fuer leere Werte - so schrieb sie schon die
+ * Textsicherung), die Lesekoepfe mit ihren Feldern, die Sprachansagen.
+ * $mit_fremden (nur fuer das Zurueckspielen, 'jetzt'): dazu, was die Datei
+ * traegt und diese Fassung nicht kennt - ein unbekannter Schluessel in MAIN,
+ * ABGLEICH oder KOSTEN, ein unbekannter Abschnitt (ohne DEVICE). Das Modul
+ * nennt sie dann als entfernt (Bauform vom 15.11.2026: die Lesefunktion
+ * sortiert nichts aus). "Einstellungen sichern" baut ohne sie.
+ */
+function sm_sicherung_jetzt($mit_fremden = false)
+{
     $alles = sm_cfg_read();
-
-    $t  = "; Smartmeter classic - Sicherung der Einstellungen\n";
-    $t .= '; ' . date('d.m.Y H:i') . ', Plugin-Fassung ' . sm_fassung() . "\n";
-    $t .= "; ACHTUNG: enthaelt das Zugriffstoken des Endpunkts.\n";
-    $t .= "; Wie ein Passwort behandeln - nicht in ein Forum haengen.\n\n";
-
-    $t .= "[MAIN]\n";
-    foreach (sm_vorgaben() as $k => $v) {
-        if (in_array($k, $tabu, true)) {
-            continue;
-        }
-        $t .= $k . '=' . sm_wert_saeubern($main[$k]) . "\n";
+    $aus = array();
+    $aus['MAIN'] = sm_legacy_read();
+    foreach (array('SUBFOLDER', 'SCRIPTNAME') as $k) {
+        if (isset($alles['MAIN'][$k])) { $aus['MAIN'][$k] = (string) $alles['MAIN'][$k]; }
     }
-    $t .= "\n[VZLOGGER]\n";
-    foreach (sm_vz_vorgaben() as $k => $v) {
-        if ($k === 'uuids') {
-            // Aus den Kanaelen neu gebildet - keine zweite Wahrheit.
-            continue;
-        }
-        $w = $vz[$k];
-        if (is_array($w)) {
-            $w = implode(',', $w);
-        }
-        $t .= $k . '=' . sm_wert_saeubern($w) . "\n";
-    }
-    /* Gruppe 35 (2.8.13, T2-1): Fahrplan-Abgleich und Kostenrechnung ziehen mit um - bis 2.8.12 waren beide
-     * nach einem Umzug aus und ohne Adresse. Werte wie in der Datei, leere Haken als 0. */
-    foreach (sm_sichern_zusatz() as $sm_ab => $sm_schl) {
-        $t .= "\n[" . $sm_ab . "]\n";
-        foreach ($sm_schl as $k => $sm_vg) {
-            $sm_w = (isset($alles[$sm_ab][$k]) && $alles[$sm_ab][$k] !== '') ? $alles[$sm_ab][$k] : $sm_vg;
-            $t .= $k . '=' . sm_wert_saeubern($sm_w) . "\n";
+    foreach (sm_sichern_zusatz() as $ab => $vg) {
+        $aus[$ab] = array();
+        foreach ($vg as $k => $v) {
+            $aus[$ab][$k] = (isset($alles[$ab][$k]) && $alles[$ab][$k] !== '') ? (string) $alles[$ab][$k] : $v;
         }
     }
-    foreach (sm_koepfe() as $k) {
-        $t .= "\n[KOPF " . $k['ABSCHNITT'] . "]\n";
-        foreach (sm_kopf_felder() as $f) {
-            $w = isset($alles[$k['ABSCHNITT']][$f]) ? $alles[$k['ABSCHNITT']][$f] : '';
-            $t .= $f . '=' . sm_wert_saeubern($w) . "\n";
+    $aus['KOEPFE'] = array();
+    foreach ($alles as $ab => $werte) {
+        if (in_array($ab, sm_sicherung_abschnitte(), true) || !is_array($werte) || !isset($werte['DEVICE'])) { continue; }
+        $kopf = array('ABSCHNITT' => (string) $ab);
+        foreach (sm_kopf_felder() as $f) { $kopf[$f] = isset($werte[$f]) ? (string) $werte[$f] : ''; }
+        $aus['KOEPFE'][] = $kopf;
+    }
+    $a = sm_ansage_cfg();
+    foreach (sm_ansage_schluessel() as $k) {
+        if (array_key_exists($k, $a)) { $aus[$k] = $a[$k]; }
+    }
+    if ($mit_fremden) {
+        foreach (array('MAIN', 'ABGLEICH', 'KOSTEN') as $ab) {
+            if (!isset($alles[$ab]) || !is_array($alles[$ab])) { continue; }
+            foreach ($alles[$ab] as $k => $v) {
+                if (!array_key_exists($k, $aus[$ab])) { $aus[$ab][$k] = (string) $v; }
+            }
+        }
+        foreach ($alles as $ab => $werte) {
+            $ab = (string) $ab;
+            if (in_array($ab, sm_sicherung_abschnitte(), true) || !is_array($werte) || isset($werte['DEVICE'])
+                || array_key_exists($ab, $aus)) { continue; }
+            $aus[$ab] = $werte;
         }
     }
-    if ($pruefen) {
-        $sm_x3 = sm_sichern_selbstpruefung($t);
-        if ($sm_x3) {
-            $sm_kopfende = strpos($t, "\n\n");
-            $t = substr($t, 0, $sm_kopfende + 1)
-               . '; _warnung: ' . implode(', ', $sm_x3)
-               . " wuerde(n) beim Zurueckspielen abgewiesen - vorher berichtigen.\n"
-               . substr($t, $sm_kopfende + 1);
-        }
-    }
-    return $t;
+    return $aus;
 }
 
-/**
- * Welche Werte des Textes $t wuerde das Zurueckspielen abweisen? Liste der
- * NAMEN (X-3) - dieselbe Pruefung wie beim Zurueckspielen, keine zweite.
- */
-function sm_sichern_selbstpruefung($t)
+/** Der Teil VZLOGGER fuer "Einstellungen sichern" und als geltender Stand ('teile_jetzt'). */
+function sm_sicherung_vz_jetzt()
 {
-    $r = array_pad(sm_sichern_einlesen($t), 4, array());
-    if ($r[0] !== null) {
-        return array();
-    }
-    return $r[3] ? array_values(array_unique($r[3])) : array('Aufbau');
+    $vz = sm_vz_read();
+    $aus = array();
+    foreach (sm_sicherung_vz_schluessel() as $k) { $aus[$k] = $vz[$k]; }
+    return $aus;
 }
 
-/**
- * Eine hochgeladene Sicherung pruefen.
- *
- * Rueckgabe: array(Ergebnis, Beanstandungen, Hinweise). Ergebnis ist null,
- * sobald eine Beanstandung vorliegt - eine halb gueltige Datei
- * ueberschreibt NICHTS.
- *
- * Alle Beanstandungen werden gesammelt. Wer nur die erste zeigt, schickt
- * den Anwender in eine Schleife aus je einem Fund pro Anlauf.
- */
-function sm_sichern_einlesen_kern($roh)
+/** Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul. */
+function sm_sicherung_beschreibung()
 {
-    $mangel  = array();
-    $hinweis = array();
-    $tabu    = sm_sichern_tabu();
-    $vorgabe_main = sm_vorgaben();
-    $vorgabe_vz   = sm_vz_vorgaben();
-    $kopffelder   = sm_kopf_felder();
-
-    $main = array();
-    $vz   = array();
-    $koepfe = array();
-    $zusatz = array('ABGLEICH' => array(), 'KOSTEN' => array());
-    $zusatz_da = array();
-    $sm_zusatz_vg = sm_sichern_zusatz();
-    $abschnitt = '';
-    $gefunden = 0;
-    $nr = 0;
-
-    foreach (preg_split('/\R/', (string) $roh) as $z) {
-        $nr++;
-        $t = trim($z);
-        if ($t === '' || $t[0] === ';' || $t[0] === '#') {
-            continue;
-        }
-        if ($t[0] === '[' && substr($t, -1) === ']') {
-            $abschnitt = trim(substr($t, 1, -1));
-            /* "[KOPF]" und "[KOPF   ]" ZUERST abfangen. Bis 2.4.2 stand
-             * die Pruefung 40 Zeilen weiter unten hinter strncmp(...,
-             * 'KOPF ', 5) - und weil $abschnitt getrimmt ist, konnte sie
-             * dort nie zutreffen. Die Meldung SICH.KOPF_OHNE_NAME war
-             * uebersetzter, nie erreichbarer Text. */
-            if (strncmp($abschnitt, 'KOPF', 4) === 0
-                && trim(substr($abschnitt, 4)) === '') {
-                $mangel[] = sprintf(sm_t('SICH.KOPF_OHNE_NAME'), $nr);
-                $abschnitt = '';
-                continue;
-            }
-            if ($abschnitt === 'ABGLEICH' || $abschnitt === 'KOSTEN') {
-                $zusatz_da[$abschnitt] = true;
-            }
-            if ($abschnitt !== 'MAIN' && $abschnitt !== 'VZLOGGER'
-                && $abschnitt !== 'ABGLEICH' && $abschnitt !== 'KOSTEN'
-                && strncmp($abschnitt, 'KOPF ', 5) !== 0) {
-                $mangel[] = sprintf(sm_t('SICH.ABSCHNITT'), $nr, sm_e($abschnitt));
-            }
-            continue;
-        }
-        $pos = strpos($t, '=');
-        if ($pos === false) {
-            $mangel[] = sprintf(sm_t('SICH.ZEILE'), $nr, sm_e($t));
-            continue;
-        }
-        $k = trim(substr($t, 0, $pos));
-        $v = trim(substr($t, $pos + 1));
-
-        if ($abschnitt === 'MAIN') {
-            if (in_array($k, $tabu, true)) {
-                // Kein stiller Verlust: die Datei nennt etwas, das
-                // ausdruecklich nicht uebernommen wird.
-                $hinweis[] = sprintf(sm_t('SICH.UEBERGANGEN'), sm_e($k));
-                continue;
-            }
-            if (!array_key_exists($k, $vorgabe_main)) {
-                $mangel[] = sprintf(sm_t('SICH.SCHLUESSEL'), $nr, sm_e($k));
-                continue;
-            }
-            $main[$k] = $v;
-            $gefunden++;
-        } elseif ($abschnitt === 'VZLOGGER') {
-            if ($k === 'uuids') {
-                continue;
-            }
-            if (!array_key_exists($k, $vorgabe_vz)) {
-                $mangel[] = sprintf(sm_t('SICH.SCHLUESSEL'), $nr, sm_e($k));
-                continue;
-            }
-            $vz[$k] = $v;
-            $gefunden++;
-        } elseif ($abschnitt === 'ABGLEICH' || $abschnitt === 'KOSTEN') {
-            /* Gruppe 35 (2.8.13, T2-1): optional - eine Sicherung aus 2.8.12 ohne diese Abschnitte bleibt gueltig. */
-            if (!array_key_exists($k, $sm_zusatz_vg[$abschnitt])) {
-                $mangel[] = sprintf(sm_t('SICH.SCHLUESSEL'), $nr, sm_e($k));
-                continue;
-            }
-            $zusatz[$abschnitt][$k] = $v;
-            $gefunden++;
-        } elseif (strncmp($abschnitt, 'KOPF ', 5) === 0) {
-            $s = trim(substr($abschnitt, 5));
-            if (!in_array($k, $kopffelder, true)) {
-                $mangel[] = sprintf(sm_t('SICH.SCHLUESSEL'), $nr, sm_e($k));
-                continue;
-            }
-            if (!isset($koepfe[$s])) {
-                $koepfe[$s] = array();
-            }
-            $koepfe[$s][$k] = $v;
-            $gefunden++;
-        } else {
-            $mangel[] = sprintf(sm_t('SICH.OHNE_ABSCHNITT'), $nr, sm_e($k));
-        }
-    }
-
-    if ($gefunden === 0) {
-        $mangel[] = sm_t('SICH.LEER');
-    }
-
-    /* Werte pruefen - dieselben Grenzen wie in den Formularen. Eine
-     * Sicherung ist eine Eingabe wie jede andere.
-     *
-     * Seit dem Durchgang 01.10.2026 sammelt $namen zu jeder Beanstandung den
-     * NAMEN des Wertes - fuer die Warnung beim Sichern (X-3), die nie Werte
-     * nennt. Die Meldungen selbst sind unveraendert. */
-    $namen = array();
-    $wert = function ($name_html, $anzeige, $name) use (&$mangel, &$namen) {
-        $mangel[] = sprintf(sm_t('SICH.WERT'), $name_html, sm_e($anzeige));
-        $namen[] = $name;
+    $p = sm_paths();
+    $behalten = function (array $namen) {
+        $k = array();
+        foreach ($namen as $n) { $k[$n] = array('fehlt' => 'behalten'); }
+        return $k;
     };
-    if (isset($main['CRON']) && !array_key_exists($main['CRON'], sm_takte())) {
-        $wert('CRON', $main['CRON'], 'CRON');
-    }
-    foreach (array('UDPPORT') as $k) {
-        if (isset($main[$k]) && (!preg_match('/^[0-9]+$/', $main[$k])
-            || (int) $main[$k] < 1 || (int) $main[$k] > 65535)) {
-            $wert($k, $main[$k], $k);
-        }
-    }
-    foreach (array('udpport', 'httpport') as $k) {
-        if (isset($vz[$k]) && (!preg_match('/^[0-9]+$/', $vz[$k])
-            || (int) $vz[$k] < 1 || (int) $vz[$k] > 65535)) {
-            $wert($k, $vz[$k], $k);
-        }
-    }
-    if (isset($vz['baudrate']) && (!preg_match('/^[0-9]+$/', $vz['baudrate'])
-        || (int) $vz['baudrate'] < 300 || (int) $vz['baudrate'] > 921600)) {
-        $wert('baudrate', $vz['baudrate'], 'baudrate');
-    }
-    if (isset($vz['parity']) && !in_array($vz['parity'], array('8n1', '7n1', '7e1', '8e1'), true)) {
-        $wert('parity', $vz['parity'], 'parity');
-    }
-    if (isset($vz['protocol']) && !in_array($vz['protocol'], array('sml', 'd0'), true)) {
-        $wert('protocol', $vz['protocol'], 'protocol');
-    }
-    /* Die Zaehlernummer. Das Formular weist sie seit dem Durchgang
-     * 01.10.2026 ab (vorher saeuberte es sie); bin/fetch_vzlogger.pl
-     * saeubert sie. Ein Zeichen ausserhalb dieses Vorrats liesse Dienst und
-     * Themen-Tabelle auseinanderlaufen. */
-    if (isset($vz['serial']) && $vz['serial'] !== ''
-        && !preg_match('/^[A-Za-z0-9_\-]+$/', $vz['serial'])) {
-        $wert('serial', $vz['serial'], 'serial');
-    }
-    /* Die Kanaele - dieselbe Regel wie im Formular. */
-    if (isset($vz['channels'])) {
-        foreach (preg_split('/[\s,]+/', trim((string) $vz['channels'])) as $sm_c) {
-            if ($sm_c !== '' && !preg_match('/^[\d\.:\-\*]+$/', $sm_c)) {
-                $wert('channels', $sm_c, 'channels');
+    $main = array_merge(array_keys(sm_vorgaben()), array('SUBFOLDER', 'SCRIPTNAME'));
+    $zusatz = sm_sichern_zusatz();
+    $tts = array_merge(array_keys(ansage_werk_block()), ansage_geheim());
+    $schluessel = array(
+        'MAIN'     => sicherung_block($main, $behalten($main)) + array('fehlt' => 'behalten'),
+        'ABGLEICH' => sicherung_block(array_keys($zusatz['ABGLEICH']), $behalten(array_keys($zusatz['ABGLEICH'])))
+                      + array('fehlt' => 'behalten'),
+        'KOSTEN'   => sicherung_block(array_keys($zusatz['KOSTEN']), $behalten(array_keys($zusatz['KOSTEN'])))
+                      + array('fehlt' => 'behalten'),
+        'KOEPFE'   => sicherung_liste(array_merge(array('ABSCHNITT'), sm_kopf_felder()), 'ABSCHNITT',
+                                      $behalten(sm_kopf_felder())) + array('fehlt' => 'behalten'),
+        'tts' => sicherung_block($tts, array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))))
+                 + array('fehlt' => 'behalten', 'sichern' => 'ansage_sicherung_bereinigen'),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array('fehlt' => 'behalten'),
+        'ansage_haken'  => sicherung_block(array('zaehler')) + array('fehlt' => 'behalten'),
+        'VZLOGGER' => sicherung_block(sm_sicherung_vz_schluessel(), $behalten(sm_sicherung_vz_schluessel())),
+    );
+    foreach (array('MAIN', 'ABGLEICH', 'KOSTEN') as $ab) {
+        $schluessel[$ab]['wandeln'] = function ($w) {
+            foreach ($w as $k => $v) {
+                $t = sm_sicherung_text($v);
+                if ($t !== null) { $w[$k] = $t; }
             }
-        }
+            return $w;
+        };
     }
-    /* Schalter sind 0 oder 1. Ein "ja" oder ein leeres Feld wuerde sonst
-     * je nach Lesestelle verschieden ausgelegt. */
-    foreach (array('READ', 'SENDMQTT', 'SENDUDP', 'ENDPUNKT_EIN', 'LASTGANG_EIN', 'HAUS_ENERGIE_EIN') as $k) {
-        if (isset($main[$k]) && $main[$k] !== '0' && $main[$k] !== '1') {
-            $wert($k, $main[$k], $k);
-        }
-    }
-    /* 2.8.18: der Netzzaehler fuer haus/energie - leer oder ein Kopfname nach DERSELBEN Regel wie die
-     * Lesekoepfe (sm_kopf_name_ok); dass es den Kopf hier gibt, prueft erst der Minutenlauf. */
-    if (isset($main['HAUS_ENERGIE_ZAEHLER']) && $main['HAUS_ENERGIE_ZAEHLER'] !== ''
-        && !sm_kopf_name_ok($main['HAUS_ENERGIE_ZAEHLER'])) {
-        $wert('HAUS_ENERGIE_ZAEHLER', $main['HAUS_ENERGIE_ZAEHLER'], 'HAUS_ENERGIE_ZAEHLER');
-    }
-    foreach (array('enabled', 'localtime', 'sendudp') as $k) {
-        if (isset($vz[$k]) && (string) $vz[$k] !== '0' && (string) $vz[$k] !== '1') {
-            $wert($k, (string) $vz[$k], $k);
-        }
-    }
-    /* C1 (Durchgang 01.10.2026, Klasse 12): das Themenpraefix mit DERSELBEN
-     * Regel wie das Formular. Bis 2.8.5 nahm der Rueckspielweg jeden Wert -
-     * "smart meter" landete im Gateway unter "smart/..." (gemessen,
-     * Codebericht Nr. 6, S4). */
-    if (isset($main['MQTTTOPIC']) && smg_praefix_fehler($main['MQTTTOPIC']) !== '') {
-        $wert('MQTTTOPIC', $main['MQTTTOPIC'], 'MQTTTOPIC');
-    }
-    /* C1: das Token nur als Zufallsmuster. Leer ist zulaessig und behaelt
-     * das geltende (sm_sichern_uebernehmen). Der Wert wird NICHT angezeigt -
-     * er ist ein Geheimnis. "ab&cd" machte die angezeigte Adresse bis 2.8.5
-     * unbrauchbar (403, gemessen S2). */
-    if (isset($main['TOKEN']) && $main['TOKEN'] !== ''
-        && !preg_match('/^[A-Za-z0-9_\-]{8,128}$/', $main['TOKEN'])) {
-        $mangel[] = sm_t('SICH.TOKEN_WERT');
-        $namen[] = 'TOKEN';
-    }
-    /* Zwei Leser koennen sich eine serielle Schnittstelle nicht teilen.
-     * Beide Formular-Handler weisen das ab; der Rueckspielweg ist der
-     * DRITTE Handler, und dort fehlte die Pruefung. Gemessen wird gegen
-     * den zusammengefuehrten Stand: was die Datei nicht nennt, bleibt
-     * wie es ist. */
-    $sm_read_neu = isset($main['READ'])
-        ? ($main['READ'] === '1') : (sm_legacy_read()['READ'] === '1');
-    $sm_vz_neu = isset($vz['enabled'])
-        ? ((string) $vz['enabled'] === '1') : (bool) sm_vz_read()['enabled'];
-    if ($sm_read_neu && $sm_vz_neu) {
-        $mangel[] = sm_t('FEHLER.BEIDE_LESER');
-        $namen[] = 'READ/enabled';
-    }
-    /* Gruppe 35 (2.8.13, Entscheidung 1: T4-2 + E6): JEDES Kopffeld und der Kopfname gegen ihre
-     * Positivlisten (sm_kopf_fehler() in sm_legacy.php). Bis 2.8.12 wurde nur METER geprueft - ein
-     * CRC mit angehaengtem Befehl lief danach im Minutentakt (Pruefbericht T4-2). Eine Beanstandung
-     * weist die ganze Sicherung ab (E-E1); die Meldung nennt Kopf und Feldnamen, nie Werte. */
-    $profile = sm_profile();
-    $sm_protokolle = sm_protokolle();
-    foreach ($koepfe as $s => $w) {
-        $sm_kf = sm_kopf_fehler((string) $s, $w, $profile, $sm_protokolle);
-        if ($sm_kf) {
-            $mangel[] = sprintf(sm_t('SICH.KOPF_FELDER'), sm_e(sm_kopf_name_ok((string) $s) ? $s : '?'),
-                                sm_e(implode(', ', $sm_kf)));
-            foreach ($sm_kf as $sm_n) { $namen[] = $sm_n; }
-        }
-    }
-    foreach ($zusatz as $sm_ab => $sm_w) {
-        foreach ($sm_w as $k => $v) {
-            if (($k === 'AKTIV' || $k === 'SPEICHER_EIN') && $v !== '0' && $v !== '1') {
-                $wert($sm_ab . '.' . $k, $v, $k);
-            } elseif (substr($k, -4) === '_URL' && $v !== '' && !sm_url_ok($v)) {
-                $wert($sm_ab . '.' . $k, $v, $k);
-            }
-        }
-    }
-    /* Spaetliste (Gruppe 35): Schluessel, die erst 2.8.13 kennt. Fehlen sie in einer aelteren Sicherung,
-     * bleibt der hier geltende Wert - sie werden nie auf ihre Vorgabe zurueckgesetzt. */
-    $sm_spaet = array();
-    foreach (sm_sichern_spaetliste() as $sm_ab => $sm_schl) {
-        foreach ($sm_schl as $k) {
-            $sm_hat = ($sm_ab === 'MAIN') ? array_key_exists($k, $main)
-                                          : array_key_exists($k, $zusatz[$sm_ab]);
-            if (!$sm_hat) { $sm_spaet[] = $sm_ab . '.' . $k; }
-        }
-    }
-    if ($sm_spaet && $gefunden > 0) {
-        $hinweis[] = sprintf(sm_t('SICH.SPAET'), sm_e(implode(', ', $sm_spaet)));
-    }
-
-    if ($mangel) {
-        return array(null, $mangel, $hinweis, $namen);
-    }
-    return array(array('MAIN' => $main, 'VZLOGGER' => $vz, 'KOEPFE' => $koepfe,
-                       'ABGLEICH' => $zusatz['ABGLEICH'], 'KOSTEN' => $zusatz['KOSTEN']),
-                 array(), $hinweis, array());
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-Smartmeter-classic',
+        /* Die Textsicherung bis 2.8.22 traegt kein Kennzeichen. sm_sicherung_text_wandeln() gibt sie ohne _plugin, mit
+         * dem Kopf _aus_textsicherung weiter, und der Uebersetzer erkennt sie daran; die Meldung sagt "aeltere
+         * Sicherung erkannt". Bis zur Angleichung vom 18.11.2026 (Frage 37) trug die umgewandelte Datei ein erfundenes
+         * frueheres Kennzeichen, das keine veroeffentlichte Fassung je schrieb. */
+        'uebersetzer' => 'sm_sicherung_alt_erkennen',
+        'hinweis' => sm_t('EINST.SICH_KOPF_HINWEIS'),
+        'home' => (string) $p['home'],
+        'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => array('MAIN' => sm_vorgaben(), 'ABGLEICH' => $zusatz['ABGLEICH'],
+                            'KOSTEN' => $zusatz['KOSTEN'], 'KOEPFE' => array()) + sm_ansage_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft', 'ansage_aus_datei',
+                                 'MAIN.FORMKEY', 'MAIN.SUBFOLDER', 'MAIN.SCRIPTNAME'),
+        'teile' => array('VZLOGGER' => 'sm_sicherung_vz_lesen'),
+        'teile_jetzt' => array('VZLOGGER' => 'sm_sicherung_vz_jetzt'),
+        'pruefen' => 'sm_sicherung_wert',
+        'quer' => 'sm_sicherung_quer',
+        'vorbehandeln' => 'sm_sicherung_vorbehandeln',
+        'jetzt' => function () { return sm_sicherung_jetzt(true); },
+        'log' => function ($z) { sm_log($z); },
+        't' => 'sm_t',
+        'e' => 'sm_e',
+    );
 }
 
 /**
- * Eine gepruefte Sicherung uebernehmen.
- *
- * Rueckgabe: array(ok, Hinweise). Der Aufrufer sagt danach, was mit dem
- * Dienst geschehen ist.
+ * Ein Wert der Sicherung (oben) - dieselben Grenzen wie in den Formularen und wie bis 2.8.22. Rueckgabe fuer das
+ * Modul: '' oder Liste von Beanstandungen (maskiert, Namen statt Werten).
  */
-function sm_sichern_uebernehmen_kern($neu)
+function sm_sicherung_wert($k, $w)
 {
-    $hinweis = array();
-    $ok = true;
-
-    /* C1 (Durchgang 01.10.2026): ein LEERES Token in der Sicherung loescht
-     * das geltende nicht mehr. Bis 2.8.5 stand der Endpunkt danach ohne
-     * Hinweis offen (gemessen, Codebericht Nr. 6, S3). Wer ihn oeffnen will,
-     * tut es mit dem Knopf im Reiter Einbindung in Loxone. */
-    if (isset($neu['MAIN']['TOKEN']) && $neu['MAIN']['TOKEN'] === '') {
-        unset($neu['MAIN']['TOKEN']);
-        if (sm_legacy_read()['TOKEN'] !== '') {
-            $hinweis[] = sm_t('SICH.TOKEN_BEHALTEN');
-        }
-    }
-
-    if ($neu['MAIN']) {
-        $ok = sm_cfg_set('MAIN', $neu['MAIN']) && $ok;
-    }
-    // Gruppe 35 (2.8.13, T2-1): Fahrplan-Abgleich und Kostenrechnung - nur, was die Datei nennt.
-    foreach (array('ABGLEICH', 'KOSTEN') as $sm_ab) {
-        if (!empty($neu[$sm_ab])) {
-            $ok = sm_cfg_set($sm_ab, $neu[$sm_ab]) && $ok;
-        }
-    }
-    foreach ($neu['KOEPFE'] as $s => $w) {
-        // Ein Geraetepfad gehoert zu DIESER Anlage. Steckt der Lesekopf hier
-        // nicht, wird das Profil uebernommen und der Pfad genannt statt
-        // gesetzt - sonst zeigt die Konfiguration auf ein Geraet, das es
-        // nicht gibt.
-        if (isset($w['DEVICE']) && $w['DEVICE'] !== '' && !file_exists($w['DEVICE'])) {
-            /* Nur MELDEN, nicht wegnehmen. Bis 2.4.2 stand hier ein
-             * unset() - und sm_koepfe() ueberspringt jeden Abschnitt
-             * OHNE DEVICE. Auf einer frischen Anlage, also genau dem
-             * Zweck dieser Datei, entstand der Abschnitt damit ohne
-             * DEVICE: der Lesekopf war in der Oberflaeche unsichtbar,
-             * nicht zu bearbeiten und in keiner Vorlage - waehrend die
-             * Meldung sagte, die Einstellung sei uebernommen. Wurde er
-             * spaeter angesteckt, legte sm_koepfe_anlegen() den
-             * Abschnitt neu an und ueberschrieb NAME und METER.
-             *
-             * Der Pfad kommt aus der udev-Regel und heisst deshalb auf
-             * jeder Anlage gleich; er bleibt stehen. Dass das Geraet
-             * gerade fehlt, sagt ANGESTECKT in sm_koepfe(). */
-            $hinweis[] = sprintf(sm_t('SICH.KOPF_FEHLT'), sm_e($s), sm_e($w['DEVICE']));
-        }
-        $ok = sm_cfg_set($s, $w) && $ok;
-    }
-    if ($neu['VZLOGGER']) {
-        $cfg = sm_vz_read();
-        foreach ($neu['VZLOGGER'] as $k => $v) {
-            if ($k === 'channels') {
-                $liste = array();
-                foreach (preg_split('/[\s,]+/', $v) as $c) {
-                    if ($c !== '') { $liste[] = $c; }
+    $aw = sm_ansage_wert($k, $w);
+    if ($aw !== null) { return $aw ? '' : sm_t('ANSAGEPLUGIN.M_FEHL') . ' (' . sm_e($k) . ')'; }
+    $falsch = function ($name) { return sprintf(sm_t('SICH.WERT_NAME'), sm_e($name)); };
+    if ($k === 'KOEPFE') {
+        if (!is_array($w) || ($w !== array() && array_keys($w) !== range(0, count($w) - 1))) { return $falsch('KOEPFE'); }
+        $aus = array();
+        $profile = sm_profile();
+        $protokolle = sm_protokolle();
+        $namen = array();
+        foreach ($w as $i => $felder) {
+            $f = array();
+            $s = (is_array($felder) && isset($felder['ABSCHNITT']) && is_string($felder['ABSCHNITT'])) ? $felder['ABSCHNITT'] : '';
+            if (sm_sicherung_objekt($felder)) {
+                unset($felder['ABSCHNITT']);
+                foreach ($felder as $fk => $fv) {
+                    if (sm_sicherung_text($fv) === null) { $f[] = (string) $fk; unset($felder[$fk]); }
                 }
-                $cfg['channels'] = $liste ? $liste : sm_vz_vorgaben()['channels'];
+                $f = array_merge($f, sm_kopf_fehler($s, $felder, $profile, $protokolle));
             } else {
-                $cfg[$k] = $v;
+                $f[] = 'KOPF';
+            }
+            // ANSAGE ist ein Abschnitt dieser Linie, kein Lesekopf; derselbe Kopf zweimal ist nicht zu entscheiden.
+            if ((strtoupper($s) === 'ANSAGE' || isset($namen[$s])) && !in_array('KOPF', $f, true)) { $f[] = 'KOPF'; }
+            $namen[$s] = true;
+            if ($f) {
+                $aus[] = sprintf(sm_t('SICH.KOPF_FELDER'), sm_e(sm_kopf_name_ok($s) ? $s : 'KOEPFE[' . ($i + 1) . ']'),
+                                 sm_e(implode(', ', array_values(array_unique($f)))));
             }
         }
-        if (isset($cfg['device']) && $cfg['device'] !== '' && !file_exists($cfg['device'])) {
-            $hinweis[] = sprintf(sm_t('SICH.KOPF_FEHLT'), 'vzLogger', sm_e($cfg['device']));
-            $cfg['device'] = '';
+        return $aus;
+    }
+    if (!in_array($k, array('MAIN', 'ABGLEICH', 'KOSTEN'), true)) { return $falsch($k); }
+    if (!sm_sicherung_objekt($w)) { return $falsch($k); }
+    $aus = array();
+    foreach ($w as $sk => $roh) {
+        $sk = (string) $sk;
+        $name = $k . '.' . $sk;
+        $v = sm_sicherung_text($roh);
+        if ($v === null || preg_match('/[\x00-\x1F\x7F]/', $v)) { $aus[] = $falsch($name); continue; }
+        if ($k === 'MAIN') {
+            $gut = true;
+            switch ($sk) {
+                case 'CRON':
+                    $gut = array_key_exists($v, sm_takte());
+                    break;
+                case 'UDPPORT':
+                    $gut = preg_match('/^[0-9]+$/', $v) && (int) $v >= 1 && (int) $v <= 65535;
+                    break;
+                case 'READ': case 'SENDMQTT': case 'SENDUDP': case 'ENDPUNKT_EIN': case 'LASTGANG_EIN':
+                case 'HAUS_ENERGIE_EIN':
+                    $gut = ($v === '0' || $v === '1');
+                    break;
+                case 'HAUS_ENERGIE_ZAEHLER':
+                    $gut = ($v === '' || sm_kopf_name_ok($v));
+                    break;
+                case 'MQTTTOPIC':
+                    $gut = function_exists('smg_praefix_fehler') && smg_praefix_fehler($v) === '';
+                    break;
+                case 'TOKEN':
+                    // Der Wert wird nie angezeigt - er ist ein Geheimnis.
+                    if ($v !== '' && !preg_match('/^[A-Za-z0-9_\-]{8,128}\z/', $v)) { $aus[] = sm_t('SICH.TOKEN_WERT'); }
+                    continue 2;
+            }
+            if (!$gut) { $aus[] = $falsch($name); }
+            continue;
         }
+        if (($sk === 'AKTIV' || $sk === 'SPEICHER_EIN') && $v !== '0' && $v !== '1') {
+            $aus[] = $falsch($name);
+        } elseif (substr($sk, -4) === '_URL' && $v !== '' && !sm_url_ok($v)) {
+            $aus[] = $falsch($name);
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Der Teil VZLOGGER: jeder Wert wie im Formular des Reiters vzLogger, in dessen Form (Zahlen als Zahl, Kanaele als
+ * Liste). Wie bis 2.8.22: ein Geraet, das hier nicht angesteckt ist, wird nicht gesetzt, sondern genannt; eine leere
+ * Kanalliste gilt als die drei Vorgabekanaele. Rueckgabe fuer das Modul: array(Wert|null, Beanstandungen, Hinweise).
+ */
+function sm_sicherung_vz_lesen($w)
+{
+    if (!sm_sicherung_objekt($w)) {
+        return array(null, array(sprintf(sm_t('SICH.WERT_NAME'), 'VZLOGGER')));
+    }
+    $mangel = array();
+    $hinweis = array();
+    $falsch = function ($n) use (&$mangel) { $mangel[] = sprintf(sm_t('SICH.WERT_NAME'), sm_e('VZLOGGER.' . $n)); };
+    $zahl = function ($v, $lo, $hi) {
+        $t = sm_sicherung_text($v);
+        return ($t !== null && preg_match('/^[0-9]+\z/', $t) && (int) $t >= $lo && (int) $t <= $hi) ? (int) $t : null;
+    };
+    $aus = array();
+    foreach ($w as $k => $v) {
+        $k = (string) $k;
+        switch ($k) {
+            case 'enabled': case 'localtime': case 'sendudp':
+                $z = $zahl($v, 0, 1);
+                if ($z === null) { $falsch($k); } else { $aus[$k] = $z; }
+                break;
+            case 'udpport': case 'httpport':
+                $z = $zahl($v, 1, 65535);
+                if ($z === null) { $falsch($k); } else { $aus[$k] = $z; }
+                break;
+            case 'baudrate':
+                $z = $zahl($v, 300, 921600);
+                if ($z === null) { $falsch($k); } else { $aus[$k] = $z; }
+                break;
+            case 'parity':
+                if (!is_string($v) || !in_array($v, array('8n1', '7n1', '7e1', '8e1'), true)) { $falsch($k); } else { $aus[$k] = $v; }
+                break;
+            case 'protocol':
+                if (!is_string($v) || !in_array($v, array('sml', 'd0'), true)) { $falsch($k); } else { $aus[$k] = $v; }
+                break;
+            case 'serial':
+                if (!is_string($v) || ($v !== '' && !preg_match('/^[A-Za-z0-9_\-]+\z/', $v))) { $falsch($k); } else { $aus[$k] = $v; }
+                break;
+            case 'device':
+                if (!is_string($v) || preg_match('/[\x00-\x1F\x7F]/', $v)) { $falsch($k); break; }
+                if ($v !== '' && !file_exists($v)) {
+                    $hinweis[] = sprintf(sm_t('SICH.KOPF_FEHLT'), 'vzLogger', sm_e($v));
+                    $v = '';
+                }
+                $aus[$k] = $v;
+                break;
+            case 'channels':
+                if (!is_array($v) || !($v === array() || array_keys($v) === range(0, count($v) - 1))) { $falsch($k); break; }
+                $liste = array();
+                foreach ($v as $c) {
+                    if (!is_string($c) || !preg_match('/^[\d\.:\-\*]+\z/', $c)) { $falsch($k); $liste = null; break; }
+                    $liste[] = $c;
+                }
+                if ($liste !== null) { $aus[$k] = $liste ? $liste : sm_vz_vorgaben()['channels']; }
+                break;
+            default:
+                // Unbekannte Schluessel hat das Modul schon verworfen und genannt.
+                break;
+        }
+    }
+    return $mangel ? array(null, $mangel) : array($aus, array(), $hinweis);
+}
+
+/**
+ * Quer ueber die ganze Datei: zwei Leser koennen sich eine serielle Schnittstelle nicht teilen (wie bis 2.8.22,
+ * gegen den zusammengefuehrten Stand). Was die Umwandlung einer alten Textsicherung nicht lesen konnte (Kopf
+ * _text_mangel, sm_sicherung_text_wandeln()), weist seit Modul 1.2.11 das Modul selbst ab, mit seinen Saetzen
+ * (Regel 21); bis dahin stand diese Pruefung hier, mit eigenen Kennungen und Saetzen (SICH.ZEILE_UNLESBAR ...).
+ */
+function sm_sicherung_quer($neu, $r = null, $daten = null)
+{
+    $aus = array();
+    $read = (is_array($neu) && isset($neu['MAIN']['READ'])) ? (string) $neu['MAIN']['READ'] : sm_legacy_read()['READ'];
+    $vz = (is_array($r) && isset($r['teile']['VZLOGGER']['enabled'])) ? (string) $r['teile']['VZLOGGER']['enabled']
+        : (string) (int) sm_vz_read()['enabled'];
+    if ($read === '1' && $vz === '1') {
+        $aus[] = array('MAIN.READ', sm_t('FEHLER.BEIDE_LESER'));
+    }
+    return $aus;
+}
+
+/**
+ * Vor der Pruefung (nach dem Verwerfen unbekannter Schluessel und nach Regel 3), wie bis 2.8.22
+ * sm_ansage_sicherung_vor(): eine Datei mit Sprechtoken wird abgewiesen (der Block wird unbrauchbar gemacht, die
+ * Wertpruefung nennt ihn); sonst wird tts vervollstaendigt und die geltenden Sprechtoken bleiben.
+ */
+function sm_sicherung_vorbehandeln($bereit)
+{
+    if (array_key_exists('tts', $bereit)) {
+        $j = sm_ansage_cfg();
+        $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
+        $g = '';
+        $pr = is_array($bereit['tts']) ? ansage_wert_pruefen($bereit['tts'], $g, sm_ansage_modi()) : null;
+        if (!is_array($bereit['tts']) || ansage_sicherung_mangel($bereit['tts']) || $pr === null) {
+            $bereit['tts'] = 'ABGEWIESEN';
+        } else {
+            list($tv) = ansage_vervollstaendigen($pr, 'aus');
+            $bereit['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
+        }
+    }
+    return $bereit;
+}
+
+/**
+ * Vor dem Speichern: Lesekoepfe, die die Datei nicht nennt, bleiben, und ein Feld eines Kopfs, das die Datei nicht
+ * nennt, behaelt seinen Wert - wie bis 2.8.22 (sm_cfg_set() je Kopf; ein Lesekopf gehoert zur Anlage, an der er
+ * steckt). Wie bis 2.8.22 gilt nach dem Zurueckspielen ansage_aus_datei = 1: eine liegengebliebene ansage.json
+ * (Probe vom 01.11.) wird danach nicht mehr ueber die zurueckgespielten Sprachansagen gelegt.
+ */
+function sm_sicherung_vorbereiten($neu)
+{
+    $datei = array();
+    foreach ((isset($neu['KOEPFE']) && is_array($neu['KOEPFE'])) ? $neu['KOEPFE'] : array() as $kopf) {
+        $datei[(string) $kopf['ABSCHNITT']] = $kopf;
+    }
+    $koepfe = array();
+    foreach (sm_cfg_read() as $ab => $werte) {
+        $ab = (string) $ab;
+        if (in_array($ab, sm_sicherung_abschnitte(), true) || !is_array($werte) || !isset($werte['DEVICE'])) { continue; }
+        $koepfe[] = array('ABSCHNITT' => $ab) + (isset($datei[$ab]) ? array_merge($werte, $datei[$ab]) : $werte);
+        unset($datei[$ab]);
+    }
+    foreach ($datei as $kopf) { $koepfe[] = $kopf; }
+    $neu['KOEPFE'] = $koepfe;
+    $neu['ansage_aus_datei'] = 1;
+    return $neu;
+}
+
+/**
+ * Speichern: genau der Stand, den das Modul liefert. smartmeter.cfg wird ganz geschrieben (MAIN, ABGLEICH, KOSTEN,
+ * die Lesekoepfe, [ANSAGE]); der Teil VZLOGGER geht in vzlogger.json, daraus vzlogger.conf. Jede der drei Dateien
+ * zieht beim Schreiben ihre Zweitschrift mit (sm_cfg_write(), sm_vz_write(), sm_vz_conf_schreiben()).
+ */
+function sm_sicherung_speichern($neu, $jetzt = null, $r = null)
+{
+    $alles = array('MAIN' => $neu['MAIN'], 'ABGLEICH' => $neu['ABGLEICH'], 'KOSTEN' => $neu['KOSTEN']);
+    foreach ($neu['KOEPFE'] as $kopf) {
+        $s = (string) $kopf['ABSCHNITT'];
+        unset($kopf['ABSCHNITT']);
+        $alles[$s] = $kopf;
+    }
+    $x = array();
+    foreach (sm_ansage_schluessel() as $k) { if (array_key_exists($k, $neu)) { $x[$k] = $neu[$k]; } }
+    $alles['ANSAGE'] = array('BLOCK' => base64_encode((string) json_encode($x)));
+    $ok = sm_cfg_write($alles);
+    if ($ok && is_array($r) && isset($r['teile']['VZLOGGER']) && is_array($r['teile']['VZLOGGER'])) {
+        $cfg = sm_vz_read();
+        foreach ($r['teile']['VZLOGGER'] as $k => $v) { $cfg[$k] = $v; }
         $cfg['uuids'] = sm_vz_uuids($cfg['channels']);
-        /* Getrennt beurteilen. Bis 2.4.2 hing das Nachziehen der
-         * vzlogger.conf an $ok - und darin steckten schon die Ergebnisse
-         * der MAIN- und Kopf-Schreibungen. Scheiterte eine davon, blieb
-         * die conf auf dem alten Stand, waehrend vzlogger.json den neuen
-         * trug: zwei Wahrheiten, und der naechste Neustart nahm die
-         * alte. */
-        $vzok = sm_vz_write($cfg);
-        /* Den Rueckgabewert ansehen (C6, Durchgang 01.10.2026): bis 2.8.5
-         * wurde er verworfen, und der Dienst lief mit der alten conf. */
-        if ($vzok && !sm_vz_conf_schreiben(sm_vz_read())) {
-            $hinweis[] = sm_t('FEHLER.VZ_CONF');
-            $vzok = false;
-        }
-        $ok = $vzok && $ok;
+        $ok = sm_vz_write($cfg) && sm_vz_conf_schreiben(sm_vz_read());
     }
     sm_cache_verwerfen();
-    sm_log('Einstellungen aus einer Sicherung zurueckgespielt.');
-    return array($ok, $hinweis);
+    return $ok;
+}
+
+/** Die Paare (Datei, Zweitschrift) fuer die Messung des Moduls - je vorhandene Datei. */
+function sm_sicherung_zweitschrift_paare()
+{
+    $p = sm_paths();
+    $aus = array();
+    foreach (array('smartmeter.cfg', 'vzlogger.json', 'vzlogger.conf') as $n) {
+        if (is_file($p['config'] . '/' . $n)) { $aus[] = array($p['config'] . '/' . $n, sm_zweitschrift_pfad($n)); }
+    }
+    return $aus;
+}
+
+/** "Einstellungen sichern": die Datei als JSON-Text (Kopf und Inhalt baut das Modul); '' wenn nicht bildbar. */
+function sm_sicherung_json()
+{
+    return sicherung_json(sicherung_bauen(sm_sicherung_beschreibung(), sm_sicherung_jetzt(false),
+                                          array('VZLOGGER' => sm_sicherung_vz_jetzt())));
+}
+
+/** X-3: bestuende die eigene Sicherung das Zurueckspielen? Dieselbe Pruefung wie dort; Namen, nie Werte. */
+function sm_sicherung_selbstpruefung()
+{
+    $b = sm_sicherung_beschreibung();
+    $jetzt = sm_sicherung_jetzt(false);
+    return sicherung_selbstpruefung($b, sicherung_bauen($b, $jetzt, array('VZLOGGER' => sm_sicherung_vz_jetzt())), $jetzt);
+}
+
+/**
+ * Eine Textsicherung bis 2.8.22 in die JSON-Form dieser Fassung umwandeln (Entscheidung des Hausherrn 18.11.2026,
+ * "Linie wandelt vorweg um"). Erkannt wird sie an ihrer ersten Zeile, die jede Fassung 2.4.1 bis 2.8.22 schrieb
+ * ("; Smartmeter classic - Sicherung der Einstellungen"; gemessen 18.11.2026 an den Archiven). Alles andere
+ * (JSON, eine fremde Datei) geht unveraendert ans Modul. $umgewandelt sagt, ob umgewandelt wurde.
+ *
+ * Gelesen wird wie bis 2.8.22 (sm_sichern_einlesen_kern()): Zeilen mit ; oder # sind Kommentar, [Abschnitt],
+ * schluessel=wert, Rand abgeschnitten. Die JSON-Datei traegt kein _plugin, sondern den Kopf _aus_textsicherung =
+ * SM_TEXT_KOPF (daran erkennt sie der Uebersetzer sm_sicherung_alt_erkennen()) und _fassung aus der zweiten
+ * Kopfzeile. Nichts wird verschluckt:
+ *   - ein unbekannter Schluessel steht unter seinem Abschnitt, ein unbekannter Abschnitt als "[NAME]", ein
+ *     Schluessel vor dem ersten Abschnitt oben - das Modul verwirft sie und nennt sie (Regel 2);
+ *   - was sich nicht lesen laesst, steht mit Stelle und fester Kennung des Moduls in _text_mangel
+ *     (sicherung_text_mangel_eintragen(), Modul 1.2.11): eine Zeile ohne = oder ohne gueltiges UTF-8 (ZEILE), ein
+ *     Schluessel zweimal (DOPPELT), [KOPF] ohne Namen (ABSCHNITT), ein unlesbarer Block [ANSAGE] (WERT), ein
+ *     Schluessel mit _ am Anfang vor dem ersten Abschnitt (KOPF; so heisst in der JSON-Datei nur der Kopf, das Modul
+ *     ueberginge ihn still). Das Modul weist die ganze Datei dann ab - ein solcher Fehler laesst sich keinem Wert
+ *     zuordnen; ihn als unbekannten Schluessel zu verwerfen und den Rest
+ *     zurueckzuspielen, hiesse einen Wert still zu verlieren oder zu raten (bis 2.8.22 ebenso abgewiesen).
+ * Werte bleiben Text; die Kanaele werden wie bis 2.8.22 an Komma und Leerraum getrennt.
+ */
+function sm_sicherung_text_wandeln($roh, &$umgewandelt = null)
+{
+    $umgewandelt = false;
+    $t = (string) $roh;
+    if (substr($t, 0, 3) === "\xEF\xBB\xBF") { $t = substr($t, 3); }
+    $zeilen = preg_split('/\R/', $t);
+    $erste = '';
+    foreach ($zeilen as $z) {
+        if (trim($z) !== '') { $erste = trim($z); break; }
+    }
+    if ($erste !== SM_TEXT_KOPF) { return $roh; }
+    $umgewandelt = true;
+
+    $d = array('_aus_textsicherung' => SM_TEXT_KOPF);
+    $gesehen = array();
+    $abschnitt = '';
+    $nr = 0;
+    foreach ($zeilen as $z) {
+        $nr++;
+        $s = trim($z);
+        if ($s === '') { continue; }
+        if ($s[0] === ';' || $s[0] === '#') {
+            if (!isset($d['_fassung']) && preg_match('/Plugin-Fassung ([A-Za-z0-9_.\-]{1,40})\s*\z/', $s, $m)) {
+                $d['_fassung'] = $m[1];
+            }
+            continue;
+        }
+        /* Modul 1.2.11: eine Zeile, die kein UTF-8 ist, liesse sich nicht als JSON schreiben - sie wird mit ihrer
+         * Nummer genannt (bis dahin nur als Ganzes, Stelle "UTF-8"). */
+        if (!preg_match('//u', $s)) {
+            sicherung_text_mangel_eintragen($d, 'Zeile ' . $nr, 'ZEILE');
+            continue;
+        }
+        if ($s[0] === '[' && substr($s, -1) === ']') {
+            $abschnitt = trim(substr($s, 1, -1));
+            if (strncmp($abschnitt, 'KOPF', 4) === 0 && trim(substr($abschnitt, 4)) === '') {
+                sicherung_text_mangel_eintragen($d, 'Zeile ' . $nr, 'ABSCHNITT');
+                $abschnitt = "\0";      // die Zeilen darunter gehoeren zu keinem Abschnitt, den es gibt
+            }
+            continue;
+        }
+        $pos = strpos($s, '=');
+        if ($pos === false) {
+            sicherung_text_mangel_eintragen($d, 'Zeile ' . $nr, 'ZEILE');
+            continue;
+        }
+        $k = trim(substr($s, 0, $pos));
+        $v = trim(substr($s, $pos + 1));
+        if ($abschnitt === "\0") { continue; }
+        // Wohin der Schluessel gehoert: Pfad in der JSON-Datei
+        if ($abschnitt === '') {
+            if (substr($k, 0, 1) === '_') {
+                sicherung_text_mangel_eintragen($d, $k, 'KOPF');
+                continue;
+            }
+            $pfad = array($k);
+        } elseif (in_array($abschnitt, array('MAIN', 'VZLOGGER', 'ABGLEICH', 'KOSTEN'), true)) {
+            $pfad = array($abschnitt, $k);
+        } elseif (strncmp($abschnitt, 'KOPF ', 5) === 0) {
+            $pfad = array('KOEPFE', trim(substr($abschnitt, 5)), $k);
+        } elseif ($abschnitt === 'ANSAGE') {
+            $pfad = array('ANSAGE', $k);
+        } else {
+            $pfad = array('[' . $abschnitt . ']', $k);
+        }
+        $schl = implode("\0", $pfad);
+        if (isset($gesehen[$schl])) {
+            sicherung_text_mangel_eintragen($d, implode('.', $pfad), 'DOPPELT');
+            continue;
+        }
+        $gesehen[$schl] = true;
+        if ($pfad === array('VZLOGGER', 'channels')) {
+            $l = array();
+            foreach (preg_split('/[\s,]+/', $v) as $c) { if ($c !== '') { $l[] = $c; } }
+            $v = $l;
+        }
+        if (count($pfad) === 1) {
+            $d[$pfad[0]] = $v;
+        } elseif (count($pfad) === 2) {
+            if (!isset($d[$pfad[0]]) || !is_array($d[$pfad[0]])) { $d[$pfad[0]] = array(); }
+            $d[$pfad[0]][$pfad[1]] = $v;
+        } else {
+            if (!isset($d[$pfad[0]]) || !is_array($d[$pfad[0]])) { $d[$pfad[0]] = array(); }
+            if (!isset($d[$pfad[0]][$pfad[1]]) || !is_array($d[$pfad[0]][$pfad[1]])) { $d[$pfad[0]][$pfad[1]] = array(); }
+            $d[$pfad[0]][$pfad[1]][$pfad[2]] = $v;
+        }
+    }
+    /* [KOPF <name>]: je Kopf ein Eintrag der Liste KOEPFE mit ABSCHNITT = <name>. */
+    if (isset($d['KOEPFE']) && is_array($d['KOEPFE'])) {
+        $l = array();
+        foreach ($d['KOEPFE'] as $s => $felder) {
+            if (array_key_exists('ABSCHNITT', $felder)) {
+                sicherung_text_mangel_eintragen($d, 'KOPF ' . $s . '.ABSCHNITT', 'DOPPELT');
+            }
+            $l[] = array('ABSCHNITT' => (string) $s) + $felder;
+        }
+        $d['KOEPFE'] = $l;
+    }
+    /* [ANSAGE] BLOCK=<base64-JSON>: die Sprachansagen treten oben an ihren Platz (tts, ansage_regeln, ...). Ein
+     * leerer BLOCK lasst den geltenden Stand (wie bis 2.8.22); ein unlesbarer weist die Datei ab; jeder andere
+     * Schluessel in [ANSAGE] bleibt dort und wird als unbekannt genannt. */
+    if (isset($d['ANSAGE']) && is_array($d['ANSAGE'])) {
+        $a = $d['ANSAGE'];
+        unset($d['ANSAGE']);
+        if (array_key_exists('BLOCK', $a)) {
+            $b64 = (string) $a['BLOCK'];
+            unset($a['BLOCK']);
+            if ($b64 !== '') {
+                $j = base64_decode($b64, true);
+                $j = is_string($j) ? json_decode($j, true) : null;
+                if (!sm_sicherung_objekt($j)) {
+                    sicherung_text_mangel_eintragen($d, 'ANSAGE.BLOCK', 'WERT');
+                } else {
+                    foreach ($j as $jk => $jw) {
+                        $jk = (string) $jk;
+                        if (in_array($jk, sm_ansage_schluessel(), true)) { $d[$jk] = $jw; } else { $d['ANSAGE.' . $jk] = $jw; }
+                    }
+                }
+            }
+        }
+        if ($a) { $d['ANSAGE'] = $a; }
+    }
+    $js = json_encode($d, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($js)) {
+        /* Nicht als JSON darstellbar: nichts ersetzen, die Datei abweisen. Seit Modul 1.2.11 nennt die Pruefung je Zeile
+         * oben jede Zeile ohne gueltiges UTF-8; dieser Rueckfall bleibt, falls dennoch etwas nicht darstellbar ist. */
+        $f = array('_aus_textsicherung' => SM_TEXT_KOPF);
+        sicherung_text_mangel_eintragen($f, 'UTF-8', 'ZEILE');
+        $js = (string) json_encode($f);
+    }
+    return $js;
+}
+
+/**
+ * Der Uebersetzer (Rueckruf 'uebersetzer' des Moduls, nur fuer eine Datei ohne _plugin): angenommen wird nur die
+ * Umwandlung einer Textsicherung dieser Linie (Kopf _aus_textsicherung = SM_TEXT_KOPF, sm_sicherung_text_wandeln()).
+ * Jede andere Datei ohne Kennzeichen weist das Modul ab (K_OHNE_KENNZEICHEN). Wie wi_sicherung_alt_erkennen() in
+ * WOLF-ISM-NG 3.1.22 (Frage 37 der Nacht 18.11.2026).
+ */
+function sm_sicherung_alt_erkennen($d)
+{
+    return (is_array($d) && isset($d['_aus_textsicherung']) && $d['_aus_textsicherung'] === SM_TEXT_KOPF) ? $d : null;
 }
 
 /* ==================================================================

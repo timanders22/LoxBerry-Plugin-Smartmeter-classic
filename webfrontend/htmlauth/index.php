@@ -201,12 +201,14 @@ if ($sm_ist_post && isset($_POST['ansage_speichern'])) {
     else { $sm_fehler[] = sm_e(sm_t('ANSAGEPLUGIN.M_FEHL')); }
     $sm_tab = 'tab-settings';
 }
+/* 2.8.23: die Datei baut das gemeinsame Sicherungsmodul (JSON mit Kopf _plugin, _fassung, _stand, _hinweis; bis
+ * 2.8.22 eine Textdatei in der Schreibweise der smartmeter.cfg). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sichern'])) {
-    $sm_txt = sm_sichern_text();
+    $sm_txt = sm_sicherung_json();
     sm_log('Einstellungen gesichert (Download).');
     while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: application/x-download');
-    header('Content-Disposition: attachment; filename="smartmeter-classic_einstellungen.txt"');
+    header('Content-Disposition: attachment; filename="smartmeter-classic_einstellungen.json"');
     header('Content-Length: ' . strlen($sm_txt));
     echo $sm_txt;
     exit;
@@ -231,70 +233,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ko_csv'])) {
 /* ---------------------------------------------------------------- *
  * Einstellungen zurueckspielen
  *
- * Eine halb gueltige Datei ueberschreibt NICHTS, und alle Beanstandungen
- * werden auf einmal gemeldet. Wer nur die erste zeigt, schickt den Anwender
- * in eine Schleife aus je einem Fund pro Anlauf.
+ * 2.8.23: ueber das gemeinsame Sicherungsmodul, in jeder Linie gleich. Den
+ * Eingang prueft sicherung_eingang(): zuerst der Haken zurueck_ok (ohne ihn
+ * wird nichts gelesen und nichts geaendert), dann is_uploaded_file() und die
+ * Groessengrenze des Moduls. Eine Textsicherung bis 2.8.22 wandelt
+ * sm_sicherung_text_wandeln() vorher in die JSON-Form dieser Fassung um
+ * (Entscheidung des Hausherrn 18.11.2026); jede andere Datei geht unveraendert
+ * an das Modul. Lesen, Pruefen, Speichern, Zweitschrift messen und die
+ * Protokollzeile macht sicherung_zurueckspielen(): Unbekanntes wird verworfen
+ * und mit Namen genannt, ein leerer Wert laesst den bisherigen stehen, eine
+ * halb gueltige Datei aendert GAR NICHTS (alle Beanstandungen gesammelt).
+ * Danach wird der Dienst nachgezogen wie bis 2.8.22, und die Meldung sagt,
+ * was mit ihm geschah.
  * ---------------------------------------------------------------- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['laden'])) {
     // Die beiden Knoepfe stehen im Reiter vzLogger - dort soll die Antwort
     // auch erscheinen.
     $sm_tab = 'tab-vzlogger';
-    if (!isset($_FILES['sicherung']) || !is_array($_FILES['sicherung'])
-        || !isset($_FILES['sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['sicherung']['tmp_name'])) {
-        $sm_fehler[] = sm_t('SICH.KEINE_DATEI');
-    } elseif ((int) $_FILES['sicherung']['size'] > 65536) {
-        // Obergrenze, bevor irgendetwas gelesen wird.
-        $sm_fehler[] = sm_t('SICH.ZU_GROSS');
+    $sm_sb = sm_sicherung_beschreibung();
+    list($sm_sroh, $sm_sab) = sicherung_eingang($sm_sb, $_POST, $_FILES, 'sicherung');
+    if ($sm_sab !== null) {
+        $sm_sm = sicherung_meldungen($sm_sb, $sm_sab);
+        foreach ($sm_sm['fehler'] as $sm_x) { $sm_fehler[] = $sm_x; }
     } else {
-        $sm_roh = (string) @file_get_contents($_FILES['sicherung']['tmp_name']);
-        list($sm_neu, $sm_mangel, $sm_notizen) = sm_sichern_einlesen($sm_roh);
-        if ($sm_neu === null) {
-            $sm_fehler = array_merge($sm_fehler, $sm_mangel);
-            $sm_hinweis = sm_t('SICH.ABGELEHNT');
-        } else {
-            $sm_mq_alt = sm_legacy_read();
-            list($sm_ok, $sm_hin) = sm_sichern_uebernehmen($sm_neu);
-            $sm_notizen = array_merge($sm_notizen, $sm_hin);
-            if (!$sm_ok) {
-                $sm_fehler[] = sprintf(sm_t('FEHLER.SCHREIBEN_TEIL'),
-                    '<span class="sm-mono">smartmeter.cfg</span>');
-            } else {
-                $sm_cfg    = sm_vz_read();
-                $sm_legacy = sm_legacy_read();
-                /* Den Dienst nachziehen UND sagen, was mit ihm geschehen ist -
-                 * nach seiner WIRKUNG (C3, Durchgang 01.10.2026). */
-                $sm_was = '';
-                if ($sm_cfg['enabled']) {
-                    $sm_r = sm_vz_restart($sm_cfg);
-                    if ($sm_r['lage'] === 'gestartet') {
-                        $sm_was = sm_t('SICH.DIENST_NEU');
-                    } else {
-                        $sm_teilfehler[] = sm_e($sm_r['text']);
-                    }
-                } else {
-                    $sm_was = sm_t('SICH.DIENST_AUS');
+        /* Eine Textsicherung bis 2.8.22 wird vorweg umgewandelt; dass sie umgewandelt wurde, sagt seit Modul 1.2.11 das
+         * Modul selbst (K_AUS_TEXT, Regel 21; bis dahin der eigene Satz SICH.TEXT_UMGEWANDELT). */
+        $sm_sroh = sm_sicherung_text_wandeln($sm_sroh);
+        $sm_mq_alt = sm_legacy_read();
+        $sm_sb['vorbereiten'] = 'sm_sicherung_vorbereiten';
+        $sm_sb['speichern'] = 'sm_sicherung_speichern';
+        $sm_sb['zweitschrift'] = 'sm_sicherung_zweitschrift_paare';
+        /* Was NACH dem Speichern scheitert, steht wie bis 2.8.22 im eigenen Kasten (O6, $sm_teilfehler); die Saetze,
+         * die sagen, was mit dem Dienst geschah, gehen an das Modul. */
+        $sm_steil = array();
+        $sm_sb['nachziehen'] = function ($neu) use ($sm_mq_alt, &$sm_steil) {
+            $h = array();
+            foreach ((isset($neu['KOEPFE']) && is_array($neu['KOEPFE'])) ? $neu['KOEPFE'] : array() as $w) {
+                if (isset($w['DEVICE']) && $w['DEVICE'] !== '' && !file_exists($w['DEVICE'])) {
+                    $h[] = sprintf(sm_t('SICH.KOPF_FEHLT'), sm_e($w['ABSCHNITT']), sm_e($w['DEVICE']));
                 }
-                list($sm_cok, $sm_ctext) = sm_cron_setzen($sm_legacy['READ'] === '1',
-                                                          $sm_legacy['CRON']);
-                /* O6 (Durchgang 01.10.2026): Erfolg und Teilfehler stehen in
-                 * ZWEI Kaesten. Bis 2.8.5 verschluckte ein gescheiterter
-                 * Cron-Eintrag die ganze Erfolgsmeldung, und unter "Nicht
-                 * gespeichert:" stand eine uebernommene Sicherung (gemessen,
-                 * Oberflaechenbericht O6 b). */
-                $sm_meldung = trim(sm_t('SICH.UEBERNOMMEN') . ' ' . $sm_was);
-                if ($sm_cok) {
-                    $sm_meldung .= ' ' . $sm_ctext;
-                } else {
-                    $sm_teilfehler[] = $sm_ctext;
-                }
-                /* M3: ein Praefixwechsel oder "MQTT aus" aus der Sicherung
-                 * raeumt ab wie der Reiter MQTT. */
-                $sm_mq = sm_mqtt_nach_aenderung($sm_mq_alt, $sm_legacy);
-                $sm_notizen = array_merge($sm_notizen, $sm_mq['ok']);
-                $sm_teilfehler = array_merge($sm_teilfehler, $sm_mq['fehler']);
             }
+            $vz = sm_vz_read();
+            $lg = sm_legacy_read();
+            /* Den Dienst nachziehen UND sagen, was mit ihm geschehen ist - nach seiner WIRKUNG (C3). */
+            if ($vz['enabled']) {
+                $r = sm_vz_restart($vz);
+                if ($r['lage'] === 'gestartet') { $h[] = sm_t('SICH.DIENST_NEU'); } else { $sm_steil[] = sm_e($r['text']); }
+            } else {
+                $h[] = sm_t('SICH.DIENST_AUS');
+            }
+            list($cok, $ctext) = sm_cron_setzen($lg['READ'] === '1', $lg['CRON']);
+            if ($cok) { $h[] = $ctext; } else { $sm_steil[] = $ctext; }
+            /* M3: ein Praefixwechsel oder "MQTT aus" aus der Sicherung raeumt ab wie der Reiter MQTT. */
+            $mq = sm_mqtt_nach_aenderung($sm_mq_alt, $lg);
+            foreach ($mq['ok'] as $x) { $h[] = $x; }
+            foreach ($mq['fehler'] as $x) { $sm_steil[] = $x; }
+            return $h;
+        };
+        $sm_sr = sicherung_zurueckspielen($sm_sb, $sm_sroh);
+        $sm_sm = sicherung_meldungen($sm_sb, $sm_sr);
+        /* Gespeichert und trotzdem ein Satz unter 'fehler' (die Zweitschrift weicht ab): ein Teilfehler, kein
+         * "nicht gespeichert". */
+        foreach ($sm_sm['fehler'] as $sm_x) {
+            if ($sm_sr['gespeichert']) { $sm_steil[] = $sm_x; } else { $sm_fehler[] = $sm_x; }
         }
+        if ($sm_sr['gespeichert']) {
+            $sm_meldung = implode(' ', $sm_sm['hinweise']);
+            $sm_cfg    = sm_vz_read();
+            $sm_legacy = sm_legacy_read();
+        } else {
+            foreach ($sm_sm['hinweise'] as $sm_x) { $sm_notizen[] = $sm_x; }
+        }
+        $sm_teilfehler = array_merge($sm_teilfehler, $sm_steil);
     }
 }
 
@@ -1250,8 +1260,10 @@ if (!$gefunden && $sm_vz_dev !== '') {
 <?php
 /* X-3 (Durchgang 01.10.2026): wuerde ein gespeicherter Wert das eigene
  * Zurueckspielen nicht bestehen, steht das gelb am Knopf - nur Namen, nie
- * Werte. Geliefert wird die Sicherung trotzdem, mit einer Zeile _warnung. */
-$sm_x3 = sm_sichern_selbstpruefung(sm_sichern_text(false));
+ * Werte. Geliefert wird die Sicherung trotzdem, mit dem Kopf _warnung. Seit
+ * 2.8.23 prueft das gemeinsame Sicherungsmodul, dieselbe Pruefung wie beim
+ * Zurueckspielen. */
+$sm_x3 = sm_sicherung_selbstpruefung();
 if ($sm_x3) { ?>
 <div class="sm-alert sm-warn"><?php printf(sm_t('EINST.X3_WARNUNG'),
   '<span class="sm-mono">' . sm_e(implode(', ', $sm_x3)) . '</span>'); ?></div>
@@ -1269,7 +1281,8 @@ if ($sm_x3) { ?>
   <form method="post" action="index.php" enctype="multipart/form-data">
     <input data-role="none" type="hidden" name="activetab" value="tab-vzlogger">
     <?php echo sm_fmt(); ?>
-    <input data-role="none" type="file" name="sicherung" accept=".txt,text/plain">
+    <input data-role="none" type="file" name="sicherung" accept=".json,.txt,application/json,text/plain">
+    <?php echo sicherung_haken_zeile(sm_sicherung_beschreibung()); ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="laden" value="1"><?php echo sm_t('EINST.LADEN'); ?></button>
   </form>
 </div>

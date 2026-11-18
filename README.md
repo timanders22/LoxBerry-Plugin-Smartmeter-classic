@@ -10,6 +10,21 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.23
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen über das gemeinsame Sicherungsmodul 1.2.11:** Beide Knöpfe im Reiter Smartmeter (vzLogger) verhalten sich jetzt wie in den übrigen Plugins dieser Reihe.
+  - Die Sicherungsdatei ist jetzt eine JSON-Datei (`smartmeter-classic_einstellungen.json`) mit lesbarem Kopf: Kennzeichen `LoxBerry-Plugin-Smartmeter-classic`, Fassung, Stand und Hinweis. Inhalt wie bisher: alle Einstellungen beider Lesewege, die Leseköpfe, Fahrplan-Abgleich und Kostenrechnung, die Sprachansagen und das Zugriffstoken; nicht darin sind das Formularmerkmal, SUBFOLDER und SCRIPTNAME und die Sprechtoken.
+  - Ältere Textsicherungen (bis 2.8.22) werden weiter angenommen: Das Plugin erkennt sie an ihrer ersten Zeile und wandelt sie vor dem Zurückspielen in die neue Form um; die Meldung sagt es. Die umgewandelte Form ist dieselbe wie in WOLF ISM NG und Kodi NG: Sie trägt kein Kennzeichen, sondern den Kopf `_aus_textsicherung` mit der ersten Zeile der Textsicherung, und was sich nicht lesen ließ, steht mit Namen und Grund im Kopf `_text_mangel`.
+  - Dass eine Textsicherung umgewandelt wurde, sagt nach dem Zurückspielen ein Satz des gemeinsamen Sicherungsmoduls, in Kodi NG, Smartmeter classic und WOLF ISM NG wortgleich. Was sich darin nicht lesen ließ, tragen alle drei mit denselben Kennungen in `_text_mangel` ein (`ZEILE`, `DOPPELT`, `KOPF`, `WERT`, `ABSCHNITT`), und das Modul weist die Datei wie bisher ab, mit denselben Sätzen und mit dem Namen der Stelle, nie mit einem Wert. Ein Schlüssel mit Unterstrich vor dem ersten Abschnitt weist die Datei jetzt ebenfalls ab; bisher wurde er still übergangen. Eine Zeile, die kein gültiges UTF-8 ist, wird mit ihrer Nummer genannt.
+  - „Zurückspielen“ wirkt nur, wenn der Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“ unmittelbar vor dem Knopf gesetzt ist; ohne ihn wird die Datei nicht gelesen und nichts geändert.
+  - Eine Einstellung oder ein Abschnitt in der Datei, den diese Fassung nicht kennt, wird verworfen und mit seinem Namen genannt; die übrigen werden trotzdem zurückgespielt. Bis 2.8.22 wurde die ganze Datei abgewiesen. Eine unlesbare Zeile, ein doppelter Schlüssel oder ein unzulässiger Wert weisen die Datei wie bisher ganz ab; jede Beanstandung wird genannt, Werte nie.
+  - Ein leerer Wert in der Datei überschreibt keinen gespeicherten; der bisherige Wert bleibt und wird genannt. Fehlt eine Einstellung in der Datei, behält sie wie bisher ihren Wert und wird jetzt ebenfalls genannt.
+  - Einträge der geltenden Einstellungen, die diese Fassung nicht kennt (etwa aus einer Bearbeitung von Hand), fallen beim Zurückspielen weg und werden mit ihrem Namen genannt. Leseköpfe, die die Datei nicht nennt, bleiben wie bisher.
+  - Die Datei darf jetzt bis 256 KB groß sein (bisher 64 KB).
+- **Zweitschrift bei jedem Speichern:** `smartmeter.cfg`, `vzlogger.json` und `vzlogger.conf` ziehen ihre Zweitschrift neben dem Konfigurationsordner jetzt bei jedem Speichern mit, nicht erst vor einer Aktualisierung. Wie vor einer Aktualisierung wird eine Datei, die noch einen Platzhalter (`REPLACEBY…`) trägt, nicht zur Zweitschrift; die bisherige Zweitschrift bleibt dann stehen, und das Protokoll sagt es.
+- **Knopf „Dokumentation“:** `plugin.cfg` nennt jetzt `WEBSITE=` mit diesem Repository; LoxBerry übernimmt die Adresse bei der Installation und zeigt sie in der Plugin-Verwaltung als Knopf.
+- Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4 mit dem Prüfstand, der über einen Webserver die echten Knöpfe drückt, und mit den Textsicherungen aller Fassungen 2.4.1 bis 2.8.22. Am Gerät nicht gemessen.
+
 ## Neu in 2.8.22
 
 - **Ansage-Brücke des Dienstes:** `bin/sm_ansage.php` nimmt eine LoxBerry-Wurzel nur noch an, wenn `config/plugins`, `data/plugins` und `config/system/general.json` vorhanden sind; sonst antwortet es mit `KENNUNG=WURZEL` und Rückgabewert 1.
