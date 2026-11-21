@@ -10,6 +10,10 @@ mit **beiden** Lesewegen: dem klassischen Perl-Leser und vzlogger.
 > setzt ausschließlich auf vzlogger und hat den Legacy-Leser entfernt.
 > Einzelheiten und Lizenzangaben in [`NOTICE`](NOTICE).
 
+## Neu in 2.8.25
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung in derselben Form wie alle Plugins (bisher mit vorangestelltem „V“).
+
 ## Neu in 2.8.24
 
 - **Geändert – Takt ruht während des Updates schon in der Schale:** Alle 2 Takte (Minutentakt, Takt alle fünf Minuten) endet bei laufender Aktualisierung jetzt, bevor ein Programm startet. Bis 2.8.23 hielt erst das aufgerufene Skript an; Daten gingen dabei nicht verloren. Ist die Marke eine Stunde oder älter, liegt sie in der Zukunft oder enthält sie keine Unixzeit, gilt sie nicht, damit eine abgebrochene Aktualisierung den Takt nicht dauerhaft stilllegt. Alle Plugins dieser Reihe fragen die Marke mit demselben Block ab. Es wirkt schon beim Update auf diese Fassung, denn der Installer legt die Takte der neuen Fassung vor der Lücke an, und das `preupgrade.sh` der neuen Fassung legt die Marke an. Gemessen in einer Nachstellung des Update-Ablaufs auf dem Arbeitsrechner (WSL); am Gerät nicht gemessen.

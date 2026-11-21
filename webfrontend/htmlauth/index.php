@@ -873,11 +873,10 @@ $sm_lastgang_url = 'http://' . $sm_wirt . '/plugins/' . $sm_p['plugin']
     . '/lastgang.php' . ($sm_token !== '' ? '?token=' . rawurlencode($sm_token) : '');
 $sm_lastgang = sm_lastgang_lage();
 
-$sm_version = sm_fassung();
-
 /* Gruppe 35 (2.8.13): T1-8 eigene Wiki-Seite (nicht die des Originals), T1-3 class_exists (Regeln/03 :179). */
 if (class_exists('LBWeb')) {
-    LBWeb::lbheader(sm_t('ALLG.TITEL') . ($sm_version !== '' ? ' V' . $sm_version : ''),
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel(sm_t('ALLG.TITEL'), __DIR__),
                     'https://wiki.loxberry.de/plugins/smartmeter_classic/start', 'help.html');
 }
 ?>
