@@ -345,6 +345,7 @@ foreach ($sm_cfg as $sm_abschnitt => $sm_werte) {
 
     // --- MQTT ueber das Gateway-Relais
     if ($sm_sendmqtt) {
+        smg_praefix_haus_melden($sm_cfg);   // 2.8.27: Praefix im gemeinsamen Bereich? melden, nicht anhalten
         $sm_udpin = sm_gateway_udpin($sm_home);
         if (!$sm_udpin) {
             sm_fetch_log('MQTT: Kein UDP-In-Port des MQTT Gateways gefunden - uebersprungen.', 'WARN');

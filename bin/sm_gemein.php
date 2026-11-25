@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 2.8.27, Regeln/07)
 /**
  * Smartmeter classic - was Oberflaeche, Abholer und Endpunkt gemeinsam haben
  *
@@ -1678,4 +1679,71 @@ function smg_he_lauf($home, $shm, $cfg, $vzd, array $katalog, $grenze, $data = '
     return $m;
 }
 
+}
+
+/**
+ * 2.8.27 (Regeln/07): wirksames Praefix und MQTT-Schalter aus der Konfiguration - verschachtelt (smg_cfg_lesen(),
+ * Abschnitt MAIN) oder flach (sm_legacy_read()); Protokoll und Merkdatei fuer Oberflaeche wie Abholer.
+ */
+function smg_praefix_haus_wert($cfg)
+{
+    $t = isset($cfg['MAIN']['MQTTTOPIC']) ? $cfg['MAIN']['MQTTTOPIC'] : (isset($cfg['MQTTTOPIC']) ? $cfg['MQTTTOPIC'] : '');
+    $t = trim((string) $t, '/');
+    return $t !== '' ? $t : 'smartmeter';
+}
+
+function smg_praefix_haus_ein($cfg)
+{
+    $e = isset($cfg['MAIN']['SENDMQTT']) ? $cfg['MAIN']['SENDMQTT'] : (isset($cfg['SENDMQTT']) ? $cfg['SENDMQTT'] : '0');
+    return (string) $e === '1';
+}
+
+function smg_praefix_haus_log($text)
+{
+    if (function_exists('sm_fetch_log')) {
+        sm_fetch_log($text, 'WARN');
+    } elseif (function_exists('sm_log')) {
+        sm_log($text, 'WARN');
+    }
+}
+
+function smg_praefix_haus_merk()
+{
+    $d = defined('LBPDATADIR') ? (string) LBPDATADIR : (string) getenv('LBPDATADIR');
+    return ($d !== '' ? $d : sys_get_temp_dir()) . '/praefix_haus_gemeldet.txt';
+}
+/**
+ * 2.8.27 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function smg_pruef_praefix_haus($cfg)
+{
+    $p = smg_praefix_haus_wert($cfg);
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(smg_praefix_haus_ein($cfg))) {
+            return array(-1, sprintf(sm_t('HAUSBEREICH.A_AUS'), strval($p), strval($b)));
+        }
+        return array(0, sprintf(sm_t('HAUSBEREICH.A_NEIN'), strval($p), strval($b)));
+    }
+    return array(1, sprintf(sm_t('HAUSBEREICH.A_JA'), strval($p)));
+}
+
+/**
+ * 2.8.27: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich faellt; der
+ * Versand bleibt, wie er ist. Gemerkt in praefix_haus_gemeldet.txt im Datenordner. Rueckgabe der Bereich oder ''.
+ */
+function smg_praefix_haus_melden($cfg, $merk = null)
+{
+    $p = smg_praefix_haus_wert($cfg);
+    if ($merk === null) {
+        $merk = smg_praefix_haus_merk();
+    }
+    $b = hb_melden_faellig($p, $merk);
+    if ($b !== '') {
+        smg_praefix_haus_log(hb_logtext($p, $b));
+    }
+    return $b;
 }

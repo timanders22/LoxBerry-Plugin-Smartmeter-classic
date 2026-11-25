@@ -713,6 +713,9 @@ function sm_selbsttest(array $ids, $datei)
     $add(sm_t('PRUEF.Z_SMACTIVE'), sm_smactive_probe($ids, $datei));
     $add(sm_t('PRUEF.Z_FORM'), sm_formularprobe($datei));
     $add(sm_t('PRUEF.Z_GATEWAY'), sm_gateway_probe());
+    // 2.8.27: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $smg_hb = smg_pruef_praefix_haus(sm_legacy_read());
+    $add(sm_t('HAUSBEREICH.F_TEST'), array($smg_hb[0] === -1 ? 2 : $smg_hb[0], $smg_hb[1]));
     $add(sm_t('PRUEF.Z_ENDPUNKT'), sm_endpunkt_probe());
     $add(sm_t('PRUEF.Z_MARKE'), sm_marke_probe());
     return $z;

@@ -189,6 +189,12 @@ $sm_legacy = sm_legacy_read();
  * Felder richtig, und der Miniserver bekaeme weiterhin 403.
  * ---------------------------------------------------------------- */
 /* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+/* 2.8.27: Testmeldung an SignalBot (Knopf unter den Sprachansagen) - wie die Testansage darunter. */
+if ($sm_ist_post && isset($_POST['meld_test'])) {
+    list($sm_at, $sm_ag) = sm_meld_test();
+    if ($sm_at) { $sm_meldung = sm_e(sm_t('SIGNALMELDUNG.T_OK')); } else { $sm_fehler[] = sm_e($sm_ag); }
+    $sm_tab = 'tab-settings';
+}
 if ($sm_ist_post && isset($_POST['ansage_test'])) {
     list($sm_at, $sm_ag) = sm_ansage_test();
     if ($sm_at) { $sm_meldung = sm_e(sm_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $sm_fehler[] = sm_e(sm_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $sm_ag); }
@@ -493,7 +499,14 @@ if (isset($_POST['mq_speichern'])) {
      * (smg_praefix_fehler); still bleibt nur Leerraum am Rand. */
     $t = (isset($_POST['mq_topic']) && is_string($_POST['mq_topic'])) ? trim($_POST['mq_topic']) : '';
     $sm_pf = smg_praefix_fehler($t);
-    if ($sm_pf !== '') {
+    /* 2.8.27 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+     * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+     * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+    if ($sm_pf === '' && hb_bereich($t) !== '' && trim($t, '/') !== smg_praefix_haus_wert(sm_legacy_read())) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        $sm_fehler[] = sprintf(sm_e(sm_t('HAUSBEREICH.FEHLER')), sm_e($t), sm_e(hb_bereich($t)));
+        $sm_eingaben = sm_eingaben_sammeln('mq', array('mq_an', 'mq_topic'), array('mq_topic'));
+    } elseif ($sm_pf !== '') {
         $sm_fehler[] = sm_praefix_text($sm_pf);
         $sm_eingaben = sm_eingaben_sammeln('mq', array('mq_an', 'mq_topic'), array('mq_topic'));
     } else {
