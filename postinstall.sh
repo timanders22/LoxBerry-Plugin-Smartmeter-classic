@@ -11,6 +11,15 @@
 # We add 5 arguments when executing the script:
 # command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
 
+# [upgrade_daten] Gemeinsamer Baustein (Werkzeuge/gemeinsam/upgrade_daten.sh): vor allem anderen den Datenordner
+# [upgrade_daten] aus der Sicherung von preupgrade.sh zurueckspielen, ohne eine Datei der neuen Installation zu
+# [upgrade_daten] ueberschreiben. Ohne Sicherung (Neuinstallation) geschieht still nichts.
+if [ -f "$(dirname "$0")/upgrade_daten.sh" ] && . "$(dirname "$0")/upgrade_daten.sh"; then
+    upgrade_daten_zurueck "$3" "$5" "$(dirname "$0")" || :
+else
+    echo "<WARNING> Der Baustein upgrade_daten.sh fehlt neben $(basename "$0") - der Datenordner wurde nicht zurueckgespielt."
+fi
+
 ARGV2=$2 # Second argument is Plugin-Name for scipts etc.
 ARGV3=$3 # Third argument is Plugin installation folder
 ARGV5=$5 # Fifth argument is Base folder of LoxBerry
